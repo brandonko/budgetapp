@@ -136,6 +136,9 @@ ingestion belongs in the **Upload data** page.
   persist changes immediately through the revision-checked CSV API. Confirm
   permanent deletion using the same safety language as the dashboard.
 - If the database is new and empty, the first valid import populates it.
+- Show a clearly noninteractive **Work in progress** section below supported
+  sources for Venmo, AliExpress items, eBay items, and Apple Card. Label Apple
+  Card as likely requiring manual import rather than promising automation.
 
 ### Direct browser ingestion
 

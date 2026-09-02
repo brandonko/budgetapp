@@ -94,6 +94,12 @@ source tab cancels that import. See
 [`ledger_data_importer_extension/README.md`](ledger_data_importer_extension/README.md)
 for implementation and attribution details.
 
+### Planned sources
+
+The import page identifies Venmo, AliExpress item history, and eBay item history
+as planned integrations. Apple Card support is also being explored, but may
+require a manual import workflow because browser automation may not be viable.
+
 ### Duplicate handling
 
 Imports identify existing transactions by normalized `date` and `amount` while
