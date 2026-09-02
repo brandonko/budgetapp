@@ -88,10 +88,13 @@ transfers may be legitimate expenses or incoming money.
 
 Exclude only reconciled credit-card bill-payment pairs. The current rule is:
 
-1. Both rows have category `Transfer`, case-insensitively.
-2. One row is a positive amount on an account with type `BANK`.
-3. The other is the exact opposite negative amount on an account with type
-   `CREDIT`.
+1. One row has category `Transfer`, case-insensitively; the other may be
+   `Transfer` or `Income` because source exports may label the receiving side
+   as income.
+2. One row belongs to an account with type `BANK` and the other to an account
+   with type `CREDIT`.
+3. Their nonzero amounts are exact opposites. Either direction is valid, which
+   covers both bill payments and credit-balance refunds back to a bank account.
 4. Their posting dates are no more than five calendar days apart.
 5. Matching is one-to-one, choosing the closest-date candidates first.
 6. Reconciliation runs against the complete database, not only the selected
