@@ -924,6 +924,11 @@ h2 {
   font-size: 11px;
 }
 
+.amazon-direct-error {
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
 .extension-help {
   margin-top: 14px;
   color: var(--muted);

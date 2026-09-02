@@ -38,6 +38,7 @@ const elements = {
   amazonProgress: document.querySelector("#amazon-progress"),
   amazonProgressBar: document.querySelector("#amazon-progress-bar"),
   amazonProgressMessage: document.querySelector("#amazon-progress-message"),
+  amazonDirectError: document.querySelector("#amazon-direct-error"),
   extensionDot: document.querySelector("#extension-dot"),
   extensionStatus: document.querySelector("#extension-status"),
   extensionHelp: document.querySelector("#extension-help"),
@@ -77,6 +78,17 @@ function renderAmazonProgress(progress, message, status = "scraping") {
   elements.amazonProgress.classList.toggle("amazon-progress--error", status === "error");
 }
 
+function showAmazonError(message) {
+  elements.amazonDirectError.textContent = message;
+  elements.amazonDirectError.hidden = false;
+  renderAmazonProgress(0, "Amazon import could not continue.", "error");
+}
+
+function clearAmazonError() {
+  elements.amazonDirectError.textContent = "";
+  elements.amazonDirectError.hidden = true;
+}
+
 function stopAmazonPolling() {
   if (state.amazonPollTimer !== null) {
     window.clearTimeout(state.amazonPollTimer);
@@ -98,8 +110,8 @@ async function pollAmazonSession() {
       `/api/amazon-import-sessions/${encodeURIComponent(state.amazonSessionToken)}`,
       { cache: "no-store" },
     );
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Amazon import status is unavailable.");
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Amazon import status failed (${response.status}).`);
 
     renderAmazonProgress(payload.progress, payload.message, payload.status);
     if (payload.status === "complete") {
@@ -109,31 +121,32 @@ async function pollAmazonSession() {
       return;
     }
     if (payload.status === "error" || payload.status === "cancelled") {
-      if (payload.status === "error") showError(payload.message);
+      if (payload.status === "error") showAmazonError(payload.message);
       finishAmazonSession();
       return;
     }
     state.amazonPollTimer = window.setTimeout(pollAmazonSession, 1200);
   } catch (error) {
-    showError(error instanceof Error ? error.message : "Amazon import status is unavailable.");
+    showAmazonError(error instanceof Error ? error.message : "Amazon import status is unavailable.");
     finishAmazonSession();
   }
 }
 
 async function startAmazonImport() {
   clearError();
+  clearAmazonError();
   const startDate = elements.amazonStartDate.value;
   const endDate = elements.amazonEndDate.value;
   if (!startDate || !endDate) {
-    showError("Choose both a start date and an end date.");
+    showAmazonError("Choose both a start date and an end date.");
     return;
   }
   if (startDate > endDate) {
-    showError("The Amazon start date cannot be after the end date.");
+    showAmazonError("The Amazon start date cannot be after the end date.");
     return;
   }
   if (!state.extensionReady) {
-    showError("Install the companion extension and reload this page first.");
+    showAmazonError("Install the companion extension and reload this page first.");
     return;
   }
 
@@ -145,8 +158,8 @@ async function startAmazonImport() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ startDate, endDate }),
     });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Could not start the Amazon import.");
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not start the Amazon import (${response.status}).`);
 
     state.amazonSessionToken = payload.token;
     elements.amazonCancelButton.hidden = false;
@@ -166,7 +179,7 @@ async function startAmazonImport() {
     renderAmazonProgress(1, "Opening Amazon order history…", "opening_amazon");
     pollAmazonSession();
   } catch (error) {
-    showError(error instanceof Error ? error.message : "Could not start the Amazon import.");
+    showAmazonError(error instanceof Error ? error.message : "Could not start the Amazon import.");
     finishAmazonSession();
   }
 }
@@ -323,7 +336,7 @@ window.addEventListener("message", (event) => {
     const { progress, message, status } = event.data.payload ?? {};
     renderAmazonProgress(progress, message || "Importing Amazon orders…", status);
   } else if (event.data.action === "error") {
-    showError(event.data.payload?.message || "The Amazon importer extension reported an error.");
+    showAmazonError(event.data.payload?.message || "The Amazon importer extension reported an error.");
     if (state.amazonSessionToken) {
       const token = state.amazonSessionToken;
       fetch(`/api/amazon-import-sessions/${encodeURIComponent(token)}/cancel`, {
