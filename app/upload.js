@@ -11,14 +11,32 @@ const state = {
   aliExpressSessionToken: "",
   aliExpressPollTimer: null,
   aliExpressStartedAt: 0,
+  venmoExtensionReady: false,
+  venmoSessionToken: "",
+  venmoPollTimer: null,
+  venmoStartedAt: 0,
+  ebayExtensionReady: false,
+  ebaySessionToken: "",
+  ebayPollTimer: null,
+  ebayStartedAt: 0,
+  appleCardBusy: false,
+  appleCardExtensionReady: false,
+  appleCardSessionToken: "",
+  appleCardPollTimer: null,
+  appleCardStartedAt: 0,
   revision: "",
   importedTransactions: [],
+  reviewSession: null,
+  reviewCommitted: false,
   editingImportedIndex: null,
   editBusy: false,
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", applecard: "Apple Card" };
 const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
+const MIN_VENMO_EXTENSION_VERSION = "0.5.0";
+const MIN_APPLE_CARD_EXTENSION_VERSION = "0.6.2";
+const MIN_EBAY_EXTENSION_VERSION = "0.7.0";
 const extensionMessageSources = new Set(["ledger-data-importer", "ledger-amazon-extension"]);
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
@@ -27,12 +45,11 @@ const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 const elements = {
-  result: document.querySelector("#import-result"),
-  resultTitle: document.querySelector("#result-title"),
-  resultSummary: document.querySelector("#result-summary"),
-  resultSources: document.querySelector("#result-sources"),
   amazonStartDate: document.querySelector("#amazon-start-date"),
   amazonEndDate: document.querySelector("#amazon-end-date"),
+  amazonAccountName: document.querySelector("#amazon-account-name"),
+  amazonAccountType: document.querySelector("#amazon-account-type"),
+  amazonProvider: document.querySelector("#amazon-provider"),
   amazonImportButton: document.querySelector("#amazon-import-button"),
   amazonCancelButton: document.querySelector("#amazon-cancel-button"),
   amazonProgress: document.querySelector("#amazon-progress"),
@@ -46,6 +63,8 @@ const elements = {
   creditKarmaEndDate: document.querySelector("#creditkarma-end-date"),
   creditKarmaIgnoreAmazon: document.querySelector("#creditkarma-ignore-amazon"),
   creditKarmaIgnoreAliExpress: document.querySelector("#creditkarma-ignore-aliexpress"),
+  creditKarmaIgnoreVenmo: document.querySelector("#creditkarma-ignore-venmo"),
+  creditKarmaIgnoreEbay: document.querySelector("#creditkarma-ignore-ebay"),
   creditKarmaImportButton: document.querySelector("#creditkarma-import-button"),
   creditKarmaCancelButton: document.querySelector("#creditkarma-cancel-button"),
   creditKarmaProgress: document.querySelector("#creditkarma-progress"),
@@ -54,16 +73,61 @@ const elements = {
   creditKarmaDirectError: document.querySelector("#creditkarma-direct-error"),
   aliExpressStartDate: document.querySelector("#aliexpress-start-date"),
   aliExpressEndDate: document.querySelector("#aliexpress-end-date"),
+  aliExpressAccountName: document.querySelector("#aliexpress-account-name"),
+  aliExpressAccountType: document.querySelector("#aliexpress-account-type"),
+  aliExpressProvider: document.querySelector("#aliexpress-provider"),
   aliExpressImportButton: document.querySelector("#aliexpress-import-button"),
   aliExpressCancelButton: document.querySelector("#aliexpress-cancel-button"),
   aliExpressProgress: document.querySelector("#aliexpress-progress"),
   aliExpressProgressBar: document.querySelector("#aliexpress-progress-bar"),
   aliExpressProgressMessage: document.querySelector("#aliexpress-progress-message"),
   aliExpressDirectError: document.querySelector("#aliexpress-direct-error"),
+  venmoStartDate: document.querySelector("#venmo-start-date"),
+  venmoEndDate: document.querySelector("#venmo-end-date"),
+  venmoAccountName: document.querySelector("#venmo-account-name"),
+  venmoAccountType: document.querySelector("#venmo-account-type"),
+  venmoProvider: document.querySelector("#venmo-provider"),
+  venmoImportButton: document.querySelector("#venmo-import-button"),
+  venmoCancelButton: document.querySelector("#venmo-cancel-button"),
+  venmoProgress: document.querySelector("#venmo-progress"),
+  venmoProgressBar: document.querySelector("#venmo-progress-bar"),
+  venmoProgressMessage: document.querySelector("#venmo-progress-message"),
+  venmoDirectError: document.querySelector("#venmo-direct-error"),
+  ebayStartDate: document.querySelector("#ebay-start-date"),
+  ebayEndDate: document.querySelector("#ebay-end-date"),
+  ebayAccountName: document.querySelector("#ebay-account-name"),
+  ebayAccountType: document.querySelector("#ebay-account-type"),
+  ebayProvider: document.querySelector("#ebay-provider"),
+  ebayImportButton: document.querySelector("#ebay-import-button"),
+  ebayCancelButton: document.querySelector("#ebay-cancel-button"),
+  ebayProgress: document.querySelector("#ebay-progress"),
+  ebayProgressBar: document.querySelector("#ebay-progress-bar"),
+  ebayProgressMessage: document.querySelector("#ebay-progress-message"),
+  ebayError: document.querySelector("#ebay-error"),
+  appleCardStartDate: document.querySelector("#applecard-start-date"),
+  appleCardEndDate: document.querySelector("#applecard-end-date"),
+  appleCardFile: document.querySelector("#applecard-file"),
+  applecardAccountName: document.querySelector("#applecard-account-name"),
+  applecardAccountType: document.querySelector("#applecard-account-type"),
+  applecardProvider: document.querySelector("#applecard-provider"),
+  appleCardImportButton: document.querySelector("#applecard-import-button"),
+  appleCardFileImportButton: document.querySelector("#applecard-file-import-button"),
+  appleCardCancelButton: document.querySelector("#applecard-cancel-button"),
+  appleCardProgress: document.querySelector("#applecard-progress"),
+  appleCardProgressBar: document.querySelector("#applecard-progress-bar"),
+  appleCardProgressMessage: document.querySelector("#applecard-progress-message"),
+  appleCardError: document.querySelector("#applecard-error"),
+  importerTabs: [...document.querySelectorAll('[role="tab"][aria-controls]')],
   reviewDialog: document.querySelector("#import-review-dialog"),
+  reviewEyebrow: document.querySelector("#import-review-eyebrow"),
+  reviewTitle: document.querySelector("#import-review-title"),
   reviewSubtitle: document.querySelector("#import-review-subtitle"),
+  reviewError: document.querySelector("#import-review-error"),
   reviewList: document.querySelector("#import-review-list"),
   closeReview: document.querySelector("#close-import-review"),
+  cancelReview: document.querySelector("#cancel-import-review"),
+  confirmReview: document.querySelector("#confirm-import-review"),
+  reviewDashboardLink: document.querySelector("#review-dashboard-link"),
   editDialog: document.querySelector("#import-edit-dialog"),
   editForm: document.querySelector("#import-edit-form"),
   editError: document.querySelector("#import-edit-error"),
@@ -72,6 +136,52 @@ const elements = {
   deleteImported: document.querySelector("#delete-imported-transaction"),
   saveEdit: document.querySelector("#save-import-edit"),
 };
+
+function importAccountIdentity(source) {
+  const prefix = source === "aliexpress" ? "aliExpress" : source;
+  const identity = {
+    accountName: elements[`${prefix}AccountName`].value.trim(),
+    accountType: elements[`${prefix}AccountType`].value.trim(),
+    provider: elements[`${prefix}Provider`].value.trim(),
+  };
+  return Object.values(identity).every(Boolean) ? identity : null;
+}
+
+function selectImporterTab(selectedTab, { focus = false } = {}) {
+  for (const tab of elements.importerTabs) {
+    const selected = tab === selectedTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    const panel = document.getElementById(tab.getAttribute("aria-controls"));
+    if (panel) panel.hidden = !selected;
+  }
+  if (focus) selectedTab.focus();
+}
+
+function initializeImporterTabs() {
+  elements.importerTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => selectImporterTab(tab));
+    tab.addEventListener("keydown", (event) => {
+      let nextIndex = null;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        nextIndex = (index + 1) % elements.importerTabs.length;
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        nextIndex = (index - 1 + elements.importerTabs.length) % elements.importerTabs.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = elements.importerTabs.length - 1;
+      }
+      if (nextIndex === null) return;
+      event.preventDefault();
+      selectImporterTab(elements.importerTabs[nextIndex], { focus: true });
+    });
+  });
+  const initiallySelected =
+    elements.importerTabs.find((tab) => tab.getAttribute("aria-selected") === "true") ||
+    elements.importerTabs[0];
+  if (initiallySelected) selectImporterTab(initiallySelected);
+}
 
 function localIsoDate(value) {
   const year = value.getFullYear();
@@ -97,6 +207,18 @@ function initializeDirectImportDates() {
   elements.aliExpressEndDate.value = todayIso;
   elements.aliExpressStartDate.max = todayIso;
   elements.aliExpressEndDate.max = todayIso;
+  elements.venmoStartDate.value = localIsoDate(lookbackStart);
+  elements.venmoEndDate.value = todayIso;
+  elements.venmoStartDate.max = todayIso;
+  elements.venmoEndDate.max = todayIso;
+  elements.ebayStartDate.value = localIsoDate(lookbackStart);
+  elements.ebayEndDate.value = todayIso;
+  elements.ebayStartDate.max = todayIso;
+  elements.ebayEndDate.max = todayIso;
+  elements.appleCardStartDate.value = localIsoDate(lookbackStart);
+  elements.appleCardEndDate.value = todayIso;
+  elements.appleCardStartDate.max = todayIso;
+  elements.appleCardEndDate.max = todayIso;
 }
 
 function versionAtLeast(version, minimum) {
@@ -115,6 +237,9 @@ function setExtensionReady(ready, version = "") {
   state.extensionVersion = ready ? version : "";
   state.aliExpressExtensionReady =
     ready && versionAtLeast(version, MIN_ALIEXPRESS_EXTENSION_VERSION);
+  state.venmoExtensionReady = ready && versionAtLeast(version, MIN_VENMO_EXTENSION_VERSION);
+  state.appleCardExtensionReady = ready && versionAtLeast(version, MIN_APPLE_CARD_EXTENSION_VERSION);
+  state.ebayExtensionReady = ready && versionAtLeast(version, MIN_EBAY_EXTENSION_VERSION);
   elements.extensionDot.classList.toggle("extension-dot--ready", ready);
   elements.extensionStatus.textContent = ready
     ? `Companion extension connected · v${version || "unknown"}`
@@ -125,6 +250,12 @@ function setExtensionReady(ready, version = "") {
     !ready || Boolean(state.creditKarmaSessionToken);
   elements.aliExpressImportButton.disabled =
     !state.aliExpressExtensionReady || Boolean(state.aliExpressSessionToken);
+  elements.venmoImportButton.disabled =
+    !state.venmoExtensionReady || Boolean(state.venmoSessionToken);
+  elements.appleCardImportButton.disabled =
+    !state.appleCardExtensionReady || Boolean(state.appleCardSessionToken);
+  elements.ebayImportButton.disabled =
+    !state.ebayExtensionReady || Boolean(state.ebaySessionToken);
   if (ready && !state.aliExpressExtensionReady) {
     elements.aliExpressDirectError.textContent =
       `AliExpress requires companion extension ${MIN_ALIEXPRESS_EXTENSION_VERSION} or newer. ` +
@@ -132,6 +263,30 @@ function setExtensionReady(ready, version = "") {
     elements.aliExpressDirectError.hidden = false;
   } else if (!state.aliExpressSessionToken) {
     clearAliExpressError();
+  }
+  if (ready && !state.venmoExtensionReady) {
+    elements.venmoDirectError.textContent =
+      `Venmo requires companion extension ${MIN_VENMO_EXTENSION_VERSION} or newer. ` +
+      "Open chrome://extensions, reload Ledger Data Importer, then reload this page.";
+    elements.venmoDirectError.hidden = false;
+  } else if (!state.venmoSessionToken) {
+    clearVenmoError();
+  }
+  if (ready && !state.appleCardExtensionReady) {
+    elements.appleCardError.textContent =
+      `Apple Card requires companion extension ${MIN_APPLE_CARD_EXTENSION_VERSION} or newer. ` +
+      "Open chrome://extensions, reload Ledger Data Importer, then reload this page.";
+    elements.appleCardError.hidden = false;
+  } else if (!state.appleCardSessionToken) {
+    clearAppleCardError();
+  }
+  if (ready && !state.ebayExtensionReady) {
+    elements.ebayError.textContent =
+      `eBay requires companion extension ${MIN_EBAY_EXTENSION_VERSION} or newer. ` +
+      "Open chrome://extensions, reload Ledger Data Importer, then reload this page.";
+    elements.ebayError.hidden = false;
+  } else if (!state.ebaySessionToken) {
+    clearEbayError();
   }
 }
 
@@ -179,8 +334,8 @@ async function pollAmazonSession() {
     if (!response.ok) throw new Error(payload.error || `Amazon import status failed (${response.status}).`);
 
     renderAmazonProgress(payload.progress, payload.message, payload.status);
-    if (payload.status === "complete") {
-      renderResult(payload.import);
+    if (payload.status === "review") {
+      renderResult(payload.import, "amazon", state.amazonSessionToken);
       finishAmazonSession();
       return;
     }
@@ -200,12 +355,17 @@ async function startAmazonImport() {
   clearAmazonError();
   const startDate = elements.amazonStartDate.value;
   const endDate = elements.amazonEndDate.value;
+  const accountIdentity = importAccountIdentity("amazon");
   if (!startDate || !endDate) {
     showAmazonError("Choose both a start date and an end date.");
     return;
   }
   if (startDate > endDate) {
     showAmazonError("The Amazon start date cannot be after the end date.");
+    return;
+  }
+  if (!accountIdentity) {
+    showAmazonError("Complete all three payment account fields.");
     return;
   }
   if (!state.extensionReady) {
@@ -219,7 +379,7 @@ async function startAmazonImport() {
     const response = await fetch("/api/amazon-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the Amazon import (${response.status}).`);
@@ -312,8 +472,8 @@ async function pollCreditKarmaSession() {
     }
 
     renderCreditKarmaProgress(payload.progress, payload.message, payload.status);
-    if (payload.status === "complete") {
-      renderResult(payload.import);
+    if (payload.status === "review") {
+      renderResult(payload.import, "creditkarma", state.creditKarmaSessionToken);
       finishCreditKarmaSession();
       return;
     }
@@ -337,6 +497,8 @@ async function startCreditKarmaImport() {
   const endDate = elements.creditKarmaEndDate.value;
   const ignoreAmazon = elements.creditKarmaIgnoreAmazon.checked;
   const ignoreAliExpress = elements.creditKarmaIgnoreAliExpress.checked;
+  const ignoreVenmo = elements.creditKarmaIgnoreVenmo.checked;
+  const ignoreEbay = elements.creditKarmaIgnoreEbay.checked;
   if (!startDate || !endDate) {
     showCreditKarmaError("Choose both a start date and an end date.");
     return;
@@ -356,7 +518,7 @@ async function startCreditKarmaImport() {
     const response = await fetch("/api/creditkarma-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress }),
+      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress, ignoreVenmo, ignoreEbay }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -454,8 +616,8 @@ async function pollAliExpressSession() {
       );
     }
     renderAliExpressProgress(payload.progress, payload.message, payload.status);
-    if (payload.status === "complete") {
-      renderResult(payload.import);
+    if (payload.status === "review") {
+      renderResult(payload.import, "aliexpress", state.aliExpressSessionToken);
       finishAliExpressSession();
       return;
     }
@@ -481,8 +643,10 @@ async function startAliExpressImport() {
   clearAliExpressError();
   const startDate = elements.aliExpressStartDate.value;
   const endDate = elements.aliExpressEndDate.value;
+  const accountIdentity = importAccountIdentity("aliexpress");
   if (!startDate || !endDate) return showAliExpressError("Choose both a start date and an end date.");
   if (startDate > endDate) return showAliExpressError("The AliExpress start date cannot be after the end date.");
+  if (!accountIdentity) return showAliExpressError("Complete all three payment account fields.");
   if (!state.aliExpressExtensionReady) {
     return showAliExpressError(
       `Reload companion extension ${MIN_ALIEXPRESS_EXTENSION_VERSION} from chrome://extensions, then reload this page.`,
@@ -495,7 +659,7 @@ async function startAliExpressImport() {
     const response = await fetch("/api/aliexpress-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the AliExpress import (${response.status}).`);
@@ -532,34 +696,450 @@ async function cancelAliExpressImport() {
   }
 }
 
-function importedTransactionKey(transaction) {
-  return JSON.stringify([
-    transaction.date,
-    transaction.description,
-    Number(transaction.amount).toFixed(2),
-    transaction.category,
-    transaction.accountName,
-    transaction.accountType,
-    transaction.provider,
-  ]);
+function renderVenmoProgress(progress, message, status = "scraping") {
+  const boundedProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  elements.venmoProgress.hidden = false;
+  elements.venmoProgressBar.style.width = `${boundedProgress}%`;
+  elements.venmoProgressMessage.textContent = message;
+  elements.venmoProgress.classList.toggle("amazon-progress--error", status === "error");
 }
 
-function remapImportedTransactions(currentTransactions) {
-  const matchesByKey = new Map();
-  for (const transaction of currentTransactions) {
-    const key = importedTransactionKey(transaction);
-    if (!matchesByKey.has(key)) matchesByKey.set(key, []);
-    matchesByKey.get(key).push(transaction);
+function showVenmoError(message) {
+  elements.venmoDirectError.textContent = message;
+  elements.venmoDirectError.hidden = false;
+  renderVenmoProgress(0, "Venmo import could not continue.", "error");
+}
+
+function clearVenmoError() {
+  elements.venmoDirectError.textContent = "";
+  elements.venmoDirectError.hidden = true;
+}
+
+function finishVenmoSession() {
+  if (state.venmoPollTimer !== null) window.clearTimeout(state.venmoPollTimer);
+  state.venmoPollTimer = null;
+  state.venmoSessionToken = "";
+  state.venmoStartedAt = 0;
+  elements.venmoImportButton.disabled = !state.venmoExtensionReady;
+  elements.venmoCancelButton.hidden = true;
+}
+
+async function pollVenmoSession() {
+  if (!state.venmoSessionToken) return;
+  try {
+    const response = await fetch(
+      `/api/venmo-import-sessions/${encodeURIComponent(state.venmoSessionToken)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Venmo import status failed (${response.status}).`);
+    if (payload.status === "waiting_for_extension" && Date.now() - state.venmoStartedAt > 10000) {
+      throw new Error(
+        "The companion extension did not accept the Venmo import. Reload Ledger Data Importer " +
+        "from chrome://extensions, reload this page, and try again.",
+      );
+    }
+    renderVenmoProgress(payload.progress, payload.message, payload.status);
+    if (payload.status === "review") {
+      renderResult(payload.import, "venmo", state.venmoSessionToken);
+      finishVenmoSession();
+      return;
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      if (payload.status === "error") showVenmoError(payload.message);
+      finishVenmoSession();
+      return;
+    }
+    state.venmoPollTimer = window.setTimeout(pollVenmoSession, 1200);
+  } catch (error) {
+    const token = state.venmoSessionToken;
+    if (token) {
+      fetch(`/api/venmo-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+    }
+    showVenmoError(error instanceof Error ? error.message : "Venmo import status is unavailable.");
+    finishVenmoSession();
   }
-  state.importedTransactions = state.importedTransactions.flatMap((transaction) => {
-    const matches = matchesByKey.get(importedTransactionKey(transaction));
-    return matches?.length ? [matches.shift()] : [];
-  });
+}
+
+async function startVenmoImport() {
+  clearVenmoError();
+  const startDate = elements.venmoStartDate.value;
+  const endDate = elements.venmoEndDate.value;
+  const accountIdentity = importAccountIdentity("venmo");
+  if (!startDate || !endDate) return showVenmoError("Choose both a start date and an end date.");
+  if (startDate > endDate) return showVenmoError("The Venmo start date cannot be after the end date.");
+  if (!accountIdentity) return showVenmoError("Complete all three account identity fields.");
+  if (!state.venmoExtensionReady) {
+    return showVenmoError(
+      `Reload companion extension ${MIN_VENMO_EXTENSION_VERSION} from chrome://extensions, then reload this page.`,
+    );
+  }
+  elements.venmoImportButton.disabled = true;
+  renderVenmoProgress(0, "Creating a secure import session…", "waiting_for_extension");
+  try {
+    const response = await fetch("/api/venmo-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not start the Venmo import (${response.status}).`);
+    state.venmoSessionToken = payload.token;
+    state.venmoStartedAt = Date.now();
+    elements.venmoCancelButton.hidden = false;
+    window.postMessage({
+      source: "ledger-web-app",
+      action: "startVenmoImport",
+      payload: { token: payload.token, startDate, endDate, ledgerOrigin: window.location.origin },
+    }, window.location.origin);
+    renderVenmoProgress(1, "Opening Venmo statements…", "opening_venmo");
+    pollVenmoSession();
+  } catch (error) {
+    showVenmoError(error instanceof Error ? error.message : "Could not start the Venmo import.");
+    finishVenmoSession();
+  }
+}
+
+async function cancelVenmoImport() {
+  const token = state.venmoSessionToken;
+  if (!token) return;
+  window.postMessage(
+    { source: "ledger-web-app", action: "cancelVenmoImport", payload: { token } },
+    window.location.origin,
+  );
+  try {
+    await fetch(`/api/venmo-import-sessions/${encodeURIComponent(token)}/cancel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } finally {
+    renderVenmoProgress(0, "Venmo import cancelled.", "cancelled");
+    finishVenmoSession();
+  }
+}
+
+function renderEbayProgress(progress, message, status = "scraping") {
+  const boundedProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  elements.ebayProgress.hidden = false;
+  elements.ebayProgressBar.style.width = `${boundedProgress}%`;
+  elements.ebayProgressMessage.textContent = message;
+  elements.ebayProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showEbayError(message) {
+  elements.ebayError.textContent = message;
+  elements.ebayError.hidden = false;
+  renderEbayProgress(0, "eBay import could not continue.", "error");
+}
+
+function clearEbayError() {
+  elements.ebayError.textContent = "";
+  elements.ebayError.hidden = true;
+}
+
+function finishEbaySession() {
+  if (state.ebayPollTimer !== null) window.clearTimeout(state.ebayPollTimer);
+  state.ebayPollTimer = null;
+  state.ebaySessionToken = "";
+  state.ebayStartedAt = 0;
+  elements.ebayImportButton.disabled = !state.ebayExtensionReady;
+  elements.ebayCancelButton.hidden = true;
+}
+
+async function pollEbaySession() {
+  if (!state.ebaySessionToken) return;
+  try {
+    const response = await fetch(
+      `/api/ebay-import-sessions/${encodeURIComponent(state.ebaySessionToken)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `eBay import status failed (${response.status}).`);
+    if (payload.status === "waiting_for_extension" && Date.now() - state.ebayStartedAt > 10000) {
+      throw new Error(
+        "The companion extension did not accept the eBay import. Reload Ledger Data Importer " +
+        "from chrome://extensions, reload this page, and try again.",
+      );
+    }
+    renderEbayProgress(payload.progress, payload.message, payload.status);
+    if (payload.status === "review") {
+      renderResult(payload.import, "ebay", state.ebaySessionToken);
+      finishEbaySession();
+      return;
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      if (payload.status === "error") showEbayError(payload.message);
+      finishEbaySession();
+      return;
+    }
+    state.ebayPollTimer = window.setTimeout(pollEbaySession, 1200);
+  } catch (error) {
+    const token = state.ebaySessionToken;
+    if (token) {
+      fetch(`/api/ebay-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+    }
+    showEbayError(error instanceof Error ? error.message : "eBay import status is unavailable.");
+    finishEbaySession();
+  }
+}
+
+async function startEbayImport() {
+  clearEbayError();
+  const startDate = elements.ebayStartDate.value;
+  const endDate = elements.ebayEndDate.value;
+  const accountIdentity = importAccountIdentity("ebay");
+  if (!startDate || !endDate) return showEbayError("Choose both a start date and an end date.");
+  if (startDate > endDate) return showEbayError("The eBay start date cannot be after the end date.");
+  if (!accountIdentity) return showEbayError("Complete all three account identity fields.");
+  if (!state.ebayExtensionReady) {
+    return showEbayError(
+      `Reload companion extension ${MIN_EBAY_EXTENSION_VERSION} from chrome://extensions, then reload this page.`,
+    );
+  }
+  elements.ebayImportButton.disabled = true;
+  renderEbayProgress(0, "Creating a secure import session...", "waiting_for_extension");
+  try {
+    const response = await fetch("/api/ebay-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not start the eBay import (${response.status}).`);
+    state.ebaySessionToken = payload.token;
+    state.ebayStartedAt = Date.now();
+    elements.ebayCancelButton.hidden = false;
+    window.postMessage({
+      source: "ledger-web-app",
+      action: "startEbayImport",
+      payload: { token: payload.token, startDate, endDate, ledgerOrigin: window.location.origin },
+    }, window.location.origin);
+    renderEbayProgress(1, "Opening eBay purchase history...", "opening_ebay");
+    pollEbaySession();
+  } catch (error) {
+    showEbayError(error instanceof Error ? error.message : "Could not start the eBay import.");
+    finishEbaySession();
+  }
+}
+
+async function cancelEbayImport() {
+  const token = state.ebaySessionToken;
+  if (!token) return;
+  window.postMessage(
+    { source: "ledger-web-app", action: "cancelEbayImport", payload: { token } },
+    window.location.origin,
+  );
+  try {
+    await fetch(`/api/ebay-import-sessions/${encodeURIComponent(token)}/cancel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } finally {
+    renderEbayProgress(0, "eBay import cancelled.", "cancelled");
+    finishEbaySession();
+  }
+}
+
+function renderAppleCardProgress(progress, message, status = "importing") {
+  const boundedProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  elements.appleCardProgress.hidden = false;
+  elements.appleCardProgressBar.style.width = `${boundedProgress}%`;
+  elements.appleCardProgressMessage.textContent = message;
+  elements.appleCardProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showAppleCardError(message) {
+  elements.appleCardError.textContent = message;
+  elements.appleCardError.hidden = false;
+  renderAppleCardProgress(0, "Apple Card import could not continue.", "error");
+}
+
+function clearAppleCardError() {
+  elements.appleCardError.textContent = "";
+  elements.appleCardError.hidden = true;
+}
+
+function finishAppleCardSession() {
+  if (state.appleCardPollTimer !== null) window.clearTimeout(state.appleCardPollTimer);
+  state.appleCardPollTimer = null;
+  state.appleCardSessionToken = "";
+  state.appleCardStartedAt = 0;
+  elements.appleCardImportButton.disabled = !state.appleCardExtensionReady;
+  elements.appleCardCancelButton.hidden = true;
+}
+
+async function pollAppleCardSession() {
+  if (!state.appleCardSessionToken) return;
+  try {
+    const response = await fetch(
+      `/api/applecard-import-sessions/${encodeURIComponent(state.appleCardSessionToken)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Apple Card import status failed (${response.status}).`);
+    if (payload.status === "waiting_for_file" && Date.now() - state.appleCardStartedAt > 10000) {
+      throw new Error(
+        "The companion extension did not accept the Apple Card import. Reload Ledger Data Importer " +
+        "from chrome://extensions, reload this page, and try again.",
+      );
+    }
+    renderAppleCardProgress(payload.progress, payload.message, payload.status);
+    if (payload.status === "review") {
+      renderResult(payload.import, "applecard", state.appleCardSessionToken);
+      finishAppleCardSession();
+      return;
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      if (payload.status === "error") showAppleCardError(payload.message);
+      finishAppleCardSession();
+      return;
+    }
+    state.appleCardPollTimer = window.setTimeout(pollAppleCardSession, 1200);
+  } catch (error) {
+    const token = state.appleCardSessionToken;
+    if (token) {
+      fetch(`/api/applecard-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+    }
+    showAppleCardError(error instanceof Error ? error.message : "Apple Card import status is unavailable.");
+    finishAppleCardSession();
+  }
+}
+
+async function startAppleCardImport() {
+  if (state.appleCardBusy || state.appleCardSessionToken) return;
+  clearAppleCardError();
+  const startDate = elements.appleCardStartDate.value;
+  const endDate = elements.appleCardEndDate.value;
+  const accountIdentity = importAccountIdentity("applecard");
+  if (!startDate || !endDate) return showAppleCardError("Choose both a start date and an end date.");
+  if (startDate > endDate) return showAppleCardError("The Apple Card start date cannot be after the end date.");
+  if (!accountIdentity) return showAppleCardError("Complete all three account identity fields.");
+  if (!state.appleCardExtensionReady) {
+    return showAppleCardError(
+      `Reload companion extension ${MIN_APPLE_CARD_EXTENSION_VERSION} from chrome://extensions, then reload this page.`,
+    );
+  }
+  elements.appleCardImportButton.disabled = true;
+  renderAppleCardProgress(0, "Creating a secure import session...", "waiting_for_file");
+  try {
+    const response = await fetch("/api/applecard-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not start the Apple Card import (${response.status}).`);
+    state.appleCardSessionToken = payload.token;
+    state.appleCardStartedAt = Date.now();
+    elements.appleCardCancelButton.hidden = false;
+    window.postMessage({
+      source: "ledger-web-app",
+      action: "startAppleCardImport",
+      payload: { token: payload.token, startDate, endDate, ledgerOrigin: window.location.origin },
+    }, window.location.origin);
+    renderAppleCardProgress(1, "Opening Apple Card...", "opening_apple_card");
+    pollAppleCardSession();
+  } catch (error) {
+    showAppleCardError(error instanceof Error ? error.message : "Could not start the Apple Card import.");
+    finishAppleCardSession();
+  }
+}
+
+async function cancelAppleCardImport() {
+  const token = state.appleCardSessionToken;
+  if (!token) return;
+  window.postMessage(
+    { source: "ledger-web-app", action: "cancelAppleCardImport", payload: { token } },
+    window.location.origin,
+  );
+  try {
+    await fetch(`/api/applecard-import-sessions/${encodeURIComponent(token)}/cancel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } finally {
+    renderAppleCardProgress(0, "Apple Card import cancelled.", "cancelled");
+    finishAppleCardSession();
+  }
+}
+
+async function importAppleCardFile() {
+  if (state.appleCardBusy || state.appleCardSessionToken) return;
+  clearAppleCardError();
+  const startDate = elements.appleCardStartDate.value;
+  const endDate = elements.appleCardEndDate.value;
+  const file = elements.appleCardFile.files?.[0];
+  const accountIdentity = importAccountIdentity("applecard");
+  if (!startDate || !endDate) return showAppleCardError("Choose both a start date and an end date.");
+  if (startDate > endDate) return showAppleCardError("The Apple Card start date cannot be after the end date.");
+  if (!file) return showAppleCardError("Choose the CSV exported from Apple Card.");
+  if (!file.name.toLocaleLowerCase().endsWith(".csv")) {
+    return showAppleCardError("Apple Card imports must use a CSV file.");
+  }
+  if (file.size > 40_000_000) return showAppleCardError("The Apple Card CSV cannot exceed 40 MB.");
+  if (!accountIdentity) return showAppleCardError("Complete all three account identity fields.");
+
+  state.appleCardBusy = true;
+  elements.appleCardFileImportButton.disabled = true;
+  elements.appleCardImportButton.disabled = true;
+  renderAppleCardProgress(5, "Reading Apple Card CSV...");
+  try {
+    const content = await file.text();
+    if (!content.trim()) throw new Error("The selected Apple Card CSV is empty.");
+    renderAppleCardProgress(25, "Creating a secure import session...");
+    const sessionResponse = await fetch("/api/applecard-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+    });
+    const session = await sessionResponse.json().catch(() => ({}));
+    if (!sessionResponse.ok) {
+      throw new Error(session.error || `Could not start the Apple Card import (${sessionResponse.status}).`);
+    }
+    renderAppleCardProgress(60, "Validating and importing transactions...");
+    const completeResponse = await fetch(
+      `/api/applecard-import-sessions/${encodeURIComponent(session.token)}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      },
+    );
+    const completed = await completeResponse.json().catch(() => ({}));
+    if (!completeResponse.ok) {
+      throw new Error(completed.error || `Apple Card import failed (${completeResponse.status}).`);
+    }
+    renderAppleCardProgress(98, completed.message || "Apple Card import ready to review.", "review");
+    renderResult(completed.import, "applecard", session.token);
+  } catch (error) {
+    showAppleCardError(error instanceof Error ? error.message : "Could not import Apple Card transactions.");
+  } finally {
+    state.appleCardBusy = false;
+    elements.appleCardFileImportButton.disabled = false;
+    elements.appleCardImportButton.disabled = !state.appleCardExtensionReady;
+  }
 }
 
 function createImportedTransactionRow(transaction, index) {
   const row = document.createElement("article");
   row.className = "transaction-row";
+  row.classList.toggle("transaction-row--duplicate", transaction._isDuplicate);
+
+  const selection = document.createElement("label");
+  selection.className = "import-selection";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = transaction._selected;
+  checkbox.disabled = state.reviewCommitted;
+  checkbox.setAttribute("aria-label", `Include ${transaction.description} in import`);
+  checkbox.addEventListener("change", () => {
+    transaction._selected = checkbox.checked;
+    updateReviewSelection();
+  });
+  selection.append(checkbox);
 
   const parsedDate = new Date(`${transaction.date}T12:00:00Z`);
   const dateElement = document.createElement("time");
@@ -578,6 +1158,18 @@ function createImportedTransactionRow(transaction, index) {
   const metadata = document.createElement("span");
   metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
   description.append(title, metadata);
+  if (transaction._isDuplicate) {
+    const duplicate = document.createElement("span");
+    duplicate.className = "duplicate-badge";
+    duplicate.textContent = "Duplicate";
+    description.append(duplicate);
+  }
+  if (transaction.notes) {
+    const notes = document.createElement("span");
+    notes.className = "transaction-note";
+    notes.textContent = transaction.notes;
+    description.append(notes);
+  }
 
   const actions = document.createElement("div");
   actions.className = "transaction-actions";
@@ -590,21 +1182,28 @@ function createImportedTransactionRow(transaction, index) {
   editButton.className = "edit-button";
   editButton.type = "button";
   editButton.textContent = "Edit";
+  editButton.disabled = state.reviewCommitted;
   editButton.setAttribute("aria-label", `Edit ${transaction.description}`);
   editButton.addEventListener("click", () => openImportedTransactionEditor(index));
   actions.append(amount, editButton);
 
-  row.append(dateElement, description, actions);
+  row.append(selection, dateElement, description, actions);
   return row;
+}
+
+function updateReviewSelection() {
+  const selected = state.importedTransactions.filter((transaction) => transaction._selected).length;
+  elements.confirmReview.textContent = `Import selected (${selected})`;
+  elements.confirmReview.disabled = state.reviewCommitted || selected === 0;
 }
 
 function renderImportedTransactions() {
   const count = state.importedTransactions.length;
-  elements.reviewSubtitle.textContent = `${count} new ${count === 1 ? "transaction" : "transactions"} created · Review and adjust before continuing`;
+  updateReviewSelection();
   if (count === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
-    empty.textContent = "No new transactions were created. Everything in this import already existed.";
+    empty.textContent = "No transactions were found in the selected date range.";
     elements.reviewList.replaceChildren(empty);
     return;
   }
@@ -629,7 +1228,7 @@ function clearEditError() {
 
 function setEditBusy(busy) {
   state.editBusy = busy;
-  elements.editForm.querySelectorAll("button, input").forEach((control) => {
+  elements.editForm.querySelectorAll("button, input, textarea").forEach((control) => {
     control.disabled = busy;
   });
   elements.saveEdit.textContent = busy ? "Saving…" : "Save transaction";
@@ -649,8 +1248,9 @@ function openImportedTransactionEditor(index) {
     "accountName",
     "accountType",
     "provider",
+    "notes",
   ]) {
-    editField(field).value = transaction[field];
+    editField(field).value = transaction[field] ?? "";
   }
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   elements.editDialog.showModal();
@@ -673,22 +1273,8 @@ function transactionFromEditForm() {
     accountName: formData.get("accountName"),
     accountType: formData.get("accountType"),
     provider: formData.get("provider"),
+    notes: formData.get("notes"),
   };
-}
-
-async function importedMutation(url, method, transaction = undefined) {
-  const body = { revision: state.revision };
-  if (transaction !== undefined) body.transaction = transaction;
-  const response = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || `Request failed with status ${response.status}`);
-  }
-  return payload;
 }
 
 async function saveImportedTransaction(event) {
@@ -698,79 +1284,133 @@ async function saveImportedTransaction(event) {
   if (!current) return;
   const transaction = transactionFromEditForm();
   clearEditError();
-  setEditBusy(true);
-  try {
-    const payload = await importedMutation(
-      `/api/transactions/${current._id}`,
-      "PUT",
-      transaction,
-    );
-    state.revision = payload.revision;
-    state.importedTransactions[index] = { ...transaction, amount: Number(transaction.amount) };
-    remapImportedTransactions(payload.transactions);
-    renderImportedTransactions();
-    elements.editDialog.close();
-    elements.reviewDialog.showModal();
-  } catch (error) {
-    showEditError(error instanceof Error ? error.message : "The transaction could not be saved.");
-  } finally {
-    setEditBusy(false);
-  }
+  state.importedTransactions[index] = {
+    ...current,
+    ...transaction,
+    amount: Number(transaction.amount),
+    _selected: true,
+  };
+  renderImportedTransactions();
+  elements.editDialog.close();
+  elements.reviewDialog.showModal();
 }
 
-async function deleteImportedTransaction() {
+function deleteImportedTransaction() {
   const index = state.editingImportedIndex;
   const current = state.importedTransactions[index];
   if (!current) return;
-  const confirmed = window.confirm(
-    `Permanently delete “${current.description}” for ${currency.format(current.amount)}?\n\n` +
-      "This updates the master CSV and cannot be undone.",
-  );
-  if (!confirmed) return;
-
-  clearEditError();
-  setEditBusy(true);
-  try {
-    const payload = await importedMutation(`/api/transactions/${current._id}`, "DELETE");
-    state.revision = payload.revision;
-    state.importedTransactions.splice(index, 1);
-    remapImportedTransactions(payload.transactions);
-    renderImportedTransactions();
-    elements.editDialog.close();
-    elements.reviewDialog.showModal();
-  } catch (error) {
-    showEditError(error instanceof Error ? error.message : "The transaction could not be deleted.");
-  } finally {
-    setEditBusy(false);
-  }
+  state.importedTransactions.splice(index, 1);
+  renderImportedTransactions();
+  elements.editDialog.close();
+  elements.reviewDialog.showModal();
 }
 
-function renderResult(result) {
-  const added = result.added;
-  elements.resultTitle.textContent =
-    added === 0 ? "Everything was already up to date." : `${added} new ${added === 1 ? "transaction" : "transactions"} added.`;
-  elements.resultSummary.textContent = `${result.duplicatesSkipped} duplicate ${
-    result.duplicatesSkipped === 1 ? "transaction was" : "transactions were"
-  } safely skipped.`;
-  elements.resultSources.replaceChildren(
-    ...Object.entries(result.sources).map(([key, source]) => {
-      const card = document.createElement("article");
-      card.className = "result-source";
-      const title = document.createElement("strong");
-      title.textContent = sourceLabels[key] ?? key;
-      const detail = document.createElement("span");
-      detail.textContent = `${source.parsed} parsed · ${source.added} added · ${source.duplicatesSkipped} skipped`;
-      card.append(title, detail);
-      return card;
-    }),
-  );
-  elements.result.hidden = false;
+function renderResult(result, source, token) {
+  if (
+    !result ||
+    !Number.isInteger(result.parsed) ||
+    !Number.isInteger(result.new) ||
+    !Number.isInteger(result.duplicates) ||
+    !Array.isArray(result.transactions)
+  ) {
+    throw new Error("Ledger returned an outdated import response. Restart the Ledger server and try again.");
+  }
+  elements.reviewEyebrow.textContent = `${sourceLabels[source] ?? source} import`;
+  elements.reviewTitle.textContent = "Review transactions";
+  elements.reviewSubtitle.textContent = `${result.parsed} parsed · ${result.new} new · ${result.duplicates} duplicates`;
+  elements.reviewError.hidden = true;
+  elements.reviewError.textContent = "";
   state.revision = result.revision;
-  state.importedTransactions = Array.isArray(result.transactions) ? result.transactions : [];
+  state.reviewSession = { source, token };
+  state.reviewCommitted = false;
+  state.importedTransactions = Array.isArray(result.transactions)
+    ? result.transactions.map((transaction) => ({
+        ...transaction,
+        _selected: !transaction._isDuplicate,
+      }))
+    : [];
   state.editingImportedIndex = null;
+  elements.cancelReview.hidden = false;
+  elements.confirmReview.hidden = false;
+  elements.reviewDashboardLink.hidden = true;
   renderImportedTransactions();
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   elements.reviewDialog.showModal();
+}
+
+function reviewSessionUrl(action) {
+  const session = state.reviewSession;
+  if (!session) return "";
+  return `/api/${session.source}-import-sessions/${encodeURIComponent(session.token)}/${action}`;
+}
+
+function clearReviewState() {
+  state.reviewSession = null;
+  state.reviewCommitted = false;
+  state.importedTransactions = [];
+  state.editingImportedIndex = null;
+}
+
+async function cancelImportReview() {
+  if (state.reviewCommitted) {
+    if (elements.reviewDialog.open) elements.reviewDialog.close();
+    clearReviewState();
+    return;
+  }
+  const cancelUrl = reviewSessionUrl("cancel");
+  if (elements.reviewDialog.open) elements.reviewDialog.close();
+  clearReviewState();
+  if (cancelUrl) {
+    try {
+      await fetch(cancelUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    } catch (_error) {
+      // The preview is already discarded locally; the expiring server session is harmless.
+    }
+  }
+}
+
+async function confirmImportReview() {
+  const commitUrl = reviewSessionUrl("commit");
+  if (!commitUrl || state.reviewCommitted) return;
+  const transactions = state.importedTransactions.filter((transaction) => transaction._selected);
+  if (transactions.length === 0) return;
+
+  elements.reviewError.hidden = true;
+  elements.confirmReview.disabled = true;
+  elements.cancelReview.disabled = true;
+  elements.confirmReview.textContent = "Importing…";
+  try {
+    const response = await fetch(commitUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactions }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
+
+    state.reviewCommitted = true;
+    state.revision = payload.import?.revision || state.revision;
+    elements.reviewEyebrow.textContent = "Import complete";
+    elements.reviewTitle.textContent = "Transactions imported";
+    const committed = payload.import?.committed ?? transactions.length;
+    elements.reviewSubtitle.textContent = `${committed} ${
+      committed === 1 ? "transaction was" : "transactions were"
+    } added to Ledger.`;
+    elements.cancelReview.hidden = true;
+    elements.confirmReview.hidden = true;
+    elements.reviewDashboardLink.hidden = false;
+    renderImportedTransactions();
+  } catch (error) {
+    elements.reviewError.textContent = error instanceof Error ? error.message : "The import could not be saved.";
+    elements.reviewError.hidden = false;
+    elements.confirmReview.disabled = false;
+    elements.cancelReview.disabled = false;
+    updateReviewSelection();
+  }
 }
 
 elements.amazonImportButton.addEventListener("click", startAmazonImport);
@@ -779,9 +1419,22 @@ elements.creditKarmaImportButton.addEventListener("click", startCreditKarmaImpor
 elements.creditKarmaCancelButton.addEventListener("click", cancelCreditKarmaImport);
 elements.aliExpressImportButton.addEventListener("click", startAliExpressImport);
 elements.aliExpressCancelButton.addEventListener("click", cancelAliExpressImport);
-elements.closeReview.addEventListener("click", () => elements.reviewDialog.close());
+elements.venmoImportButton.addEventListener("click", startVenmoImport);
+elements.venmoCancelButton.addEventListener("click", cancelVenmoImport);
+elements.ebayImportButton.addEventListener("click", startEbayImport);
+elements.ebayCancelButton.addEventListener("click", cancelEbayImport);
+elements.appleCardImportButton.addEventListener("click", startAppleCardImport);
+elements.appleCardCancelButton.addEventListener("click", cancelAppleCardImport);
+elements.appleCardFileImportButton.addEventListener("click", importAppleCardFile);
+elements.closeReview.addEventListener("click", cancelImportReview);
+elements.cancelReview.addEventListener("click", cancelImportReview);
+elements.confirmReview.addEventListener("click", confirmImportReview);
+elements.reviewDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelImportReview();
+});
 elements.reviewDialog.addEventListener("click", (event) => {
-  if (event.target === elements.reviewDialog) elements.reviewDialog.close();
+  if (event.target === elements.reviewDialog) cancelImportReview();
 });
 elements.editForm.addEventListener("submit", saveImportedTransaction);
 elements.deleteImported.addEventListener("click", deleteImportedTransaction);
@@ -851,9 +1504,46 @@ window.addEventListener("message", (event) => {
       }).catch(() => {});
       finishAliExpressSession();
     }
+  } else if (event.data.action === "venmoProgress" && state.venmoSessionToken) {
+    const { progress, message, status } = event.data.payload ?? {};
+    renderVenmoProgress(progress, message || "Importing Venmo transactions…", status);
+  } else if (event.data.action === "venmoError") {
+    showVenmoError(event.data.payload?.message || "The Venmo importer extension reported an error.");
+    if (state.venmoSessionToken) {
+      const token = state.venmoSessionToken;
+      fetch(`/api/venmo-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+      finishVenmoSession();
+    }
+  } else if (event.data.action === "ebayProgress" && state.ebaySessionToken) {
+    const { progress, message, status } = event.data.payload ?? {};
+    renderEbayProgress(progress, message || "Importing eBay purchases...", status);
+  } else if (event.data.action === "ebayError") {
+    showEbayError(event.data.payload?.message || "The eBay importer extension reported an error.");
+    if (state.ebaySessionToken) {
+      const token = state.ebaySessionToken;
+      fetch(`/api/ebay-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+      finishEbaySession();
+    }
+  } else if (event.data.action === "appleCardProgress" && state.appleCardSessionToken) {
+    const { progress, message, status } = event.data.payload ?? {};
+    renderAppleCardProgress(progress, message || "Importing Apple Card transactions...", status);
+  } else if (event.data.action === "appleCardError") {
+    showAppleCardError(event.data.payload?.message || "The Apple Card importer extension reported an error.");
+    if (state.appleCardSessionToken) {
+      const token = state.appleCardSessionToken;
+      fetch(`/api/applecard-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+      finishAppleCardSession();
+    }
   }
 });
 
+initializeImporterTabs();
 initializeDirectImportDates();
 setExtensionReady(false);
 for (const delay of [0, 400, 1200]) {

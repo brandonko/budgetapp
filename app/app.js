@@ -1,5 +1,7 @@
 "use strict";
 
+const DASHBOARD_VIEW_STORAGE_KEY = "ledger.dashboardView.v1";
+
 const state = {
   transactions: [],
   revision: "",
@@ -8,8 +10,43 @@ const state = {
   selectedMonth: "",
   annualCategoryFilter: "",
   editingTransactionId: null,
+  transactionDialogContext: null,
+  returnToTransactionDialog: null,
   formBusy: false,
 };
+
+function saveDashboardView() {
+  try {
+    window.localStorage.setItem(
+      DASHBOARD_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        viewMode: state.viewMode,
+        selectedYear: state.selectedYear,
+        selectedMonth: state.selectedMonth,
+        annualCategoryFilter: state.annualCategoryFilter,
+      }),
+    );
+  } catch {
+    // Storage may be unavailable in a private or locked-down browser profile.
+  }
+}
+
+function restoreDashboardView() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY) || "null");
+    if (!saved || typeof saved !== "object") return;
+    if (["monthly", "annual"].includes(saved.viewMode)) state.viewMode = saved.viewMode;
+    if (/^\d{4}$/.test(saved.selectedYear || "")) state.selectedYear = saved.selectedYear;
+    if (/^(0[1-9]|1[0-2])$/.test(saved.selectedMonth || "")) {
+      state.selectedMonth = saved.selectedMonth;
+    }
+    if (typeof saved.annualCategoryFilter === "string") {
+      state.annualCategoryFilter = saved.annualCategoryFilter.slice(0, 200);
+    }
+  } catch {
+    // Ignore malformed or inaccessible preferences and use the latest month.
+  }
+}
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -83,7 +120,7 @@ const elements = {
   errorEyebrow: document.querySelector("#error-eyebrow"),
   errorTitle: document.querySelector("#error-title"),
   errorMessage: document.querySelector("#error-message"),
-  createFileButton: document.querySelector("#create-file-button"),
+  importDataButton: document.querySelector("#import-data-button"),
   retryButton: document.querySelector("#retry-button"),
   dashboardSections: document.querySelectorAll(".hero, .summary-grid, .annual-insights, .categories-section"),
   datalists: {
@@ -206,6 +243,7 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
   state.selectedMonth = preferredMonthNumber || latestMonth.slice(5, 7) || String(new Date().getMonth() + 1).padStart(2, "0");
   elements.monthSelect.value = state.selectedMonth;
   elements.viewModeSelect.value = state.viewMode;
+  saveDashboardView();
 }
 
 function populateDatalists() {
@@ -287,7 +325,13 @@ function renderCategories(transactions) {
       group.total < 0 || group.category.trim().toLocaleLowerCase() === "income",
     );
     card.setAttribute("aria-label", `View ${group.category} transactions`);
-    card.addEventListener("click", () => openTransactionDialog(group.category, group.transactions));
+    card.addEventListener("click", () =>
+      openTransactionDialog(group.category, group.transactions, {
+        type: "category",
+        title: group.category,
+        category: group.category,
+      }),
+    );
     elements.categoryGrid.append(card);
   });
 }
@@ -309,6 +353,7 @@ function colorForCategory(category, categories) {
 
 function setAnnualCategoryFilter(category) {
   state.annualCategoryFilter = state.annualCategoryFilter === category ? "" : category;
+  saveDashboardView();
   renderAnnualCharts(transactionsForSelectedPeriod());
 }
 
@@ -319,6 +364,7 @@ function renderAnnualSpendingChart(transactions) {
   );
   if (state.annualCategoryFilter && !categories.includes(state.annualCategoryFilter)) {
     state.annualCategoryFilter = "";
+    saveDashboardView();
   }
 
   elements.annualCategoryLegend.replaceChildren();
@@ -453,6 +499,12 @@ function createTransactionRow(transaction) {
   const metadata = document.createElement("span");
   metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
   description.append(title, metadata);
+  if (transaction.notes) {
+    const notes = document.createElement("span");
+    notes.className = "transaction-note";
+    notes.textContent = transaction.notes;
+    description.append(notes);
+  }
 
   const actions = document.createElement("div");
   actions.className = "transaction-actions";
@@ -472,7 +524,8 @@ function createTransactionRow(transaction) {
   return row;
 }
 
-function openTransactionDialog(title, transactions) {
+function openTransactionDialog(title, transactions, context) {
+  state.transactionDialogContext = context;
   const sortedTransactions = [...transactions].sort(compareLatestFirst);
   const total = displaySum(sortedTransactions);
   elements.dialogEyebrow.textContent = selectedPeriodLabel();
@@ -482,6 +535,21 @@ function openTransactionDialog(title, transactions) {
   } · ${currency.format(total)}`;
   elements.transactionList.replaceChildren(...sortedTransactions.map(createTransactionRow));
   elements.dialog.showModal();
+}
+
+function reopenTransactionDialog(context) {
+  if (!context) return;
+  let transactions;
+  if (context.type === "category") {
+    transactions = transactionsForSelectedPeriod().filter(
+      (transaction) => transaction.category === context.category,
+    );
+  } else if (context.type === "excluded") {
+    transactions = excludedBillPaymentsForSelectedPeriod();
+  } else {
+    transactions = transactionsForSelectedPeriod();
+  }
+  openTransactionDialog(context.title, transactions, context);
 }
 
 function formField(name) {
@@ -515,13 +583,15 @@ function clearFormError() {
 
 function setFormBusy(isBusy) {
   state.formBusy = isBusy;
-  elements.form.querySelectorAll("button, input").forEach((control) => {
+  elements.form.querySelectorAll("button, input, textarea").forEach((control) => {
     control.disabled = isBusy;
   });
   elements.saveTransactionButton.textContent = isBusy ? "Saving…" : "Save transaction";
 }
 
 function openTransactionForm(transaction = null) {
+  state.returnToTransactionDialog =
+    transaction !== null && elements.dialog.open ? state.transactionDialogContext : null;
   if (elements.dialog.open) {
     elements.dialog.close();
   }
@@ -540,6 +610,7 @@ function openTransactionForm(transaction = null) {
   formField("accountName").value = transaction?.accountName ?? "";
   formField("accountType").value = transaction?.accountType ?? "";
   formField("provider").value = transaction?.provider ?? "";
+  formField("notes").value = transaction?.notes ?? "";
   elements.formDialog.showModal();
   formField(editing ? "description" : "date").focus();
 }
@@ -554,7 +625,16 @@ function transactionFromForm() {
     accountName: formData.get("accountName"),
     accountType: formData.get("accountType"),
     provider: formData.get("provider"),
+    notes: formData.get("notes"),
   };
+}
+
+function closeTransactionForm({ returnToList = true, force = false } = {}) {
+  if (state.formBusy && !force) return;
+  const context = returnToList ? state.returnToTransactionDialog : null;
+  state.returnToTransactionDialog = null;
+  elements.formDialog.close();
+  reopenTransactionDialog(context);
 }
 
 async function mutationRequest(url, method, transaction = undefined) {
@@ -595,7 +675,7 @@ async function saveTransaction(event) {
   try {
     const payload = await mutationRequest(url, method, transaction);
     applyPayload(payload, transaction.date.slice(0, 7));
-    elements.formDialog.close();
+    closeTransactionForm({ force: true });
   } catch (error) {
     showFormError(error instanceof Error ? error.message : "The transaction could not be saved.");
   } finally {
@@ -622,7 +702,7 @@ async function deleteTransaction() {
   try {
     const payload = await mutationRequest(`/api/transactions/${transaction._id}`, "DELETE");
     applyPayload(payload);
-    elements.formDialog.close();
+    closeTransactionForm({ force: true });
   } catch (error) {
     showFormError(error instanceof Error ? error.message : "The transaction could not be deleted.");
   } finally {
@@ -659,10 +739,12 @@ function renderDashboard() {
 function setError(message, code = "") {
   const fileMissing = code === "transaction_file_missing";
   elements.errorState.classList.toggle("error-state--setup", fileMissing);
-  elements.errorEyebrow.textContent = fileMissing ? "Set up Ledger" : "Unable to load data";
-  elements.errorTitle.textContent = fileMissing ? "Create your transaction file." : "Something went wrong.";
-  elements.errorMessage.textContent = message;
-  elements.createFileButton.hidden = !fileMissing;
+  elements.errorEyebrow.textContent = fileMissing ? "Get started" : "Unable to load data";
+  elements.errorTitle.textContent = fileMissing ? "Import your transaction data." : "Something went wrong.";
+  elements.errorMessage.textContent = fileMissing
+    ? "Choose a data source to create your transaction file and start using Ledger."
+    : message;
+  elements.importDataButton.hidden = !fileMissing;
   elements.retryButton.hidden = fileMissing;
   elements.errorState.hidden = false;
   elements.dashboardSections.forEach((section) => {
@@ -696,49 +778,40 @@ async function loadTransactions() {
   }
 }
 
-async function createTransactionFile() {
-  elements.createFileButton.disabled = true;
-  elements.createFileButton.textContent = "Creating…";
-  try {
-    const response = await fetch("/api/transactions/initialize", { method: "POST" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || `Request failed with status ${response.status}`);
-    }
-    clearError();
-    applyPayload(payload);
-  } catch (error) {
-    setError(error instanceof Error ? error.message : "The transaction file could not be created.");
-  } finally {
-    elements.createFileButton.disabled = false;
-    elements.createFileButton.textContent = "Create transaction file";
-  }
-}
-
 elements.viewModeSelect.addEventListener("change", (event) => {
   state.viewMode = event.target.value;
   state.annualCategoryFilter = "";
+  saveDashboardView();
   renderDashboard();
 });
 elements.yearSelect.addEventListener("change", (event) => {
   state.selectedYear = event.target.value;
   state.annualCategoryFilter = "";
+  saveDashboardView();
   renderDashboard();
 });
 elements.monthSelect.addEventListener("change", (event) => {
   state.selectedMonth = event.target.value;
+  saveDashboardView();
   renderDashboard();
 });
 elements.clearCategoryFilter.addEventListener("click", () => {
   state.annualCategoryFilter = "";
+  saveDashboardView();
   renderAnnualCharts(transactionsForSelectedPeriod());
 });
 elements.addTransactionButton.addEventListener("click", () => openTransactionForm());
 elements.viewAllButton.addEventListener("click", () => {
-  openTransactionDialog("All transactions", transactionsForSelectedPeriod());
+  openTransactionDialog("All transactions", transactionsForSelectedPeriod(), {
+    type: "all",
+    title: "All transactions",
+  });
 });
 elements.viewExcludedButton.addEventListener("click", () => {
-  openTransactionDialog("Excluded bill payments", excludedBillPaymentsForSelectedPeriod());
+  openTransactionDialog("Excluded bill payments", excludedBillPaymentsForSelectedPeriod(), {
+    type: "excluded",
+    title: "Excluded bill payments",
+  });
 });
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.dialog.addEventListener("click", (event) => {
@@ -748,14 +821,18 @@ elements.dialog.addEventListener("click", (event) => {
 });
 elements.form.addEventListener("submit", saveTransaction);
 elements.deleteTransactionButton.addEventListener("click", deleteTransaction);
-elements.closeFormDialog.addEventListener("click", () => elements.formDialog.close());
-elements.cancelFormButton.addEventListener("click", () => elements.formDialog.close());
+elements.closeFormDialog.addEventListener("click", () => closeTransactionForm());
+elements.cancelFormButton.addEventListener("click", () => closeTransactionForm());
+elements.formDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeTransactionForm();
+});
 elements.formDialog.addEventListener("click", (event) => {
   if (event.target === elements.formDialog && !state.formBusy) {
-    elements.formDialog.close();
+    closeTransactionForm();
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
-elements.createFileButton.addEventListener("click", createTransactionFile);
 
+restoreDashboardView();
 loadTransactions();

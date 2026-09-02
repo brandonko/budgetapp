@@ -1,7 +1,7 @@
 # Ledger
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
-It imports Credit Karma transactions plus Amazon and AliExpress order history, avoids duplicate
+It imports Credit Karma and Venmo transactions plus Amazon, AliExpress, and eBay order history, avoids duplicate
 imports, and provides monthly and annual summaries with editable transaction
 details.
 
@@ -11,9 +11,11 @@ The dashboard includes:
 - Annual category-stacked spending and monthly net charts
 - Category breakdowns and latest-first transaction lists
 - Monthly/annual view selection with independent year and month controls
+- Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, and settings
-- Manual transaction creation, editing, and permanent deletion
-- Direct Credit Karma, Amazon, and AliExpress imports through a companion Chrome extension
+- Manual transaction creation, editing, permanent deletion, and freeform notes
+- Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
+- Manual Apple Card CSV fallback with editable account details
 - One-to-one reconciliation of credit-card bill-payment transfers
 - Neutral spending presentation with green surpluses and red deficits
 
@@ -33,10 +35,11 @@ python app\server.py
 ```
 
 Open <http://127.0.0.1:8000>. If
-`processed_data_files/transactions.csv` does not exist, Ledger creates a new
-header-only database automatically.
+`data/transactions.csv` does not exist, the dashboard directs
+you to Import data. The first successful import creates the CSV automatically
+before adding its transactions.
 
-`processed_data_files/transactions.csv` is always the default database. Ledger
+`data/transactions.csv` is always the default database. Ledger
 does not automatically select other CSV files in that directory. A different
 file is used only when it is explicitly supplied with `--csv`.
 
@@ -52,66 +55,81 @@ endpoints are accessible only from the local machine.
 ## Import data
 
 Raw financial data is private and must not be committed to Git. This
-repository's `.gitignore` excludes both `raw_data_files/` and
-`processed_data_files/`.
+repository's `.gitignore` excludes both `raw_data_files/` and `data/`.
 
-With Ledger running, open <http://127.0.0.1:8000/upload> or select **Upload
-data** from the dashboard. The page supports three sources:
+With Ledger running, open <http://127.0.0.1:8000/import> or select **Import
+data** from the dashboard. The page presents six sources as tabs so only one
+importer is visible at a time:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
-  amounts. Its two default-enabled filters omit Amazon and AliExpress/Alipay
-  transactions so they can be replaced by itemized order rows. Either filter
+  amounts. Its four default-enabled filters omit Amazon, AliExpress/Alipay,
+  Venmo, and eBay transactions so they can be replaced by richer source data. Each filter
   can be disabled for an individual import.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
-  tax multiplier. When Credit Karma metadata is available in the same import,
-  it supplies the Amazon payment account. Otherwise, unknown account fields
-  default to `Amazon`.
+  tax multiplier. Its editable payment-account defaults are `Prime VISA`,
+  `CREDIT CARD`, and `chase`.
 - **AliExpress orders** creates one transaction per order line and proportionally
   reconciles item prices to the final order total, preserving discounts, shipping,
-  and tax. The current integration accepts USD orders.
+  and tax. The current integration accepts USD orders. Its editable defaults
+  are `Credit Card Mastercard`, `CREDIT CARD`, and `Bank of America`.
+- **Venmo** imports completed payments from official statement CSV data. Outgoing
+  payments become expenses and incoming payments become income. Pending, failed,
+  reversed, and Venmo balance-transfer rows are excluded. Its editable defaults
+  are `Checking Account`, `BANK`, and `Bank of America`.
+- **eBay** reads authenticated Purchase History and creates one transaction per
+  item. Order totals are proportionally allocated across items so shipping, tax,
+  and discounts remain reconciled. Its editable defaults are `eBay`, `CREDIT CARD`,
+  and `eBay`.
+- **Apple Card** opens `card.apple.com`, selects **Export Transactions**, applies
+  the chosen dates and CSV format, and captures the official export. A manual
+  CSV picker remains available as a fallback. Purchases are expenses, refunds
+  are negative adjustments, and card payments are transfers. Its editable
+  defaults are `Apple Card`, `CREDIT CARD`, and `Goldman Sachs`.
+
+For Apple Card, select **Import from Apple Card** and sign in if Apple asks.
+Ledger's extension drives Apple's official export form and receives the CSV
+without accessing the user's Apple Account credentials. If Apple changes the
+page, manually export a CSV from [card.apple.com](https://card.apple.com) and
+select it in the same source tab.
 
 ### Companion browser extension
 
-The Upload data page supports selecting a date range and importing from an
-authenticated Credit Karma, Amazon, or AliExpress session without first saving a JSON file. This
+The Import data page supports selecting a date range and importing from an
+authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, or Apple Card session without first saving a file. This
 requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode** and select **Load unpacked**.
 3. Select the repository's `ledger_data_importer_extension` directory.
-4. Reload <http://127.0.0.1:8000/upload>. The page should report **Companion
+4. Reload <http://127.0.0.1:8000/import>. The page should report **Companion
    extension connected**.
 5. Choose a start and end date, then select the import action for that source.
 
 The Credit Karma action opens its Transactions page, collects **All
 transactions** for the range in the BudgetLens bundle shape, and sends it to the
-normal Credit Karma parser. The Amazon and AliExpress actions open order history and collect
-item details. All three use the browser's existing signed-in session; Ledger never
-receives site credentials or cookies. Progress is shown on the Upload data
+normal Credit Karma parser. The Amazon, AliExpress, and eBay actions open order history and collect
+item details. Venmo opens Statements and downloads official statement CSV data in monthly
+segments. Apple Card drives the official date-range CSV export form. All six use the browser's existing signed-in session; Ledger never
+receives site credentials or cookies. Progress is shown on the Import data
 page, and data is sent through a random, one-hour import session rather than
-being left in Downloads. When an import finishes, Ledger opens a review modal
-containing only the newly created transactions. Every field can be corrected
-there, or a row can be permanently deleted after confirmation.
+being left in Downloads. Parsed rows are staged in a review modal before the
+master CSV changes. New rows are selected by default; duplicates remain visible,
+highlighted, and deselected. Every field can be corrected, rows can be removed,
+and duplicates can be deliberately selected before confirming the import.
 
-Credit Karma and AliExpress can change their private APIs, and Amazon can change its
-order-history markup. Any source can present login/CAPTCHA challenges. Closing an active
+Credit Karma, AliExpress, eBay, and Venmo can change their private APIs; Amazon and Apple can change their
+page markup. Any source can present login/CAPTCHA challenges. Closing an active
 source tab cancels that import. See
 [`ledger_data_importer_extension/README.md`](ledger_data_importer_extension/README.md)
 for implementation and attribution details.
-
-### Planned sources
-
-The import page identifies Venmo and eBay item history
-as planned integrations. Apple Card support is also being explored, but may
-require a manual import workflow because browser automation may not be viable.
 
 ### Duplicate handling
 
 Imports identify existing transactions by normalized `date` and `amount` while
 also counting repeated occurrences. For example, if a source contains two
 transactions for the same amount on the same date and neither exists in the
-CSV, both are added. Importing that range again skips both. If only one already
-exists, one additional occurrence is added.
+CSV, both are marked new. Importing that range again marks both as duplicates.
+If only one already exists, one occurrence is a duplicate and one is new.
 
 This deliberately ignores descriptions so an edited description does not cause
 the source transaction to be imported again.
@@ -119,7 +137,9 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. All seven CSV fields can be changed. The same form supports
+transaction. All eight CSV fields can be changed, including optional freeform
+notes. After editing from a transaction list, Ledger returns to the refreshed
+list instead of closing the workflow. The same form supports
 permanent deletion after an explicit confirmation. Use **Add transaction** on
 the dashboard to create a row manually.
 
@@ -127,15 +147,36 @@ Every mutation is validated, revision-checked, and saved with an atomic file
 replacement. If another browser or process changes the CSV first, Ledger rejects
 the stale write instead of silently overwriting newer data.
 
+## Backups and restore
+
+Open **Settings → Backup** to create and manage transaction database snapshots.
+Ledger stores generated backups under `data/backups/` using timestamped names
+such as `transactions_20260902_114500_123456.csv`. Any regular CSV placed directly
+in that folder also appears. The list is ordered by last-modified date, newest
+first, and shows the transaction count in each valid backup. Legacy seven-column
+Ledger CSVs are supported and receive blank notes when restored.
+
+Individual backups can be permanently deleted after an explicit confirmation.
+Deleting a backup does not modify the active transaction file or other backups.
+
+Restoring requires explicit confirmation and completely replaces
+`data/transactions.csv`. Before replacement, Ledger automatically creates a
+safety backup of the current file so the restore itself remains recoverable.
+
 ## Master CSV schema
 
-If the master CSV is deleted while Ledger is running, the dashboard offers to
-create a new, header-only transaction file. Existing files are never replaced
-by this initialization action.
+If the master CSV does not exist, the dashboard offers a direct link to Import
+data. Confirming at least one staged Credit Karma, Amazon, AliExpress, eBay, Venmo, or
+Apple Card transaction creates the file automatically before appending the selected
+rows. Cancelling a preview does not create or modify the file. An existing file is
+never replaced by initialization.
 
 ```text
-date,description,amount,category,accountName,accountType,provider
+date,description,amount,category,accountName,accountType,provider,notes
 ```
+
+Ledger automatically and atomically adds a blank `notes` column when it opens a
+legacy seven-column database. Notes may contain commas or multiple lines.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
@@ -158,6 +199,9 @@ and a spending deficit is red.
   month's spending by category; selecting a category in the legend focuses the
   chart on that category. Its net chart shows monthly surpluses in green and
   monthly deficits in red.
+- Ledger remembers the selected view, year, month, and annual category filter in
+  the current browser. Returning from Import data or Settings restores that
+  reporting context when it is still available in the transaction data.
 
 ### Bill-payment reconciliation
 
@@ -188,10 +232,11 @@ transactions**, where they can still be edited or deleted.
 
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
-app/importers.py    Credit Karma, Amazon, and AliExpress source parsers
+app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Settings placeholder and future preferences entry point
+app/settings.html  Tabbed settings page with backup and restore controls
+app/settings.js    Backup listing, creation, and confirmed restore behavior
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
@@ -200,9 +245,12 @@ ledger_data_importer_extension/
                     Credit Karma-specific collector
   aliexpress_extension/
                     AliExpress signed API client
+  venmo_extension/  Venmo statement collector
+  apple_card_extension/ Apple Card export-form automation
   shared/           Ledger bridge and import coordinator
 tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)
-processed_data_files/
-                    Master CSV database (ignored by Git)
+data/               Master CSV database and backups (ignored by Git)
+  transactions.csv
+  backups/
 ```

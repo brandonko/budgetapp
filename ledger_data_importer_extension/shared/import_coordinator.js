@@ -11,6 +11,12 @@ const CREDIT_KARMA_PENDING_KEY = "ledgerCreditKarmaPendingImport";
 const CREDIT_KARMA_BACKUP_KEY = "ledgerCreditKarmaPendingImportBackup";
 const ALIEXPRESS_PENDING_KEY = "ledgerAliExpressPendingImport";
 const ALIEXPRESS_BACKUP_KEY = "ledgerAliExpressPendingImportBackup";
+const VENMO_PENDING_KEY = "ledgerVenmoPendingImport";
+const VENMO_BACKUP_KEY = "ledgerVenmoPendingImportBackup";
+const EBAY_PENDING_KEY = "ledgerEbayPendingImport";
+const EBAY_BACKUP_KEY = "ledgerEbayPendingImportBackup";
+const APPLE_CARD_PENDING_KEY = "ledgerAppleCardPendingImport";
+const APPLE_CARD_BACKUP_KEY = "ledgerAppleCardPendingImportBackup";
 const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const AMAZON_RECENT_COMPLETION_MS = 5 * 60 * 1000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
@@ -49,7 +55,7 @@ function validateRequest(payload, sender) {
   }
   if (
     senderUrl.origin !== payload.ledgerOrigin ||
-    !["/upload", "/upload.html"].includes(senderUrl.pathname)
+    !["/import", "/import.html", "/upload", "/upload.html"].includes(senderUrl.pathname)
   ) {
     throw new Error("Import requests must come from Ledger's upload page.");
   }
@@ -692,4 +698,566 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   cancelledAliExpressTokens.add(pending.token);
   await reportAliExpressFailure(pending, new Error("The AliExpress tab was closed before import completed."));
   await clearAliExpressPending();
+});
+
+// Venmo import coordination -------------------------------------------------
+
+async function getVenmoPending() {
+  const active = (await chrome.storage.session.get(VENMO_PENDING_KEY))[VENMO_PENDING_KEY];
+  if (active) return active;
+  const backup = (await chrome.storage.local.get(VENMO_BACKUP_KEY))[VENMO_BACKUP_KEY];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(VENMO_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [VENMO_PENDING_KEY]: backup });
+  return backup;
+}
+
+async function setVenmoPending(pending) {
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [VENMO_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [VENMO_BACKUP_KEY]: saved }),
+  ]);
+}
+
+async function clearVenmoPending() {
+  await Promise.all([
+    chrome.storage.session.remove(VENMO_PENDING_KEY),
+    chrome.storage.local.remove(VENMO_BACKUP_KEY),
+  ]);
+}
+
+async function updateVenmoLedger(pending, data, action = "progress") {
+  const response = await fetch(
+    `${pending.ledgerOrigin}/api/venmo-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Ledger returned HTTP ${response.status}.`);
+  return payload;
+}
+
+async function reportVenmoFailure(pending, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    await updateVenmoLedger(pending, { status: "error", progress: 0, message });
+  } catch {
+    // Ledger may have stopped while Venmo was exporting.
+  }
+  await broadcast("ledgerVenmoImportError", { message });
+}
+
+async function startVenmoImport(payload, sender) {
+  validateRequest(payload, sender);
+  if (await getVenmoPending()) throw new Error("Another Venmo import is already running.");
+  const pending = {
+    token: payload.token,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    ledgerOrigin: payload.ledgerOrigin,
+    tabId: null,
+    started: false,
+  };
+  await setVenmoPending(pending);
+  await updateVenmoLedger(pending, {
+    status: "opening_venmo",
+    progress: 2,
+    message: "Opening Venmo. Sign in if Venmo asks you to.",
+  });
+  const tab = await chrome.tabs.create({ url: "https://account.venmo.com/statement", active: true });
+  pending.tabId = tab.id;
+  await setVenmoPending(pending);
+  return { success: true };
+}
+
+async function cancelVenmoImport(payload) {
+  const pending = await getVenmoPending();
+  if (!pending || pending.token !== payload?.token) return { success: true };
+  if (pending.tabId !== null) {
+    try {
+      await chrome.tabs.sendMessage(pending.tabId, { action: "ledgerCancelVenmo" });
+    } catch {
+      // The Venmo content script may not have started yet.
+    }
+  }
+  try {
+    await updateVenmoLedger(pending, {}, "cancel");
+  } finally {
+    await clearVenmoPending();
+  }
+  return { success: true };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.forwarded) return false;
+  let operation;
+  if (message?.action === "ledgerStartVenmoImport") {
+    operation = startVenmoImport(message.data, sender);
+  } else if (message?.action === "ledgerCancelVenmoImport") {
+    operation = cancelVenmoImport(message.data);
+  } else if (message?.action === "ledgerVenmoProgress") {
+    operation = (async () => {
+      const pending = await getVenmoPending();
+      if (!pending || pending.tabId !== sender.tab?.id) return { success: false };
+      const data = {
+        status: "scraping",
+        progress: Math.max(3, Math.min(95, Math.floor(message.data?.progress || 0))),
+        message: message.data?.message || "Downloading Venmo statements…",
+      };
+      await updateVenmoLedger(pending, data);
+      await broadcast("ledgerVenmoImportProgress", data);
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerVenmoComplete") {
+    operation = (async () => {
+      const pending = await getVenmoPending();
+      if (!pending || pending.tabId !== sender.tab?.id) {
+        throw new Error("The active Venmo import session was lost.");
+      }
+      await updateVenmoLedger(pending, {
+        status: "importing", progress: 96,
+        message: "Venmo export complete. Adding new transactions to Ledger…",
+      });
+      const result = await updateVenmoLedger(
+        pending, { content: message.data?.content }, "complete",
+      );
+      await broadcast("ledgerVenmoImportComplete", result);
+      await clearVenmoPending();
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerVenmoError") {
+    operation = (async () => {
+      const pending = await getVenmoPending();
+      if (pending) await reportVenmoFailure(pending, message.data?.message || "Export failed.");
+      await clearVenmoPending();
+      return { success: true };
+    })();
+  } else {
+    return false;
+  }
+  operation.then(sendResponse).catch(async (error) => {
+    const pending = await getVenmoPending();
+    if (pending) await reportVenmoFailure(pending, error);
+    await clearVenmoPending();
+    sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const pending = await getVenmoPending();
+  if (!pending || pending.tabId !== tabId || pending.started) return;
+  let parsedUrl;
+  try { parsedUrl = new URL(tab.url || ""); } catch { return; }
+  if (parsedUrl.hostname !== "account.venmo.com") return;
+  if (!parsedUrl.pathname.startsWith("/statement")) {
+    await updateVenmoLedger(pending, {
+      status: "waiting_for_venmo", progress: 2,
+      message: "Sign in to Venmo, then open Statements to continue automatically.",
+    });
+    return;
+  }
+  pending.started = true;
+  await setVenmoPending(pending);
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      action: "ledgerCaptureVenmo",
+      startDate: pending.startDate,
+      endDate: pending.endDate,
+    });
+    await updateVenmoLedger(pending, {
+      status: "scraping", progress: 3, message: "Downloading Venmo statements…",
+    });
+  } catch (error) {
+    pending.started = false;
+    await setVenmoPending(pending);
+    await reportVenmoFailure(pending, error);
+  }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const pending = await getVenmoPending();
+  if (!pending || pending.tabId !== tabId) return;
+  await reportVenmoFailure(pending, new Error("The Venmo tab was closed before import completed."));
+  await clearVenmoPending();
+});
+
+// Apple Card import coordination -------------------------------------------
+
+function installAppleCardCaptureHook(nonce) {
+  if (window.__ledgerAppleCardCapture) {
+    window.__ledgerAppleCardCapture.nonce = nonce;
+    return;
+  }
+  const bridge = { nonce };
+  window.__ledgerAppleCardCapture = bridge;
+  const emit = async (candidate) => {
+    try {
+      const content = typeof candidate === "string" ? candidate : await candidate.text();
+      if (/transaction date/i.test(content) && /amount/i.test(content)) {
+        window.postMessage(
+          { source: "ledger-apple-card-main", nonce: bridge.nonce, content },
+          window.location.origin,
+        );
+      }
+    } catch {
+      // The candidate was not a readable CSV response.
+    }
+  };
+
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    const contentType = response.headers.get("content-type") || "";
+    const disposition = response.headers.get("content-disposition") || "";
+    if (/csv|comma-separated/i.test(`${contentType} ${disposition}`)) emit(response.clone());
+    return response;
+  };
+
+  const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = (object) => {
+    if (object instanceof Blob && /csv|text/i.test(object.type || "text")) emit(object);
+    return originalCreateObjectURL(object);
+  };
+
+  document.addEventListener("click", (event) => {
+    const anchor = event.target?.closest?.("a[href]");
+    const looksLikeCsv = anchor && (
+      /csv/i.test(anchor.download || "") ||
+      /\.csv(?:$|\?)/i.test(anchor.href) ||
+      anchor.href.startsWith("blob:")
+    );
+    if (!looksLikeCsv) return;
+    event.preventDefault();
+    fetch(anchor.href, { credentials: "include" }).then(emit);
+  }, true);
+}
+
+async function getAppleCardPending() {
+  const active = (await chrome.storage.session.get(APPLE_CARD_PENDING_KEY))[APPLE_CARD_PENDING_KEY];
+  if (active) return active;
+  const backup = (await chrome.storage.local.get(APPLE_CARD_BACKUP_KEY))[APPLE_CARD_BACKUP_KEY];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(APPLE_CARD_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [APPLE_CARD_PENDING_KEY]: backup });
+  return backup;
+}
+
+async function setAppleCardPending(pending) {
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [APPLE_CARD_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [APPLE_CARD_BACKUP_KEY]: saved }),
+  ]);
+}
+
+async function clearAppleCardPending() {
+  await Promise.all([
+    chrome.storage.session.remove(APPLE_CARD_PENDING_KEY),
+    chrome.storage.local.remove(APPLE_CARD_BACKUP_KEY),
+  ]);
+}
+
+async function updateAppleCardLedger(pending, data, action = "progress") {
+  const response = await fetch(
+    `${pending.ledgerOrigin}/api/applecard-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Ledger returned HTTP ${response.status}.`);
+  return payload;
+}
+
+async function reportAppleCardFailure(pending, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    await updateAppleCardLedger(pending, { status: "error", progress: 0, message });
+  } catch {
+    // Ledger may have stopped while Apple Card was exporting.
+  }
+  await broadcast("ledgerAppleCardImportError", { message });
+}
+
+async function startAppleCardImport(payload, sender) {
+  validateRequest(payload, sender);
+  if (await getAppleCardPending()) throw new Error("Another Apple Card import is already running.");
+  const pending = {
+    token: payload.token, startDate: payload.startDate, endDate: payload.endDate,
+    ledgerOrigin: payload.ledgerOrigin, tabId: null, started: false,
+  };
+  await setAppleCardPending(pending);
+  await updateAppleCardLedger(pending, {
+    status: "opening_apple_card", progress: 2,
+    message: "Opening Apple Card. Sign in if Apple asks you to.",
+  });
+  const tab = await chrome.tabs.create({ url: "https://card.apple.com/", active: true });
+  pending.tabId = tab.id;
+  await setAppleCardPending(pending);
+  return { success: true };
+}
+
+async function cancelAppleCardImport(payload) {
+  const pending = await getAppleCardPending();
+  if (!pending || pending.token !== payload?.token) return { success: true };
+  if (pending.tabId !== null) {
+    try { await chrome.tabs.sendMessage(pending.tabId, { action: "ledgerCancelAppleCard" }); } catch {}
+  }
+  try {
+    await updateAppleCardLedger(pending, {}, "cancel");
+  } finally {
+    await clearAppleCardPending();
+  }
+  return { success: true };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  let operation;
+  if (message?.action === "ledgerStartAppleCardImport") {
+    operation = startAppleCardImport(message.data, sender);
+  } else if (message?.action === "ledgerCancelAppleCardImport") {
+    operation = cancelAppleCardImport(message.data);
+  } else if (message?.action === "ledgerAppleCardProgress") {
+    operation = (async () => {
+      const pending = await getAppleCardPending();
+      if (!pending || pending.tabId !== sender.tab?.id) return { success: false };
+      const data = {
+        status: "scraping",
+        progress: Math.max(3, Math.min(95, Math.floor(message.data?.progress || 0))),
+        message: message.data?.message || "Exporting Apple Card transactions...",
+      };
+      await updateAppleCardLedger(pending, data);
+      await broadcast("ledgerAppleCardImportProgress", data);
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerAppleCardComplete") {
+    operation = (async () => {
+      const pending = await getAppleCardPending();
+      if (!pending || pending.tabId !== sender.tab?.id) throw new Error("The Apple Card import session was lost.");
+      const result = await updateAppleCardLedger(pending, { content: message.data?.content }, "complete");
+      await broadcast("ledgerAppleCardImportComplete", result);
+      await clearAppleCardPending();
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerAppleCardError") {
+    operation = (async () => {
+      const pending = await getAppleCardPending();
+      if (pending) await reportAppleCardFailure(pending, message.data?.message || "Export failed.");
+      await clearAppleCardPending();
+      return { success: true };
+    })();
+  } else {
+    return false;
+  }
+  operation.then(sendResponse).catch(async (error) => {
+    const pending = await getAppleCardPending();
+    if (pending) await reportAppleCardFailure(pending, error);
+    await clearAppleCardPending();
+    sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const pending = await getAppleCardPending();
+  if (!pending || pending.tabId !== tabId || pending.started) return;
+  let parsedUrl;
+  try { parsedUrl = new URL(tab.url || ""); } catch { return; }
+  if (parsedUrl.hostname !== "card.apple.com") return;
+  pending.started = true;
+  pending.nonce = crypto.randomUUID();
+  await setAppleCardPending(pending);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId }, world: "MAIN", func: installAppleCardCaptureHook, args: [pending.nonce],
+    });
+    await chrome.tabs.sendMessage(tabId, {
+      action: "ledgerCaptureAppleCard", nonce: pending.nonce,
+      startDate: pending.startDate, endDate: pending.endDate,
+    });
+  } catch (error) {
+    pending.started = false;
+    await setAppleCardPending(pending);
+    await reportAppleCardFailure(pending, error);
+  }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const pending = await getAppleCardPending();
+  if (!pending || pending.tabId !== tabId) return;
+  await reportAppleCardFailure(pending, new Error("The Apple Card tab was closed before import completed."));
+  await clearAppleCardPending();
+});
+
+// eBay import coordination --------------------------------------------------
+
+async function getEbayPending() {
+  const active = (await chrome.storage.session.get(EBAY_PENDING_KEY))[EBAY_PENDING_KEY];
+  if (active) return active;
+  const backup = (await chrome.storage.local.get(EBAY_BACKUP_KEY))[EBAY_BACKUP_KEY];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(EBAY_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [EBAY_PENDING_KEY]: backup });
+  return backup;
+}
+
+async function setEbayPending(pending) {
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [EBAY_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [EBAY_BACKUP_KEY]: saved }),
+  ]);
+}
+
+async function clearEbayPending() {
+  await Promise.all([
+    chrome.storage.session.remove(EBAY_PENDING_KEY),
+    chrome.storage.local.remove(EBAY_BACKUP_KEY),
+  ]);
+}
+
+async function updateEbayLedger(pending, data, action = "progress") {
+  const response = await fetch(
+    `${pending.ledgerOrigin}/api/ebay-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Ledger returned HTTP ${response.status}.`);
+  return payload;
+}
+
+async function reportEbayFailure(pending, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try { await updateEbayLedger(pending, { status: "error", progress: 0, message }); } catch {
+    // Ledger may have stopped while eBay was exporting.
+  }
+  await broadcast("ledgerEbayImportError", { message });
+}
+
+async function startEbayImport(payload, sender) {
+  validateRequest(payload, sender);
+  if (await getEbayPending()) throw new Error("Another eBay import is already running.");
+  const pending = {
+    token: payload.token, startDate: payload.startDate, endDate: payload.endDate,
+    ledgerOrigin: payload.ledgerOrigin, tabId: null, started: false,
+  };
+  await setEbayPending(pending);
+  await updateEbayLedger(pending, {
+    status: "opening_ebay", progress: 2,
+    message: "Opening eBay purchase history. Sign in if eBay asks you to.",
+  });
+  const tab = await chrome.tabs.create({ url: "https://www.ebay.com/mye/myebay/purchase", active: true });
+  pending.tabId = tab.id;
+  await setEbayPending(pending);
+  return { success: true };
+}
+
+async function cancelEbayImport(payload) {
+  const pending = await getEbayPending();
+  if (!pending || pending.token !== payload?.token) return { success: true };
+  if (pending.tabId !== null) {
+    try { await chrome.tabs.sendMessage(pending.tabId, { action: "ledgerCancelEbay" }); } catch {
+      // The eBay content script may not have started yet.
+    }
+  }
+  try { await updateEbayLedger(pending, {}, "cancel"); } finally { await clearEbayPending(); }
+  return { success: true };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.forwarded) return false;
+  let operation;
+  if (message?.action === "ledgerStartEbayImport") {
+    operation = startEbayImport(message.data, sender);
+  } else if (message?.action === "ledgerCancelEbayImport") {
+    operation = cancelEbayImport(message.data);
+  } else if (message?.action === "ledgerEbayProgress") {
+    operation = (async () => {
+      const pending = await getEbayPending();
+      if (!pending || pending.tabId !== sender.tab?.id) return { success: false };
+      const data = {
+        status: "scraping", progress: Math.max(3, Math.min(95, Math.floor(message.data?.progress || 0))),
+        message: message.data?.message || "Reading eBay purchases...",
+      };
+      await updateEbayLedger(pending, data);
+      await broadcast("ledgerEbayImportProgress", data);
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerEbayComplete") {
+    operation = (async () => {
+      const pending = await getEbayPending();
+      if (!pending || pending.tabId !== sender.tab?.id) throw new Error("The eBay import session was lost.");
+      await updateEbayLedger(pending, {
+        status: "importing", progress: 96,
+        message: "eBay export complete. Preparing transactions for review...",
+      });
+      const result = await updateEbayLedger(pending, { content: message.data?.content }, "complete");
+      await broadcast("ledgerEbayImportComplete", result);
+      await clearEbayPending();
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerEbayError") {
+    operation = (async () => {
+      const pending = await getEbayPending();
+      if (pending) await reportEbayFailure(pending, message.data?.message || "Export failed.");
+      await clearEbayPending();
+      return { success: true };
+    })();
+  } else {
+    return false;
+  }
+  operation.then(sendResponse).catch(async (error) => {
+    const pending = await getEbayPending();
+    if (pending) await reportEbayFailure(pending, error);
+    await clearEbayPending();
+    sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const pending = await getEbayPending();
+  if (!pending || pending.tabId !== tabId || pending.started) return;
+  let parsedUrl;
+  try { parsedUrl = new URL(tab.url || ""); } catch { return; }
+  if (!(parsedUrl.hostname === "ebay.com" || parsedUrl.hostname.endsWith(".ebay.com"))) return;
+  if (!parsedUrl.pathname.includes("/mye/myebay/purchase")) {
+    await updateEbayLedger(pending, {
+      status: "waiting_for_ebay", progress: 2,
+      message: "Sign in to eBay, then open Purchase History to continue automatically.",
+    });
+    return;
+  }
+  pending.started = true;
+  await setEbayPending(pending);
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      action: "ledgerCaptureEbay", startDate: pending.startDate, endDate: pending.endDate,
+    });
+    await updateEbayLedger(pending, {
+      status: "scraping", progress: 3, message: "Reading eBay purchase history...",
+    });
+  } catch (error) {
+    pending.started = false;
+    await setEbayPending(pending);
+    await reportEbayFailure(pending, error);
+  }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const pending = await getEbayPending();
+  if (!pending || pending.tabId !== tabId) return;
+  await reportEbayFailure(pending, new Error("The eBay tab was closed before import completed."));
+  await clearEbayPending();
 });

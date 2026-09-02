@@ -1,6 +1,6 @@
 # Private financial data and generated outputs
 raw_data_files/
-processed_data_files/
+data/
 
 # Python
 __pycache__/

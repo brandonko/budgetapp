@@ -55,7 +55,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/" aria-current="page">Dashboard</a>
-          <a href="/upload">Upload data</a>
+          <a href="/import">Import data</a>
           <a href="/settings">Settings</a>
         </nav>
       </details>
@@ -158,9 +158,7 @@
         <h2 id="error-title">Something went wrong.</h2>
         <p id="error-message"></p>
         <div class="error-actions">
-          <button class="primary-button" id="create-file-button" type="button" hidden>
-            Create transaction file
-          </button>
+          <a class="primary-button" id="import-data-button" href="/import" hidden>Import data</a>
           <button class="secondary-button" id="retry-button" type="button">Try again</button>
         </div>
       </section>
@@ -232,6 +230,11 @@
             <label class="form-field">
               <span>Provider</span>
               <input id="field-provider" name="provider" type="text" list="provider-options" autocomplete="off" required />
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Notes</span>
+              <textarea id="field-notes" name="notes" rows="4"
+                placeholder="Add any details you want to remember"></textarea>
             </label>
           </div>
           <p class="form-error" id="form-error" role="alert" hidden></p>

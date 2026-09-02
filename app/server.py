@@ -16,19 +16,32 @@ import tempfile
 import threading
 import time
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
-from importers import ImportDataError, parse_aliexpress, parse_amazon, parse_credit_karma
+from importers import (
+    ALIEXPRESS_DEFAULT_ACCOUNT,
+    AMAZON_DEFAULT_ACCOUNT,
+    APPLE_CARD_DEFAULT_ACCOUNT,
+    EBAY_DEFAULT_ACCOUNT,
+    ImportDataError,
+    VENMO_DEFAULT_ACCOUNT,
+    parse_aliexpress,
+    parse_amazon,
+    parse_apple_card,
+    parse_credit_karma,
+    parse_ebay,
+    parse_venmo,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
-PROCESSED_DATA_DIR = APP_DIR.parent / "processed_data_files"
+DATA_DIR = APP_DIR.parent / "data"
 COLUMNS = (
     "date",
     "description",
@@ -37,38 +50,76 @@ COLUMNS = (
     "accountName",
     "accountType",
     "provider",
+    "notes",
 )
-DEFAULT_CSV = PROCESSED_DATA_DIR / "transactions.csv"
-TEXT_COLUMNS = tuple(column for column in COLUMNS if column not in {"date", "amount"})
+DEFAULT_CSV = DATA_DIR / "transactions.csv"
+LEGACY_COLUMNS = COLUMNS[:-1]
+REQUIRED_TEXT_COLUMNS = tuple(
+    column for column in COLUMNS if column not in {"date", "amount", "notes"}
+)
 CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_IMPORT_REQUEST_BYTES = 50_000_000
 BILL_PAYMENT_WINDOW_DAYS = 5
 TRANSACTION_PATH = re.compile(r"^/api/transactions/(\d+)$")
+BACKUP_RESTORE_PATH = re.compile(
+    r"^/api/backups/([^/]+)/restore$"
+)
+BACKUP_DELETE_PATH = re.compile(r"^/api/backups/([^/]+)$")
+GENERATED_BACKUP_FILENAME = re.compile(r"^transactions_\d{8}_\d{6}_\d{6}\.csv$")
 AMAZON_IMPORT_SESSION_PATH = re.compile(
     r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})$"
 )
 AMAZON_IMPORT_ACTION_PATH = re.compile(
-    r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+    r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
 CREDIT_KARMA_IMPORT_SESSION_PATH = re.compile(
     r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})$"
 )
 CREDIT_KARMA_IMPORT_ACTION_PATH = re.compile(
-    r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+    r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
 ALIEXPRESS_IMPORT_SESSION_PATH = re.compile(
     r"^/api/aliexpress-import-sessions/([A-Za-z0-9_-]{32,})$"
 )
 ALIEXPRESS_IMPORT_ACTION_PATH = re.compile(
-    r"^/api/aliexpress-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+    r"^/api/aliexpress-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
+)
+VENMO_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/venmo-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+VENMO_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/venmo-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
+)
+APPLE_CARD_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/applecard-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+APPLE_CARD_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/applecard-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
+)
+EBAY_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/ebay-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+EBAY_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/ebay-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
 AMAZON_IMPORT_SESSION_TTL_SECONDS = 60 * 60
 TERMINAL_IMPORT_STATUSES = {"complete", "error", "cancelled"}
+MISSING_CSV_REVISION = "missing"
 IMPORT_SOURCE_LABELS = {
     "amazon": "Amazon",
     "creditkarma": "Credit Karma",
     "aliexpress": "AliExpress",
+    "venmo": "Venmo",
+    "applecard": "Apple Card",
+    "ebay": "eBay",
+}
+IMPORT_ACCOUNT_DEFAULTS = {
+    "amazon": AMAZON_DEFAULT_ACCOUNT,
+    "aliexpress": ALIEXPRESS_DEFAULT_ACCOUNT,
+    "venmo": VENMO_DEFAULT_ACCOUNT,
+    "applecard": APPLE_CARD_DEFAULT_ACCOUNT,
+    "ebay": EBAY_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
     "/": APP_DIR / "index.html",
@@ -76,11 +127,12 @@ STATIC_FILES = {
     "/styles.css": APP_DIR / "styles.css",
     "/app.js": APP_DIR / "app.js",
     "/navigation.js": APP_DIR / "navigation.js",
-    "/upload": APP_DIR / "upload.html",
-    "/upload.html": APP_DIR / "upload.html",
+    "/import": APP_DIR / "upload.html",
+    "/import.html": APP_DIR / "upload.html",
     "/upload.js": APP_DIR / "upload.js",
     "/settings": APP_DIR / "settings.html",
     "/settings.html": APP_DIR / "settings.html",
+    "/settings.js": APP_DIR / "settings.js",
 }
 
 
@@ -123,11 +175,15 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
         "date": normalized_date,
         "amount": float(amount),
     }
-    for column in TEXT_COLUMNS:
+    for column in REQUIRED_TEXT_COLUMNS:
         value = raw.get(column)
         if not isinstance(value, str) or not value.strip():
             raise CsvDataError(f"{location}.{column} cannot be blank")
         transaction[column] = value.strip()
+    notes = raw.get("notes", "")
+    if not isinstance(notes, str):
+        raise CsvDataError(f"{location}.notes must be text")
+    transaction["notes"] = notes.strip()
     return transaction
 
 
@@ -204,6 +260,138 @@ def initialize_csv_if_missing(csv_path: Path) -> None:
         pass
 
 
+def backup_directory(csv_path: Path) -> Path:
+    return csv_path.parent / "backups"
+
+
+def valid_backup_filename(filename: str) -> bool:
+    return (
+        bool(filename)
+        and len(filename) <= 255
+        and Path(filename).name == filename
+        and filename not in {".", ".."}
+        and filename.casefold().endswith(".csv")
+    )
+
+
+def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
+    """Validate a current or legacy backup without modifying the backup file."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError as exc:
+        raise CsvFileMissingError(f"backup does not exist: {path}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CsvDataError(f"could not read {path}: {exc}") from exc
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    fieldnames = tuple(reader.fieldnames or ())
+    if set(fieldnames) == set(COLUMNS):
+        return [
+            normalize_transaction(row, f"line {line_number}")
+            for line_number, row in enumerate(reader, start=2)
+        ]
+    if set(fieldnames) == set(LEGACY_COLUMNS):
+        return [
+            normalize_transaction(dict(row, notes=""), f"line {line_number}")
+            for line_number, row in enumerate(reader, start=2)
+        ]
+    raise CsvDataError("backup CSV must use Ledger's current or legacy transaction columns")
+
+
+def backup_metadata(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    metadata: dict[str, Any] = {
+        "name": path.name,
+        "modifiedAt": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "sizeBytes": stat.st_size,
+        "valid": True,
+    }
+    try:
+        transactions = read_backup_transactions(path)
+        metadata["transactionCount"] = len(transactions)
+    except CsvDataError as exc:
+        metadata.update(valid=False, transactionCount=None, error=str(exc))
+    return metadata
+
+
+def create_backup_copy(csv_path: Path, *, require_valid: bool = True) -> dict[str, Any]:
+    """Atomically snapshot the master CSV into its sibling backups directory."""
+    if require_valid:
+        _transactions, revision = read_transaction_state(csv_path)
+        raw_bytes = csv_path.read_bytes()
+        if hashlib.sha256(raw_bytes).hexdigest() != revision:
+            raise RevisionConflict("The transaction file changed while the backup was being created.")
+    else:
+        try:
+            raw_bytes = csv_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise CsvFileMissingError(f"transaction file does not exist: {csv_path}") from exc
+
+    destination_directory = backup_directory(csv_path)
+    destination_directory.mkdir(parents=True, exist_ok=True)
+    while True:
+        timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
+        destination = destination_directory / f"transactions_{timestamp}.csv"
+        if not destination.exists():
+            break
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination_directory,
+            prefix=".backup.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            handle.write(raw_bytes)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    except BaseException:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+        raise
+    return backup_metadata(destination)
+
+
+def list_backups(csv_path: Path) -> list[dict[str, Any]]:
+    directory = backup_directory(csv_path)
+    if not directory.exists():
+        return []
+    backups = [
+        backup_metadata(path)
+        for path in directory.iterdir()
+        if path.is_file() and not path.is_symlink() and valid_backup_filename(path.name)
+    ]
+    backups.sort(key=lambda backup: (backup["modifiedAt"], backup["name"]), reverse=True)
+    return backups
+
+
+def migrate_transaction_schema(csv_path: Path) -> bool:
+    """Atomically add optional columns to a legacy master CSV."""
+    try:
+        text = csv_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    fieldnames = tuple(reader.fieldnames or ())
+    if "notes" in fieldnames:
+        return False
+    if set(fieldnames) != set(LEGACY_COLUMNS):
+        return False
+    transactions = [
+        normalize_transaction(dict(row, notes=""), f"line {line_number}")
+        for line_number, row in enumerate(reader, start=2)
+    ]
+    write_transactions_atomic(csv_path, transactions)
+    return True
+
+
 def transaction_identity(transaction: Mapping[str, Any]) -> tuple[str, Decimal]:
     """Return the user-specified import identity, normalized to exact cents."""
     return (
@@ -234,6 +422,39 @@ def merge_imported_transactions(
                 additions.append(normalized)
                 added_by_source[source] += 1
     return additions, added_by_source, skipped_by_source
+
+
+def preview_imported_transactions(
+    existing: list[dict[str, Any]], parsed_transactions: list[dict[str, Any]], source: str
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Classify every parsed occurrence without changing the master CSV."""
+    existing_counts = Counter(transaction_identity(row) for row in existing)
+    upload_occurrences: Counter[tuple[str, Decimal]] = Counter()
+    preview: list[dict[str, Any]] = []
+    duplicate_count = 0
+
+    for staged_id, parsed_transaction in enumerate(parsed_transactions):
+        normalized = normalize_transaction(parsed_transaction, f"{source} transaction")
+        key = transaction_identity(normalized)
+        upload_occurrences[key] += 1
+        is_duplicate = upload_occurrences[key] <= existing_counts[key]
+        duplicate_count += int(is_duplicate)
+        preview.append(
+            dict(
+                normalized,
+                _stagedId=staged_id,
+                _isDuplicate=is_duplicate,
+            )
+        )
+    preview.sort(
+        key=lambda transaction: (
+            transaction["date"],
+            transaction["description"].casefold(),
+            transaction["_stagedId"],
+        ),
+        reverse=True,
+    )
+    return preview, len(preview) - duplicate_count, duplicate_count
 
 
 def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
@@ -300,6 +521,7 @@ def imported_transaction_state(
             str(transaction["accountName"]),
             str(transaction["accountType"]),
             str(transaction["provider"]),
+            str(transaction["notes"]),
         )
 
     remaining = Counter(content_identity(transaction) for transaction in additions)
@@ -358,6 +580,13 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path
+        if path in {"/upload", "/upload.html"}:
+            self.send_response(HTTPStatus.PERMANENT_REDIRECT)
+            self.send_header("Location", "/import")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/api/transactions":
             try:
                 with self.data_lock:
@@ -368,11 +597,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     HTTPStatus.NOT_FOUND,
                     {
                         "code": "transaction_file_missing",
-                        "error": "Create a transaction file to start using Ledger.",
+                        "error": "Import data to start using Ledger.",
                     },
                 )
             except CsvDataError as exc:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+        if path == "/api/backups":
+            self.get_backups()
             return
         session_match = AMAZON_IMPORT_SESSION_PATH.fullmatch(path)
         if session_match is not None:
@@ -390,6 +622,20 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 aliexpress_session_match.group(1), source="aliexpress"
             )
             return
+        venmo_session_match = VENMO_IMPORT_SESSION_PATH.fullmatch(path)
+        if venmo_session_match is not None:
+            self.get_amazon_import_session(venmo_session_match.group(1), source="venmo")
+            return
+        apple_card_session_match = APPLE_CARD_IMPORT_SESSION_PATH.fullmatch(path)
+        if apple_card_session_match is not None:
+            self.get_amazon_import_session(
+                apple_card_session_match.group(1), source="applecard"
+            )
+            return
+        ebay_session_match = EBAY_IMPORT_SESSION_PATH.fullmatch(path)
+        if ebay_session_match is not None:
+            self.get_amazon_import_session(ebay_session_match.group(1), source="ebay")
+            return
         if path in STATIC_FILES:
             self.send_static_file(STATIC_FILES[path])
             return
@@ -399,6 +645,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/transactions/initialize":
             self.initialize_transaction_file()
+        elif path == "/api/backups":
+            self.create_backup()
         elif path == "/api/transactions":
             self.mutate_transactions("create")
         elif path == "/api/import":
@@ -409,7 +657,17 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.create_amazon_import_session(source="creditkarma")
         elif path == "/api/aliexpress-import-sessions":
             self.create_amazon_import_session(source="aliexpress")
+        elif path == "/api/venmo-import-sessions":
+            self.create_amazon_import_session(source="venmo")
+        elif path == "/api/applecard-import-sessions":
+            self.create_amazon_import_session(source="applecard")
+        elif path == "/api/ebay-import-sessions":
+            self.create_amazon_import_session(source="ebay")
         else:
+            backup_restore_match = BACKUP_RESTORE_PATH.fullmatch(path)
+            if backup_restore_match is not None:
+                self.restore_backup(unquote(backup_restore_match.group(1)))
+                return
             action_match = AMAZON_IMPORT_ACTION_PATH.fullmatch(path)
             if action_match is not None:
                 self.update_amazon_import_session(
@@ -430,6 +688,26 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     aliexpress_action_match.group(1),
                     aliexpress_action_match.group(2),
                     source="aliexpress",
+                )
+                return
+            venmo_action_match = VENMO_IMPORT_ACTION_PATH.fullmatch(path)
+            if venmo_action_match is not None:
+                self.update_amazon_import_session(
+                    venmo_action_match.group(1), venmo_action_match.group(2), source="venmo"
+                )
+                return
+            apple_card_action_match = APPLE_CARD_IMPORT_ACTION_PATH.fullmatch(path)
+            if apple_card_action_match is not None:
+                self.update_amazon_import_session(
+                    apple_card_action_match.group(1),
+                    apple_card_action_match.group(2),
+                    source="applecard",
+                )
+                return
+            ebay_action_match = EBAY_IMPORT_ACTION_PATH.fullmatch(path)
+            if ebay_action_match is not None:
+                self.update_amazon_import_session(
+                    ebay_action_match.group(1), ebay_action_match.group(2), source="ebay"
                 )
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -458,11 +736,16 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         self.mutate_transactions("update", int(match.group(1)))
 
     def do_DELETE(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        match = TRANSACTION_PATH.fullmatch(urlparse(self.path).path)
-        if match is None:
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+        path = urlparse(self.path).path
+        transaction_match = TRANSACTION_PATH.fullmatch(path)
+        if transaction_match is not None:
+            self.mutate_transactions("delete", int(transaction_match.group(1)))
             return
-        self.mutate_transactions("delete", int(match.group(1)))
+        backup_delete_match = BACKUP_DELETE_PATH.fullmatch(path)
+        if backup_delete_match is not None:
+            self.delete_backup(unquote(backup_delete_match.group(1)))
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def read_json_body(self, maximum_bytes: int = MAX_REQUEST_BYTES) -> Mapping[str, Any]:
         raw_length = self.headers.get("Content-Length")
@@ -497,6 +780,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if session.get("source") == "creditkarma":
             response["ignoreAmazon"] = session.get("ignoreAmazon", True)
             response["ignoreAliExpress"] = session.get("ignoreAliExpress", True)
+            response["ignoreVenmo"] = session.get("ignoreVenmo", True)
+            response["ignoreEbay"] = session.get("ignoreEbay", True)
+        if session.get("source") in IMPORT_ACCOUNT_DEFAULTS:
+            response["accountName"] = session["accountName"]
+            response["accountType"] = session["accountType"]
+            response["provider"] = session["provider"]
         return response
 
     def create_amazon_import_session(self, source: str = "amazon") -> None:
@@ -516,20 +805,51 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
             ignore_amazon = payload.get("ignoreAmazon", True)
             ignore_aliexpress = payload.get("ignoreAliExpress", True)
+            ignore_venmo = payload.get("ignoreVenmo", True)
+            ignore_ebay = payload.get("ignoreEbay", True)
             if source == "creditkarma" and (
-                not isinstance(ignore_amazon, bool) or not isinstance(ignore_aliexpress, bool)
+                not isinstance(ignore_amazon, bool)
+                or not isinstance(ignore_aliexpress, bool)
+                or not isinstance(ignore_venmo, bool)
+                or not isinstance(ignore_ebay, bool)
             ):
                 raise CsvDataError("Credit Karma ignore options must be true or false")
+
+            account_identity: tuple[str, str, str] | None = None
+            if source in IMPORT_ACCOUNT_DEFAULTS:
+                defaults = IMPORT_ACCOUNT_DEFAULTS[source]
+                values = tuple(
+                    payload.get(field, default)
+                    for field, default in zip(
+                        ("accountName", "accountType", "provider"), defaults
+                    )
+                )
+                if any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in values
+                ):
+                    raise CsvDataError("Import account fields must be non-empty text")
+                if any(len(value.strip()) > 200 for value in values):
+                    raise CsvDataError("Import account fields cannot exceed 200 characters")
+                account_identity = tuple(value.strip() for value in values)
 
             self.prune_amazon_import_sessions()
             token = secrets.token_urlsafe(32)
             now = time.time()
             source_label = IMPORT_SOURCE_LABELS.get(source, source)
+            waiting_status = (
+                "waiting_for_file" if source == "applecard" else "waiting_for_extension"
+            )
+            waiting_message = (
+                "Waiting for the Apple Card CSV."
+                if source == "applecard"
+                else f"Waiting for the {source_label} importer extension."
+            )
             session: dict[str, Any] = {
                 "source": source,
-                "status": "waiting_for_extension",
+                "status": waiting_status,
                 "progress": 0,
-                "message": f"Waiting for the {source_label} importer extension.",
+                "message": waiting_message,
                 "startDate": start_date.isoformat(),
                 "endDate": end_date.isoformat(),
                 "createdAt": now,
@@ -539,6 +859,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 session.update(
                     ignoreAmazon=ignore_amazon,
                     ignoreAliExpress=ignore_aliexpress,
+                    ignoreVenmo=ignore_venmo,
+                    ignoreEbay=ignore_ebay,
+                )
+            elif account_identity is not None:
+                session.update(
+                    accountName=account_identity[0],
+                    accountType=account_identity[1],
+                    provider=account_identity[2],
                 )
             with self.amazon_import_lock:
                 self.amazon_import_sessions[token] = session
@@ -547,6 +875,107 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.CREATED, response)
         except CsvDataError as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def get_backups(self) -> None:
+        try:
+            with self.data_lock:
+                backups = list_backups(self.csv_path)
+            self.send_json(HTTPStatus.OK, {"backups": backups})
+        except (CsvDataError, OSError) as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not list backups: {exc}"},
+            )
+
+    def create_backup(self) -> None:
+        try:
+            # Require a JSON object so browser requests cannot trigger a backup
+            # through a cross-origin form submission.
+            self.read_json_body()
+            with self.data_lock:
+                backup = create_backup_copy(self.csv_path)
+            self.send_json(HTTPStatus.CREATED, {"backup": backup})
+        except CsvFileMissingError:
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {"code": "transaction_file_missing", "error": "There is no transaction file to back up."},
+            )
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except (CsvDataError, OSError) as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not create backup: {exc}"},
+            )
+
+    def restore_backup(self, filename: str) -> None:
+        try:
+            payload = self.read_json_body()
+            if payload.get("confirm") is not True:
+                raise CsvDataError("restore confirmation is required")
+            if not valid_backup_filename(filename):
+                raise CsvDataError("invalid backup name")
+            selected_path = backup_directory(self.csv_path) / filename
+            if selected_path.parent.resolve() != backup_directory(self.csv_path).resolve():
+                raise CsvDataError("invalid backup path")
+            if selected_path.is_symlink():
+                raise CsvDataError("backup links cannot be restored")
+
+            with self.data_lock:
+                restored_transactions = read_backup_transactions(selected_path)
+                safety_backup = (
+                    create_backup_copy(self.csv_path, require_valid=False)
+                    if self.csv_path.exists()
+                    else None
+                )
+                self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+                write_transactions_atomic(self.csv_path, restored_transactions)
+                transactions, revision = read_transaction_state(self.csv_path)
+            response = {
+                "revision": revision,
+                "transactionCount": len(transactions),
+                "restoredBackup": backup_metadata(selected_path),
+                "safetyBackup": safety_backup,
+            }
+            self.send_json(HTTPStatus.OK, response)
+        except CsvFileMissingError:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Backup not found."})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not restore backup: {exc}"},
+            )
+
+    def delete_backup(self, filename: str) -> None:
+        try:
+            payload = self.read_json_body()
+            if payload.get("confirm") is not True:
+                raise CsvDataError("delete confirmation is required")
+            if not valid_backup_filename(filename):
+                raise CsvDataError("invalid backup name")
+            directory = backup_directory(self.csv_path)
+            selected_path = directory / filename
+            if selected_path.parent.resolve() != directory.resolve():
+                raise CsvDataError("invalid backup path")
+            if selected_path.is_symlink():
+                raise CsvDataError("backup links cannot be deleted")
+
+            with self.data_lock:
+                if not selected_path.is_file():
+                    raise CsvFileMissingError(f"backup does not exist: {selected_path}")
+                selected_path.unlink()
+            self.send_json(HTTPStatus.OK, {"deletedBackup": {"name": filename}})
+        except CsvFileMissingError:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Backup not found."})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not delete backup: {exc}"},
+            )
 
     def get_amazon_import_session(self, token: str, source: str = "amazon") -> None:
         self.prune_amazon_import_sessions()
@@ -580,6 +1009,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             if action == "complete":
                 self.complete_amazon_import_session(token, payload, source=source)
                 return
+            if action == "commit":
+                self.commit_amazon_import_session(token, payload, source=source)
+                return
 
             now = time.time()
             with self.amazon_import_lock:
@@ -588,6 +1020,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     raise CsvDataError("Import session expired.")
                 if action == "cancel":
                     source_label = IMPORT_SOURCE_LABELS.get(source, source)
+                    session.pop("stagedIds", None)
+                    session.pop("baselineRevision", None)
                     session.update(
                         status="cancelled",
                         progress=session["progress"],
@@ -607,6 +1041,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "opening_credit_karma",
                         "waiting_for_aliexpress",
                         "opening_aliexpress",
+                        "waiting_for_venmo",
+                        "opening_venmo",
+                        "waiting_for_apple_card",
+                        "opening_apple_card",
+                        "waiting_for_ebay",
+                        "opening_ebay",
                         "scraping",
                         "importing",
                         "error",
@@ -637,46 +1077,92 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             raise CsvDataError(f"{source_label} export content is required")
 
         try:
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token, {})
+                account_identity = (
+                    session.get("accountName", ""),
+                    session.get("accountType", ""),
+                    session.get("provider", ""),
+                )
             if source == "creditkarma":
                 with self.amazon_import_lock:
                     session = self.amazon_import_sessions.get(token, {})
                     ignore_amazon = session.get("ignoreAmazon", True)
                     ignore_aliexpress = session.get("ignoreAliExpress", True)
+                    ignore_venmo = session.get("ignoreVenmo", True)
+                    ignore_ebay = session.get("ignoreEbay", True)
                 credit_karma = parse_credit_karma(
                     content,
                     ignore_amazon=ignore_amazon,
                     ignore_aliexpress=ignore_aliexpress,
+                    ignore_venmo=ignore_venmo,
+                    ignore_ebay=ignore_ebay,
                 )
                 parsed_transactions = credit_karma.transactions
             elif source == "aliexpress":
                 credit_karma = None
-                parsed_transactions = parse_aliexpress(content)
+                parsed_transactions = parse_aliexpress(content, account_identity)
+            elif source == "venmo":
+                credit_karma = None
+                parsed_transactions = parse_venmo(content, account_identity)
+                with self.amazon_import_lock:
+                    session = self.amazon_import_sessions.get(token, {})
+                    start_date = session.get("startDate", "")
+                    end_date = session.get("endDate", "")
+                parsed_transactions = [
+                    transaction
+                    for transaction in parsed_transactions
+                    if start_date <= transaction["date"] <= end_date
+                ]
+            elif source == "applecard":
+                credit_karma = None
+                parsed_transactions = parse_apple_card(content, account_identity)
+                with self.amazon_import_lock:
+                    session = self.amazon_import_sessions.get(token, {})
+                    start_date = session.get("startDate", "")
+                    end_date = session.get("endDate", "")
+                parsed_transactions = [
+                    transaction
+                    for transaction in parsed_transactions
+                    if start_date <= transaction["date"] <= end_date
+                ]
+            elif source == "ebay":
+                credit_karma = None
+                parsed_transactions = parse_ebay(content, account_identity)
+                with self.amazon_import_lock:
+                    session = self.amazon_import_sessions.get(token, {})
+                    start_date = session.get("startDate", "")
+                    end_date = session.get("endDate", "")
+                parsed_transactions = [
+                    transaction
+                    for transaction in parsed_transactions
+                    if start_date <= transaction["date"] <= end_date
+                ]
             else:
                 credit_karma = None
-                parsed_transactions = parse_amazon(content)
+                parsed_transactions = parse_amazon(content, amazon_account=account_identity)
             with self.data_lock:
-                existing, _revision = read_transaction_state(self.csv_path)
-                additions, added_by_source, skipped_by_source = merge_imported_transactions(
-                    existing, {source: parsed_transactions}
+                if self.csv_path.exists():
+                    existing, baseline_revision = read_transaction_state(self.csv_path)
+                else:
+                    existing, baseline_revision = [], MISSING_CSV_REVISION
+                preview, new_count, duplicate_count = preview_imported_transactions(
+                    existing, parsed_transactions, source
                 )
-                if additions:
-                    existing.extend(additions)
-                    existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
-                    write_transactions_atomic(self.csv_path, existing)
-                saved_transactions, saved_revision = read_transaction_state(self.csv_path)
 
             result = {
-                "added": len(additions),
-                "duplicatesSkipped": skipped_by_source[source],
-                "transactions": imported_transaction_state(saved_transactions, additions),
+                "parsed": len(preview),
+                "new": new_count,
+                "duplicates": duplicate_count,
+                "transactions": preview,
                 "sources": {
                     source: {
-                        "parsed": len(parsed_transactions),
-                        "added": added_by_source[source],
-                        "duplicatesSkipped": skipped_by_source[source],
+                        "parsed": len(preview),
+                        "new": new_count,
+                        "duplicates": duplicate_count,
                     }
                 },
-                "revision": saved_revision,
+                "revision": baseline_revision,
             }
             if credit_karma is not None:
                 result["sources"][source]["amazonTransactionsIgnored"] = (
@@ -685,14 +1171,22 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 result["sources"][source]["aliExpressTransactionsIgnored"] = (
                     credit_karma.ignored_aliexpress_count
                 )
+                result["sources"][source]["venmoTransactionsIgnored"] = (
+                    credit_karma.ignored_venmo_count
+                )
+                result["sources"][source]["ebayTransactionsIgnored"] = (
+                    credit_karma.ignored_ebay_count
+                )
             source_label = IMPORT_SOURCE_LABELS.get(source, source)
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions[token]
                 session.update(
-                    status="complete",
-                    progress=100,
-                    message=f"Imported {len(additions)} new {source_label} transactions.",
+                    status="review",
+                    progress=98,
+                    message=f"Review {len(preview)} parsed {source_label} transactions.",
                     updatedAt=time.time(),
+                    baselineRevision=baseline_revision,
+                    stagedIds={transaction["_stagedId"] for transaction in preview},
                     **{"import": result},
                 )
                 response = self.public_amazon_import_session(session)
@@ -711,6 +1205,91 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             else:
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def commit_amazon_import_session(
+        self, token: str, payload: Mapping[str, Any], source: str = "amazon"
+    ) -> None:
+        try:
+            selected = payload.get("transactions")
+            if not isinstance(selected, list):
+                raise CsvDataError("transactions must be a list")
+
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token)
+                if session is None or session.get("source", "amazon") != source:
+                    raise CsvDataError("Import session not found or expired.")
+                if session.get("status") != "review":
+                    raise CsvDataError("Import session is not awaiting review.")
+                valid_staged_ids = set(session.get("stagedIds", set()))
+                baseline_revision = session.get("baselineRevision")
+
+            staged_ids: set[int] = set()
+            additions: list[dict[str, Any]] = []
+            for index, raw_transaction in enumerate(selected):
+                if not isinstance(raw_transaction, Mapping):
+                    raise CsvDataError(f"transactions[{index}] must be an object")
+                staged_id = raw_transaction.get("_stagedId")
+                if (
+                    isinstance(staged_id, bool)
+                    or not isinstance(staged_id, int)
+                    or staged_id not in valid_staged_ids
+                    or staged_id in staged_ids
+                ):
+                    raise CsvDataError(f"transactions[{index}] has an invalid staged ID")
+                staged_ids.add(staged_id)
+                additions.append(normalize_transaction(raw_transaction, f"transactions[{index}]"))
+
+            with self.data_lock:
+                if self.csv_path.exists():
+                    existing, revision = read_transaction_state(self.csv_path)
+                    if revision != baseline_revision:
+                        raise RevisionConflict(
+                            "The transaction file changed during review. Start the import again."
+                        )
+                else:
+                    if baseline_revision != MISSING_CSV_REVISION:
+                        raise RevisionConflict(
+                            "The transaction file changed during review. Start the import again."
+                        )
+                    existing = []
+
+                if additions:
+                    existing.extend(additions)
+                    existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
+                    self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+                    write_transactions_atomic(self.csv_path, existing)
+
+                if self.csv_path.exists():
+                    saved_transactions, saved_revision = read_transaction_state(self.csv_path)
+                    committed = imported_transaction_state(saved_transactions, additions)
+                else:
+                    saved_revision = MISSING_CSV_REVISION
+                    committed = []
+
+            result = {
+                "committed": len(additions),
+                "transactions": committed,
+                "revision": saved_revision,
+            }
+            source_label = IMPORT_SOURCE_LABELS.get(source, source)
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions[token]
+                session.pop("stagedIds", None)
+                session.pop("baselineRevision", None)
+                session.update(
+                    status="complete",
+                    progress=100,
+                    message=f"Imported {len(additions)} {source_label} transactions.",
+                    updatedAt=time.time(),
+                    **{"import": result},
+                )
+                response = self.public_amazon_import_session(session)
+            self.send_json(HTTPStatus.OK, response)
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except (CsvDataError, OSError) as exc:
+            status = HTTPStatus.INTERNAL_SERVER_ERROR if isinstance(exc, OSError) else HTTPStatus.BAD_REQUEST
+            self.send_json(status, {"error": str(exc)})
 
     def import_transactions(self) -> None:
         try:
@@ -859,7 +1438,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, message_format: str, *args: object) -> None:
         message = message_format % args
         message = re.sub(
-            r"(/api/(?:amazon|creditkarma)-import-sessions/)[A-Za-z0-9_-]{32,}",
+            r"(/api/(?:amazon|creditkarma|aliexpress|venmo|applecard|ebay)-import-sessions/)[A-Za-z0-9_-]{32,}",
             r"\1[redacted]",
             message,
         )
@@ -882,8 +1461,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        initialize_csv_if_missing(args.csv)
-        read_transaction_state(args.csv)
+        if args.csv.exists():
+            migrate_transaction_schema(args.csv)
+            read_transaction_state(args.csv)
     except CsvDataError as exc:
         print(f"error: {exc}")
         return 1

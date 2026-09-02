@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Import Credit Karma, Amazon, and AliExpress data into Ledger." />
-    <title>Upload data — Ledger</title>
+    <meta name="description" content="Import Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card data into Ledger." />
+    <title>Import data — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/navigation.js" defer></script>
     <script src="/upload.js" defer></script>
@@ -23,7 +23,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
-          <a href="/upload" aria-current="page">Upload data</a>
+          <a href="/import" aria-current="page">Import data</a>
           <a href="/settings">Settings</a>
         </nav>
       </details>
@@ -46,20 +46,12 @@
         </p>
       </div>
 
-      <section class="import-result" id="import-result" aria-live="polite" hidden>
-        <p class="eyebrow">Import complete</p>
-        <h2 id="result-title"></h2>
-        <p id="result-summary"></p>
-        <div class="result-sources" id="result-sources"></div>
-        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
-      </section>
-
       <aside class="companion-extension" aria-label="Companion extension status">
         <div class="extension-state">
           <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
           <div>
             <strong id="extension-status">Checking for the companion extension…</strong>
-            <span>Required for Credit Karma, Amazon, and AliExpress imports</span>
+            <span>Required for Credit Karma, Amazon, AliExpress, eBay, Venmo, and automatic Apple Card imports</span>
           </div>
         </div>
         <details class="extension-help" id="extension-help">
@@ -72,13 +64,41 @@
         </details>
       </aside>
 
+      <div class="importer-tabs" role="tablist" aria-label="Data importers">
+        <button id="creditkarma-import-tab" role="tab" type="button"
+          aria-selected="true" aria-controls="creditkarma-import-panel" tabindex="0">
+          Credit Karma
+        </button>
+        <button id="amazon-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="amazon-import-panel" tabindex="-1">
+          Amazon
+        </button>
+        <button id="aliexpress-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="aliexpress-import-panel" tabindex="-1">
+          AliExpress
+        </button>
+        <button id="venmo-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="venmo-import-panel" tabindex="-1">
+          Venmo
+        </button>
+        <button id="ebay-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="ebay-import-panel" tabindex="-1">
+          eBay
+        </button>
+        <button id="applecard-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="applecard-import-panel" tabindex="-1">
+          Apple Card
+        </button>
+      </div>
+
       <div class="direct-import-stack">
-        <section class="amazon-direct" aria-labelledby="creditkarma-direct-title">
+        <section class="amazon-direct" id="creditkarma-import-panel" role="tabpanel"
+          aria-labelledby="creditkarma-import-tab" tabindex="0">
           <div class="amazon-direct-copy">
             <h2 id="creditkarma-direct-title">Credit Karma</h2>
             <p>
               Imports account transactions and applies expense-oriented signs. Optional filters
-              prevent Amazon and AliExpress charges from duplicating itemized order rows.
+              prevent Amazon, AliExpress, Venmo, and eBay entries from duplicating richer source data.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -102,6 +122,14 @@
                 <input id="creditkarma-ignore-aliexpress" type="checkbox" checked />
                 <span>Ignore AliExpress transactions <small>(matches Alipay)</small></span>
               </label>
+              <label>
+                <input id="creditkarma-ignore-venmo" type="checkbox" checked />
+                <span>Ignore Venmo transactions</span>
+              </label>
+              <label>
+                <input id="creditkarma-ignore-ebay" type="checkbox" checked />
+                <span>Ignore eBay transactions</span>
+              </label>
             </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="creditkarma-import-button" type="button" disabled>
@@ -121,12 +149,13 @@
           </div>
         </section>
 
-        <section class="amazon-direct" aria-labelledby="amazon-direct-title">
+        <section class="amazon-direct" id="amazon-import-panel" role="tabpanel"
+          aria-labelledby="amazon-import-tab" tabindex="0" hidden>
           <div class="amazon-direct-copy">
             <h2 id="amazon-direct-title">Amazon orders</h2>
             <p>
-              Creates one transaction per item and applies the configured sales-tax estimate. If
-              card metadata is unavailable, Amazon is used as the account identity.
+              Creates one transaction per item, applies the configured sales-tax estimate, and
+              assigns the payment account selected below.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -140,6 +169,20 @@
                 <input id="amazon-end-date" type="date" required />
               </label>
             </div>
+            <fieldset class="import-account-fields">
+              <label>
+                <span>Account name</span>
+                <input id="amazon-account-name" type="text" value="Prime VISA" required />
+              </label>
+              <label>
+                <span>Account type</span>
+                <input id="amazon-account-type" type="text" value="CREDIT CARD" required />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input id="amazon-provider" type="text" value="chase" required />
+              </label>
+            </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="amazon-import-button" type="button" disabled>
                 Import Amazon orders <span aria-hidden="true">→</span>
@@ -158,7 +201,8 @@
           </div>
         </section>
 
-        <section class="amazon-direct" aria-labelledby="aliexpress-direct-title">
+        <section class="amazon-direct" id="aliexpress-import-panel" role="tabpanel"
+          aria-labelledby="aliexpress-import-tab" tabindex="0" hidden>
           <div class="amazon-direct-copy">
             <h2 id="aliexpress-direct-title">AliExpress orders</h2>
             <p>
@@ -177,6 +221,20 @@
                 <input id="aliexpress-end-date" type="date" required />
               </label>
             </div>
+            <fieldset class="import-account-fields">
+              <label>
+                <span>Account name</span>
+                <input id="aliexpress-account-name" type="text" value="Credit Card Mastercard" required />
+              </label>
+              <label>
+                <span>Account type</span>
+                <input id="aliexpress-account-type" type="text" value="CREDIT CARD" required />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input id="aliexpress-provider" type="text" value="Bank of America" required />
+              </label>
+            </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="aliexpress-import-button" type="button" disabled>
                 Import AliExpress orders <span aria-hidden="true">→</span>
@@ -194,39 +252,181 @@
             <p class="upload-error amazon-direct-error" id="aliexpress-direct-error" role="alert" hidden></p>
           </div>
         </section>
-      </div>
 
-      <section class="import-roadmap" aria-labelledby="import-roadmap-title">
-        <div class="import-roadmap-heading">
-          <div>
-            <p class="eyebrow">Work in progress</p>
-            <h2 id="import-roadmap-title">More sources are on the way.</h2>
+        <section class="amazon-direct" id="venmo-import-panel" role="tabpanel"
+          aria-labelledby="venmo-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2 id="venmo-direct-title">Venmo</h2>
+            <p>
+              Imports completed payments from Venmo's official statement data. Balance transfers,
+              pending payments, and failed payments are excluded to avoid double counting.
+            </p>
           </div>
-          <p>These integrations are planned but are not available yet.</p>
-        </div>
-        <div class="roadmap-grid">
-          <article class="roadmap-item">
-            <span>Venmo</span>
-            <small>Planned</small>
-          </article>
-          <article class="roadmap-item">
-            <span>eBay items</span>
-            <small>Planned</small>
-          </article>
-          <article class="roadmap-item">
-            <span>Apple Card</span>
-            <small>Manual import likely</small>
-          </article>
-        </div>
-      </section>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label>
+                <span>Start date</span>
+                <input id="venmo-start-date" type="date" required />
+              </label>
+              <label>
+                <span>End date</span>
+                <input id="venmo-end-date" type="date" required />
+              </label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label>
+                <span>Account name</span>
+                <input id="venmo-account-name" type="text" value="Checking Account" required />
+              </label>
+              <label>
+                <span>Account type</span>
+                <input id="venmo-account-type" type="text" value="BANK" required />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input id="venmo-provider" type="text" value="Bank of America" required />
+              </label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="venmo-import-button" type="button" disabled>
+                Import Venmo transactions <span aria-hidden="true">&rarr;</span>
+              </button>
+              <button class="secondary-button" id="venmo-cancel-button" type="button" hidden>
+                Cancel import
+              </button>
+            </div>
+            <div class="amazon-progress" id="venmo-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track" aria-hidden="true">
+                <span id="venmo-progress-bar"></span>
+              </div>
+              <p id="venmo-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="venmo-direct-error" role="alert" hidden></p>
+          </div>
+        </section>
+
+        <section class="amazon-direct" id="applecard-import-panel" role="tabpanel"
+          aria-labelledby="applecard-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Apple Card</h2>
+            <p>
+              Opens card.apple.com and uses Apple's official date-range CSV export. If Apple
+              changes the export page, you can select a previously exported CSV as a fallback.
+            </p>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label>
+                <span>Start date</span>
+                <input id="applecard-start-date" type="date" required />
+              </label>
+              <label>
+                <span>End date</span>
+                <input id="applecard-end-date" type="date" required />
+              </label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label>
+                <span>Account name</span>
+                <input id="applecard-account-name" type="text" value="Apple Card" required />
+              </label>
+              <label>
+                <span>Account type</span>
+                <input id="applecard-account-type" type="text" value="CREDIT CARD" required />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input id="applecard-provider" type="text" value="Goldman Sachs" required />
+              </label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="applecard-import-button" type="button" disabled>
+                Import from Apple Card <span aria-hidden="true">&rarr;</span>
+              </button>
+              <button class="secondary-button" id="applecard-cancel-button" type="button" hidden>
+                Cancel import
+              </button>
+            </div>
+            <details class="extension-help apple-card-fallback">
+              <summary>Import an exported CSV instead</summary>
+              <label class="apple-card-file-field">
+                <span>Apple Card CSV</span>
+                <input id="applecard-file" type="file" accept=".csv,text/csv" required />
+              </label>
+              <button class="secondary-button" id="applecard-file-import-button" type="button">
+                Import selected CSV
+              </button>
+            </details>
+            <div class="amazon-progress" id="applecard-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track" aria-hidden="true">
+                <span id="applecard-progress-bar"></span>
+              </div>
+              <p id="applecard-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="applecard-error" role="alert" hidden></p>
+          </div>
+        </section>
+
+        <section class="amazon-direct" id="ebay-import-panel" role="tabpanel"
+          aria-labelledby="ebay-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>eBay purchases</h2>
+            <p>
+              Creates one transaction per purchased item and reconciles each order's total across
+              its items, including shipping, tax, and discounts. Currently supports USD purchases.
+            </p>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label>
+                <span>Start date</span>
+                <input id="ebay-start-date" type="date" required />
+              </label>
+              <label>
+                <span>End date</span>
+                <input id="ebay-end-date" type="date" required />
+              </label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label>
+                <span>Account name</span>
+                <input id="ebay-account-name" type="text" value="eBay" required />
+              </label>
+              <label>
+                <span>Account type</span>
+                <input id="ebay-account-type" type="text" value="CREDIT CARD" required />
+              </label>
+              <label>
+                <span>Provider</span>
+                <input id="ebay-provider" type="text" value="eBay" required />
+              </label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="ebay-import-button" type="button" disabled>
+                Import eBay purchases <span aria-hidden="true">&rarr;</span>
+              </button>
+              <button class="secondary-button" id="ebay-cancel-button" type="button" hidden>
+                Cancel import
+              </button>
+            </div>
+            <div class="amazon-progress" id="ebay-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track" aria-hidden="true">
+                <span id="ebay-progress-bar"></span>
+              </div>
+              <p id="ebay-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="ebay-error" role="alert" hidden></p>
+          </div>
+        </section>
+      </div>
     </main>
 
     <dialog class="transaction-dialog" id="import-review-dialog">
       <div class="dialog-shell">
         <header class="dialog-header">
           <div>
-            <p class="eyebrow">Import complete</p>
-            <h2>Review new transactions</h2>
+            <p class="eyebrow" id="import-review-eyebrow">Import preview</p>
+            <h2 id="import-review-title">Review transactions</h2>
             <p class="dialog-subtitle" id="import-review-subtitle"></p>
           </div>
           <button class="icon-button" id="close-import-review" type="button" aria-label="Close imported transactions">
@@ -235,7 +435,15 @@
             </svg>
           </button>
         </header>
+        <p class="upload-error import-review-error" id="import-review-error" hidden></p>
         <div class="transaction-list" id="import-review-list"></div>
+        <footer class="import-review-actions">
+          <button class="secondary-button" id="cancel-import-review" type="button">Cancel</button>
+          <button class="primary-button" id="confirm-import-review" type="button" disabled>Import selected (0)</button>
+          <a class="primary-button result-link" id="review-dashboard-link" href="/" hidden>
+            View dashboard <span aria-hidden="true">&rarr;</span>
+          </a>
+        </footer>
       </div>
     </dialog>
 
@@ -245,7 +453,7 @@
           <div>
             <p class="eyebrow">Edit imported transaction</p>
             <h2>Make an adjustment</h2>
-            <p class="dialog-subtitle">Changes are saved directly to the master CSV.</p>
+            <p class="dialog-subtitle">Changes remain in this preview until you confirm the import.</p>
           </div>
           <button class="icon-button" id="close-import-edit" type="button" aria-label="Close transaction form">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -288,12 +496,17 @@
               <span>Provider</span>
               <input name="provider" type="text" autocomplete="off" required />
             </label>
+            <label class="form-field form-field--wide">
+              <span>Notes</span>
+              <textarea name="notes" rows="4"
+                placeholder="Add any details you want to remember"></textarea>
+            </label>
           </div>
           <p class="form-error" id="import-edit-error" role="alert" hidden></p>
         </div>
 
         <footer class="form-footer">
-          <button class="danger-button" id="delete-imported-transaction" type="button">Delete transaction</button>
+          <button class="danger-button" id="delete-imported-transaction" type="button">Remove from import</button>
           <span class="form-footer-spacer"></span>
           <button class="secondary-button" id="cancel-import-edit" type="button">Cancel</button>
           <button class="primary-button" id="save-import-edit" type="submit">Save transaction</button>

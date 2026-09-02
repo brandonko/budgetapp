@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Ledger Data Importer",
-  "version": "0.4.1",
-  "description": "Import Amazon, AliExpress, and Credit Karma data directly into a local Ledger instance.",
+  "version": "0.7.0",
+  "description": "Import Amazon, AliExpress, eBay, Credit Karma, Venmo, and Apple Card data into a local Ledger instance.",
   "default_locale": "en",
   "icons": {
     "48": "amazon_extension/icons/icon-48.png",
@@ -27,6 +27,9 @@
     "*://*.amazon.com.be/*",
     "*://*.creditkarma.com/*",
     "*://*.aliexpress.com/*",
+    "https://account.venmo.com/*",
+    "*://*.ebay.com/*",
+    "https://card.apple.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
@@ -93,7 +96,27 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://127.0.0.1/upload*", "http://localhost/upload*"],
+      "matches": ["https://account.venmo.com/*"],
+      "js": ["venmo_extension/content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.ebay.com/*"],
+      "js": ["ebay_extension/content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://card.apple.com/*"],
+      "js": ["apple_card_extension/content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1/import*",
+        "http://localhost/import*",
+        "http://127.0.0.1/upload*",
+        "http://localhost/upload*"
+      ],
       "js": ["shared/ledger_bridge.js"],
       "run_at": "document_idle"
     }

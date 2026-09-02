@@ -16,30 +16,48 @@ third-party Python dependency unless a future requirement clearly justifies it.
 ## Canonical database
 
 - The default and canonical database is
-  `processed_data_files/transactions.csv`.
-- Never automatically select another CSV in `processed_data_files/`.
-- If the canonical file does not exist when the server starts, create a new
-  header-only `transactions.csv` so the user can import or add data.
+  `data/transactions.csv`.
+- Never automatically select another CSV in `data/`.
+- If the canonical file does not exist, keep the app available without creating
+  an empty database at server startup. Direct the dashboard user to Import data;
+  the first successful import creates `transactions.csv` before merging rows.
 - A noncanonical CSV may be used only through the explicit `--csv` server
   option.
-- Treat the CSV as the source of truth. Manual adds, edits, deletes, and imports
-  must persist to it immediately.
-- Never overwrite an existing database during import. Merge only rows that are
-  determined to be new.
+- Treat the CSV as the source of truth. Manual adds, edits, and deletes persist
+  immediately; imports remain staged until the user explicitly confirms them.
+- Never overwrite an existing database during import. Append only the staged
+  rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The seven persisted columns, in order, are:
+- The eight persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,accountName,accountType,provider
+  date,description,amount,category,accountName,accountType,provider,notes
   ```
 
 - Internal UI identifiers and derived flags must not be written as extra CSV
   columns.
 
+## Backups
+
+- Settings is organized as accessible tabs; **Backup** is the first tab.
+- Store app-managed snapshots in `data/backups/` with timestamped
+  `transactions_<timestamp>.csv` filenames.
+- List every regular CSV placed directly in `data/backups/`, regardless of its
+  filename. Order backups newest first by last-modified date and show their
+  validated transaction count. Accept both current and legacy seven-column Ledger
+  schemas without modifying the backup file. Never follow symlinks or allow nested paths.
+- Restoring a backup completely replaces the canonical CSV only after explicit
+  user confirmation. Create a safety backup of the current file immediately
+  before every restore, and perform the replacement atomically.
+- Allow permanent deletion of an individual backup only after explicit user
+  confirmation. Never let backup deletion affect the active CSV, other backups,
+  symlinks, or nested paths.
+- Keep backups private and ignored by Git together with the rest of `data/`.
+
 ## Privacy
 
-- `raw_data_files/` and `processed_data_files/` contain private financial data
+- `raw_data_files/` and `data/` contain private financial data
   and must remain ignored by Git.
 - Never include real transaction data, account details, or test copies of the
   master CSV in commits.
@@ -76,6 +94,10 @@ on it. Translate it for people in the interface:
   selector and summarizes the full selected year.
 - Changing the period updates summaries, category cards, charts, and dialogs
   together.
+- Persist the selected view mode, year, month, and annual category filter in the
+  browser so dashboard context survives navigation to Import data or Settings.
+  Validate restored values against the current transaction data and fall back
+  safely when a saved selection is no longer available.
 - Render one card for every visible category, including unmatched `Transfer`
   transactions.
 - A category card shows its transaction count and net category total.
@@ -94,11 +116,12 @@ on it. Translate it for people in the interface:
 - The Ledger brand links to the dashboard home page.
 - On the dashboard, center the view/year/month reporting controls in the header.
 - Keep page-level destinations in the top-right hamburger menu: Dashboard,
-  Upload data, and Settings.
+  Import data, and Settings.
 - Use the same menu across pages, clearly mark the current page, close it on an
   outside click or Escape, and return focus to the menu button after Escape.
-- Settings is currently a placeholder route. Add future user preferences there
-  instead of adding unrelated controls to the dashboard or import page.
+- Organize Settings as accessible tabs, beginning with Backup. Add future user
+  preferences there instead of adding unrelated controls to the dashboard or
+  import page.
 
 ## Credit-card bill-payment reconciliation
 
@@ -127,11 +150,18 @@ the transaction budget-visible again.
 ## Transaction editing
 
 - A missing master CSV is an uninitialized state, not a generic load failure.
-  Show a button that creates a header-only CSV without replacing an existing
-  file, then render the empty dashboard.
+  Tell the user to get started by importing data and link directly to `/import`.
+  Every supported importer must create a missing CSV before merging its
+  parsed rows and must never replace an existing database.
 
 - Every CSV field must be editable: date, description, amount, category,
-  accountName, accountType, and provider.
+  accountName, accountType, provider, and notes. Notes are optional freeform text
+  and may safely contain commas or line breaks.
+- Migrate the legacy seven-column CSV to the eight-column schema atomically by
+  adding blank notes; never require users to recreate an existing database.
+- When an editor was opened from a monthly or annual transaction-list modal,
+  saving, deleting, cancelling, or closing the editor returns to that refreshed
+  list modal. Manual Add transaction continues to return to the dashboard.
 - Saving updates the master CSV, then refreshes all derived dashboard state.
 - Manual transaction creation uses the same validation as editing.
 - Permanent deletion requires an explicit confirmation explaining that the CSV
@@ -143,21 +173,37 @@ the transaction budget-visible again.
 ## Upload-first ingestion
 
 The app should not depend on a separate `build_transactions.py` workflow. Data
-ingestion belongs in the **Upload data** page.
+ingestion belongs in the **Import data** page at `/import`.
 
-- Show one import card per supported source: `Credit Karma`, `Amazon`, and `AliExpress`.
-- Do not show manual JSON file pickers or an exported-files section.
+- Show one import card per supported source: `Credit Karma`, `Amazon`, `AliExpress`,
+  `Venmo`, and `Apple Card`.
+- Present importer cards as accessible tabs with only one card visible at a time.
+  Keep Credit Karma selected initially, support arrow/Home/End keyboard navigation,
+  and preserve every importer's form and progress state while switching tabs.
+- Do not show manual JSON file pickers or a shared exported-files section.
+  Apple Card is the deliberate exception: its source tab accepts the official
+  date-range CSV exported from `card.apple.com`.
 - Keep source parsing and validation on the server boundary.
-- Report parsed, added, and duplicate-skipped counts after import.
-- After every completed import, open a modal listing only the transactions that
-  were newly added by that import, ordered latest first.
-- Allow every field on those new transactions to be edited from the modal and
-  persist changes immediately through the revision-checked CSV API. Confirm
-  permanent deletion using the same safety language as the dashboard.
+- Amazon, AliExpress, eBay, Venmo, and Apple Card import tabs must expose editable `accountName`,
+  `accountType`, and `provider` fields. Store their trimmed values in the
+  source-scoped import session and apply them server-side to every resulting row.
+- Prefill Amazon with `Prime VISA`, `CREDIT CARD`, `chase`; AliExpress with
+  `Credit Card Mastercard`, `CREDIT CARD`, `Bank of America`; and Venmo with
+  `Checking Account`, `BANK`, `Bank of America`. Prefill Apple Card with
+  `Apple Card`, `CREDIT CARD`, `Goldman Sachs`.
+- Prefill eBay with `eBay`, `CREDIT CARD`, `eBay` and create item-level rows whose
+  allocated amounts reconcile to each final order total.
+- Report parsed, new, and duplicate counts in a pre-commit review modal.
+- Display every parsed transaction in the preview. Select new occurrences by
+  default; leave duplicates deselected, visibly marked, and highlighted soft red.
+- Allow every field to be edited locally before confirmation. A user may select
+  a duplicate to force its inclusion or remove any staged row from the preview.
+- Write only checked rows after explicit confirmation. Cancel, the top-right
+  close control, Escape, and backdrop dismissal must discard the staged import
+  without modifying or creating the master CSV.
+- Bind previews to the CSV revision used for duplicate classification and reject
+  confirmation if the database changed during review.
 - If the database is new and empty, the first valid import populates it.
-- Show a clearly noninteractive **Work in progress** section below supported
-  sources for Venmo, eBay items, and Apple Card. Label Apple
-  Card as likely requiring manual import rather than promising automation.
 
 ### Direct browser ingestion
 
@@ -168,13 +214,17 @@ ingestion belongs in the **Upload data** page.
 - The root `_locales/` catalog is Amazon-specific but must remain at the
   manifest root because Chrome requires that location.
 
-- Keep browser-authenticated Credit Karma, Amazon, and AliExpress access in the companion
+- Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card access in the companion
   Chrome extension; the localhost application must never request, store, or
   transmit site passwords, access tokens, or cookies.
-- The Upload data page owns date selection, progress, cancellation, results,
+- The Import data page owns date selection, progress, cancellation, results,
   and extension-install guidance.
 - Default each direct-import date range to a 14-day lookback ending today while
   keeping both dates editable.
+- Apple Card direct import opens `card.apple.com`, drives Apple's official
+  Export Transactions form with the selected range and CSV format, and captures
+  the structured response. Keep manual CSV selection as a fallback because the
+  site's markup and private export implementation can change.
 - Use random, expiring, source-scoped server-side import sessions. Do not place
   an import token in a source URL, persist it to the CSV, or print it in server
   request logs.
@@ -182,18 +232,18 @@ ingestion belongs in the **Upload data** page.
   suspension. A short-lived extension-local recovery copy is acceptable when
   it is deleted on completion/cancellation and rejected when stale.
 - The extension may communicate only with loopback Ledger origins and must
-  verify that start requests came from that origin's Upload data page.
-- Direct imports merge against the latest CSV state at completion rather than
-  requiring the CSV revision from the start of a potentially long scrape.
-  Imports append through the same validation, occurrence-aware deduplication,
-  data lock, and atomic write path as file uploads.
+  verify that start requests came from that origin's Import data page.
+- Direct imports classify against the latest CSV state after scraping, then hold
+  a revision-bound preview. Only explicit user confirmation appends selected rows
+  through the validation, data lock, and atomic write path.
 - Keep the upstream scraper isolated and attributed. It currently derives from
   Order History Exporter for Amazon 1.3.0 under the Unlicense.
 - Direct Credit Karma import must request the BudgetLens equivalent of **All
   transactions** for the user-selected date range. Only transaction data needed
   by Ledger is required; wealth histories can remain empty.
-- Credit Karma imports expose independent **Ignore Amazon transactions** and
-  **Ignore AliExpress transactions** checkboxes. Both default to enabled, and
+- Credit Karma imports expose independent **Ignore Amazon transactions**,
+  **Ignore AliExpress transactions**, and **Ignore Venmo transactions** checkboxes.
+  All default to enabled, and
   the chosen values belong to that source-scoped import session.
 - Preserve identical same-day transactions. During browser extraction, collapse
   duplicates only when Credit Karma supplies the same stable transaction ID;
@@ -209,6 +259,14 @@ ingestion belongs in the **Upload data** page.
 - Derive AliExpress request behavior from `nrbrook/AliExpress-Order-Export` under
   its MIT license, retain its copyright/license notice, and keep the integration
   isolated in `aliexpress_extension/`.
+- Venmo import must use the signed-in `account.venmo.com` Statements session to
+  retrieve official CSV data in bounded monthly requests. Cookies and credentials
+  stay in Chrome; only statement CSV contents go to the local server.
+- Treat Venmo's signed amounts as wallet-perspective values and invert them for
+  Ledger: outgoing payments are positive expenses and incoming payments are negative
+  backend income. Skip pending, failed, cancelled, declined, and reversed activity.
+- Skip Venmo balance transfers/cash-outs because payment rows are the budget events;
+  importing both creates double counting, especially when Credit Karma's Venmo filter is enabled.
 
 ### Credit Karma parser
 
@@ -221,6 +279,7 @@ ingestion belongs in the **Upload data** page.
 - When its filter is enabled, ignore AliExpress transactions by matching
   `alipay` case-insensitively; also accept `aliexpress` and `ali express` as
   defensive aliases.
+- When its filter is enabled, ignore descriptions containing `venmo`, case-insensitively.
 - When Credit Karma and Amazon files are uploaded together, infer the Amazon
   payment account from the most common ignored Amazon card transaction.
 
@@ -232,8 +291,15 @@ ingestion belongs in the **Upload data** page.
 - Calculate the amount using the pre-tax item price multiplied by `1.10502`.
 - Use `Shopping` as the category.
 - Use account metadata inferred from Credit Karma when both files are present.
-- For an Amazon-only upload, default unknown accountName, accountType, and
-  provider values to `Amazon`.
+- For Amazon data without inferred or user-supplied metadata, default accountName,
+  accountType, and provider to `Prime VISA`, `CREDIT CARD`, and `chase`.
+
+### AliExpress and Venmo account metadata
+
+- AliExpress defaults unknown account identity to `Credit Card Mastercard`,
+  `CREDIT CARD`, and `Bank of America`.
+- Venmo defaults unknown account identity to `Checking Account`, `BANK`, and
+  `Bank of America`.
 
 ## Import deduplication
 

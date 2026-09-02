@@ -88,6 +88,7 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
                     transaction("Paycheck", 100, "credit"),
                     transaction("AMAZON MARKETPLACE", 12, "debit"),
                     transaction("ALIPAY US", 8, "debit"),
+                    transaction("VENMO PAYMENT", 14, "debit"),
                 ],
                 "netWorthHistory": [],
                 "investmentHistory": [],
@@ -104,8 +105,8 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
             {"content": self.export()},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["import"]["added"], 3)
+        self.assertEqual(result["status"], "review")
+        self.assertEqual(result["import"]["new"], 3)
         self.assertEqual(len(result["import"]["transactions"]), 3)
         self.assertEqual(
             [transaction["date"] for transaction in result["import"]["transactions"]],
@@ -122,6 +123,18 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
             result["import"]["sources"]["creditkarma"]["aliExpressTransactionsIgnored"],
             1,
         )
+        self.assertEqual(
+            result["import"]["sources"]["creditkarma"]["venmoTransactionsIgnored"],
+            1,
+        )
+
+        status, committed = self.request(
+            "POST",
+            f"/api/creditkarma-import-sessions/{token}/commit",
+            {"transactions": result["import"]["transactions"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(committed["import"]["committed"], 3)
 
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -136,21 +149,23 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
             {"content": self.export()},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(duplicate["import"]["added"], 0)
-        self.assertEqual(duplicate["import"]["duplicatesSkipped"], 3)
+        self.assertEqual(duplicate["import"]["new"], 0)
+        self.assertEqual(duplicate["import"]["duplicates"], 3)
+        self.assertTrue(all(row["_isDuplicate"] for row in duplicate["import"]["transactions"]))
 
     def test_filter_options_can_keep_amazon_and_alipay_transactions(self) -> None:
-        token = self.create_session(ignoreAmazon=False, ignoreAliExpress=False)
+        token = self.create_session(ignoreAmazon=False, ignoreAliExpress=False, ignoreVenmo=False)
         status, result = self.request(
             "POST",
             f"/api/creditkarma-import-sessions/{token}/complete",
             {"content": self.export()},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(result["import"]["added"], 5)
+        self.assertEqual(result["import"]["new"], 6)
         descriptions = {row["description"] for row in result["import"]["transactions"]}
         self.assertIn("AMAZON MARKETPLACE", descriptions)
         self.assertIn("ALIPAY US", descriptions)
+        self.assertIn("VENMO PAYMENT", descriptions)
 
     def test_sessions_are_source_scoped_and_support_progress(self) -> None:
         token = self.create_session()

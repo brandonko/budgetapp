@@ -31,6 +31,9 @@ class AliExpressParserTests(unittest.TestCase):
         self.assertEqual([row["description"] for row in transactions], ["Cable (x2)", "Adapter"])
         self.assertEqual(sum(row["amount"] for row in transactions), 25.0)
         self.assertEqual([row["amount"] for row in transactions], [16.67, 8.33])
+        self.assertEqual(transactions[0]["accountName"], "Credit Card Mastercard")
+        self.assertEqual(transactions[0]["accountType"], "CREDIT CARD")
+        self.assertEqual(transactions[0]["provider"], "Bank of America")
 
     def test_skips_cancelled_orders_and_rejects_non_usd(self) -> None:
         cancelled = {"orderDate": "2026-08-20", "status": "Cancelled", "currency": "USD",
@@ -89,8 +92,10 @@ class AliExpressDirectImportTests(unittest.TestCase):
                 error.close()
 
     def test_session_is_source_scoped_and_imports_items(self) -> None:
-        status, created = self.request("POST", "/api/aliexpress-import-sessions",
-                                       {"startDate": "2026-08-01", "endDate": "2026-08-31"})
+        status, created = self.request("POST", "/api/aliexpress-import-sessions", {
+            "startDate": "2026-08-01", "endDate": "2026-08-31",
+            "accountName": "Travel Mastercard", "accountType": "CARD", "provider": "Custom Bank",
+        })
         self.assertEqual(status, 201)
         self.assertEqual(created["source"], "aliexpress")
         token = created["token"]
@@ -101,11 +106,23 @@ class AliExpressDirectImportTests(unittest.TestCase):
         status, result = self.request("POST", f"/api/aliexpress-import-sessions/{token}/complete",
                                       {"content": content})
         self.assertEqual(status, 200)
-        self.assertEqual(result["import"]["added"], 1)
+        self.assertEqual(result["status"], "review")
+        self.assertEqual(result["import"]["new"], 1)
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(list(csv.DictReader(handle)), [])
+        status, committed = self.request(
+            "POST", f"/api/aliexpress-import-sessions/{token}/commit",
+            {"transactions": result["import"]["transactions"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(committed["import"]["committed"], 1)
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             row = next(csv.DictReader(handle))
         self.assertEqual(row["description"], "Widget")
         self.assertEqual(row["amount"], "12.34")
+        self.assertEqual(row["accountName"], "Travel Mastercard")
+        self.assertEqual(row["accountType"], "CARD")
+        self.assertEqual(row["provider"], "Custom Bank")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
     <title>Settings — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/navigation.js" defer></script>
+    <script src="/settings.js" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -22,7 +23,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
-          <a href="/upload">Upload data</a>
+          <a href="/import">Import data</a>
           <a href="/settings" aria-current="page">Settings</a>
         </nav>
       </details>
@@ -32,19 +33,46 @@
       <section class="settings-hero" aria-labelledby="settings-title">
         <p class="eyebrow">Preferences</p>
         <h1 id="settings-title">Settings.</h1>
-        <p>Personalize how Ledger imports, categorizes, and presents your transaction data.</p>
+        <p>Manage your Ledger data and personalize how the app works.</p>
       </section>
 
-      <section class="settings-placeholder" aria-labelledby="settings-placeholder-title">
-        <span class="settings-placeholder-icon" aria-hidden="true">⚙</span>
-        <div>
-          <p class="eyebrow">Coming soon</p>
-          <h2 id="settings-placeholder-title">Your preferences will live here.</h2>
-          <p>
-            Future controls can include import defaults, category rules, account aliases, and display preferences.
-          </p>
-          <a class="secondary-button settings-back-link" href="/">Return to dashboard</a>
-        </div>
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button class="settings-tab" id="backup-settings-tab" role="tab" type="button"
+          aria-selected="true" aria-controls="backup-settings-panel">Backup</button>
+        <button class="settings-tab" id="general-settings-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="general-settings-panel" tabindex="-1">General</button>
+      </div>
+
+      <section class="settings-panel" id="backup-settings-panel" role="tabpanel"
+        aria-labelledby="backup-settings-tab">
+        <article class="settings-card backup-settings-card">
+          <div class="settings-card-heading">
+            <div>
+              <p class="eyebrow">Transaction database</p>
+              <h2>Backups</h2>
+              <p>Create a snapshot of your current transaction file or restore an earlier version.</p>
+            </div>
+            <button class="primary-button" id="create-backup-button" type="button">Create backup</button>
+          </div>
+          <p class="settings-status" id="backup-status" role="status" hidden></p>
+          <div class="backup-list-heading">
+            <h3>Available backups</h3>
+            <button class="text-button" id="refresh-backups-button" type="button">Refresh</button>
+          </div>
+          <div class="backup-list" id="backup-list" aria-live="polite"></div>
+        </article>
+      </section>
+
+      <section class="settings-panel" id="general-settings-panel" role="tabpanel"
+        aria-labelledby="general-settings-tab" hidden>
+        <article class="settings-placeholder" aria-labelledby="general-settings-title">
+          <span class="settings-placeholder-icon" aria-hidden="true">⚙</span>
+          <div>
+            <p class="eyebrow">Coming soon</p>
+            <h2 id="general-settings-title">General preferences</h2>
+            <p>Future controls can include category rules, account aliases, and display preferences.</p>
+          </div>
+        </article>
       </section>
     </main>
   </body>

@@ -339,6 +339,7 @@ h1 {
   background: var(--accent-deep);
   font-size: 14px;
   font-weight: 680;
+  text-decoration: none;
 }
 
 .primary-button:hover,
@@ -654,10 +655,172 @@ h1 {
 }
 
 .settings-hero > p:last-child,
-.settings-placeholder > div > p:not(.eyebrow) {
+.settings-placeholder > div > p:not(.eyebrow),
+.settings-card-heading p {
   color: var(--muted);
   font-size: 16px;
   line-height: 1.65;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 48%);
+}
+
+.settings-tab {
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-tab[aria-selected="true"] {
+  color: white;
+  background: var(--accent-deep);
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-card {
+  padding: clamp(26px, 5vw, 42px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.settings-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  padding-bottom: 30px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-card-heading h2 {
+  margin-bottom: 8px;
+}
+
+.settings-card-heading p:last-child {
+  max-width: 570px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.settings-card-heading .primary-button {
+  flex: 0 0 auto;
+}
+
+.settings-status {
+  margin: 20px 0 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.settings-status--success {
+  color: #285b43;
+  background: var(--accent-soft);
+}
+
+.settings-status--error {
+  color: #8c3d36;
+  background: #fae7e4;
+}
+
+.backup-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 30px 0 8px;
+}
+
+.backup-list-heading h3 {
+  font-size: 15px;
+}
+
+.text-button {
+  padding: 4px;
+  border: 0;
+  color: var(--accent-deep);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 17px 0;
+  border-bottom: 1px solid #e9ece9;
+}
+
+.backup-row:last-child {
+  border-bottom: 0;
+}
+
+.backup-row > div,
+.backup-row strong,
+.backup-row span {
+  display: block;
+  min-width: 0;
+}
+
+.backup-actions {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.backup-delete-button {
+  min-height: 38px;
+  padding: 8px 13px;
+}
+
+.backup-row strong {
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.backup-row span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-row--invalid {
+  color: #8c3d36;
+}
+
+.backup-empty {
+  margin: 16px 0 0;
+  padding: 24px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--canvas);
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: center;
 }
 
 .settings-placeholder {
@@ -950,6 +1113,43 @@ h2 {
   line-height: 1.55;
 }
 
+#import-review-list .transaction-row {
+  grid-template-columns: 24px 48px minmax(0, 1fr) auto;
+}
+
+#import-review-list .transaction-row--duplicate {
+  margin: 6px -14px;
+  padding: 14px;
+  border: 1px solid #e8c5c1;
+  border-radius: 10px;
+  background: #fff2f0;
+}
+
+.import-selection {
+  display: grid;
+  place-items: center;
+}
+
+.import-selection input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.duplicate-badge {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #943f37 !important;
+  background: #f8d8d4;
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .transaction-row {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
@@ -1215,6 +1415,14 @@ h2 {
   line-height: 1.65;
 }
 
+.transaction-description .transaction-note {
+  margin-top: 3px;
+  color: #59645e;
+  font-size: 11px;
+  font-style: italic;
+  white-space: pre-wrap;
+}
+
 .companion-extension {
   display: flex;
   gap: 28px;
@@ -1229,8 +1437,48 @@ h2 {
 
 .direct-import-stack {
   display: grid;
-  gap: 18px;
   margin-bottom: 42px;
+}
+
+.importer-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f4f6f4;
+}
+
+.importer-tabs button {
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 680;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.importer-tabs button:hover {
+  color: var(--ink);
+  background: rgb(255 255 255 / 55%);
+}
+
+.importer-tabs button[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgb(23 34 29 / 10%);
+}
+
+.importer-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .amazon-direct {
@@ -1301,6 +1549,56 @@ h2 {
   font-size: 11px;
 }
 
+.import-account-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.import-account-fields legend {
+  grid-column: 1 / -1;
+  margin-bottom: -3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.import-account-fields label > span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.import-account-fields input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
+}
+
+.import-account-fields input:focus {
+  outline: 2px solid rgb(46 106 80 / 18%);
+  border-color: var(--accent);
+}
+
+.amazon-direct[hidden] {
+  display: none;
+}
+
 .import-options {
   display: flex;
   flex-wrap: wrap;
@@ -1326,6 +1624,36 @@ h2 {
   color: var(--ink);
   cursor: pointer;
   font-size: 13px;
+}
+
+.apple-card-file-field {
+  display: block;
+  margin: 14px 0 10px;
+}
+
+.apple-card-fallback {
+  margin-top: 18px;
+}
+
+.apple-card-file-field > span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.apple-card-file-field input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
 }
 
 .import-options input {
@@ -1483,54 +1811,29 @@ h2 {
   font-size: 13px;
 }
 
-.import-result {
-  margin: -14px 0 32px;
-  padding: 38px;
-  border: 1px solid #bed3c4;
-  border-radius: 16px;
-  background: #edf6ef;
-}
-
-.import-result h2 {
-  margin-bottom: 10px;
-}
-
-.import-result > p:not(.eyebrow) {
-  color: var(--muted);
-}
-
-.result-sources {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 24px 0;
-}
-
-.result-source {
-  padding: 15px;
-  border: 1px solid rgb(46 106 80 / 16%);
-  border-radius: 9px;
-  background: rgb(255 255 255 / 55%);
-}
-
-.result-source strong,
-.result-source span {
-  display: block;
-}
-
-.result-source strong {
-  margin-bottom: 5px;
-  font-size: 13px;
-}
-
-.result-source span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .result-link {
   width: fit-content;
   text-decoration: none;
+}
+
+.import-review-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 20px 32px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+#confirm-import-review:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+.import-review-error {
+  margin: 18px 32px 0;
 }
 
 .import-roadmap {
@@ -1732,6 +2035,25 @@ body:has(dialog[open]) {
     grid-template-columns: 1fr;
   }
 
+  .settings-card-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-card-heading .primary-button {
+    width: 100%;
+  }
+
+  .backup-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .backup-actions,
+  .backup-actions button {
+    width: 100%;
+  }
+
   .excluded-note {
     margin-top: 12px;
   }
@@ -1753,7 +2075,7 @@ body:has(dialog[open]) {
     padding-left: 20px;
   }
 
-  .form-grid {
+.form-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1793,6 +2115,11 @@ body:has(dialog[open]) {
     padding: 28px 22px;
   }
 
+  .importer-tabs {
+    grid-template-columns: repeat(4, minmax(118px, 1fr));
+    overflow-x: auto;
+  }
+
   .companion-extension {
     gap: 14px;
     flex-direction: column;
@@ -1819,16 +2146,45 @@ body:has(dialog[open]) {
     grid-template-columns: 1fr;
   }
 
+  .import-account-fields {
+    grid-template-columns: 1fr;
+  }
+
   .amazon-direct-actions {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .result-sources {
-    grid-template-columns: 1fr;
+  .import-review-actions {
+    padding-right: 22px;
+    padding-left: 22px;
   }
 
-  .import-result {
-    padding: 28px 22px;
+  #import-review-list .transaction-row {
+    grid-template-columns: 24px 42px minmax(0, 1fr);
   }
+
+  #import-review-list .transaction-actions {
+    grid-column: 3;
+  }
+}
+
+.form-field textarea {
+  width: 100%;
+  min-height: 94px;
+  resize: vertical;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.form-field textarea:focus {
+  outline: 2px solid rgb(46 106 80 / 18%);
+  border-color: var(--accent);
 }

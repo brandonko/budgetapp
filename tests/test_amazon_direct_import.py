@@ -17,8 +17,11 @@ sys.path.insert(0, str(APP_DIR))
 from server import (  # noqa: E402
     BudgetRequestHandler,
     COLUMNS,
+    LEGACY_COLUMNS,
     ThreadingHTTPServer,
     initialize_csv_if_missing,
+    migrate_transaction_schema,
+    read_transaction_state,
 )
 
 
@@ -59,11 +62,11 @@ class AmazonDirectImportTests(unittest.TestCase):
             finally:
                 error.close()
 
-    def create_session(self):
+    def create_session(self, **options: str):
         status, payload = self.request(
             "POST",
             "/api/amazon-import-sessions",
-            {"startDate": "2026-01-01", "endDate": "2026-08-31"},
+            {"startDate": "2026-01-01", "endDate": "2026-08-31", **options},
         )
         self.assertEqual(status, 201)
         self.assertRegex(payload["token"], r"^[A-Za-z0-9_-]{32,}$")
@@ -89,8 +92,9 @@ class AmazonDirectImportTests(unittest.TestCase):
             {"content": export},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(first["status"], "complete")
-        self.assertEqual(first["import"]["added"], 2)
+        self.assertEqual(first["status"], "review")
+        self.assertEqual(first["import"]["new"], 2)
+        self.assertEqual(first["import"]["duplicates"], 0)
         self.assertEqual(len(first["import"]["transactions"]), 2)
         self.assertEqual(
             {transaction["description"] for transaction in first["import"]["transactions"]},
@@ -98,10 +102,20 @@ class AmazonDirectImportTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                isinstance(transaction["_id"], int)
+                isinstance(transaction["_stagedId"], int)
                 for transaction in first["import"]["transactions"]
             )
         )
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(list(csv.DictReader(handle)), [])
+        status, first_committed = self.request(
+            "POST",
+            f"/api/amazon-import-sessions/{first_token}/commit",
+            {"transactions": first["import"]["transactions"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(first_committed["status"], "complete")
+        self.assertEqual(first_committed["import"]["committed"], 2)
 
         second_token = self.create_session()
         status, second = self.request(
@@ -110,20 +124,24 @@ class AmazonDirectImportTests(unittest.TestCase):
             {"content": export},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(second["import"]["added"], 0)
-        self.assertEqual(second["import"]["duplicatesSkipped"], 2)
-        self.assertEqual(second["import"]["transactions"], [])
+        self.assertEqual(second["import"]["new"], 0)
+        self.assertEqual(second["import"]["duplicates"], 2)
+        self.assertTrue(all(row["_isDuplicate"] for row in second["import"]["transactions"]))
 
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 2)
         self.assertEqual(set(rows[0]), set(COLUMNS))
         self.assertEqual([row["amount"] for row in rows], ["11.05", "11.05"])
+        self.assertTrue(all(row["accountName"] == "Prime VISA" for row in rows))
+        self.assertTrue(all(row["accountType"] == "CREDIT CARD" for row in rows))
+        self.assertTrue(all(row["provider"] == "chase" for row in rows))
 
-        created = first["import"]["transactions"][0]
+        created = first_committed["import"]["transactions"][0]
         edited = {column: created[column] for column in COLUMNS}
         edited["description"] = "Reviewed imported item"
         edited["category"] = "Household"
+        edited["notes"] = "Gift, keep the receipt\nReturn window ends September 15."
         status, updated = self.request(
             "PUT",
             f"/api/transactions/{created['_id']}",
@@ -134,9 +152,129 @@ class AmazonDirectImportTests(unittest.TestCase):
             any(
                 transaction["description"] == "Reviewed imported item"
                 and transaction["category"] == "Household"
+                and transaction["notes"] == edited["notes"]
                 for transaction in updated["transactions"]
             )
         )
+
+    def test_direct_import_creates_missing_transaction_file(self) -> None:
+        self.csv_path.unlink()
+        export = json.dumps(
+            [
+                {
+                    "orderDate": "2026-08-20",
+                    "items": [{"title": "First imported item", "price": 10, "quantity": 1}],
+                }
+            ]
+        )
+
+        token = self.create_session()
+        status, completed = self.request(
+            "POST",
+            f"/api/amazon-import-sessions/{token}/complete",
+            {"content": export},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(completed["import"]["new"], 1)
+        self.assertFalse(self.csv_path.exists())
+        status, committed = self.request(
+            "POST",
+            f"/api/amazon-import-sessions/{token}/commit",
+            {"transactions": completed["import"]["transactions"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(committed["import"]["committed"], 1)
+        self.assertTrue(self.csv_path.exists())
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(set(rows[0]), set(COLUMNS))
+
+    def test_cancelled_preview_writes_nothing_and_duplicate_can_be_forced(self) -> None:
+        export = json.dumps([{"orderDate": "2026-08-20", "items": [
+            {"title": "Item", "price": 10, "quantity": 1}
+        ]}])
+        token = self.create_session()
+        _, preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
+        _, cancelled = self.request("POST", f"/api/amazon-import-sessions/{token}/cancel", {})
+        self.assertEqual(cancelled["status"], "cancelled")
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(list(csv.DictReader(handle)), [])
+
+        token = self.create_session()
+        _, preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
+        self.request("POST", f"/api/amazon-import-sessions/{token}/commit", {"transactions": preview["import"]["transactions"]})
+        token = self.create_session()
+        _, duplicate = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
+        self.assertTrue(duplicate["import"]["transactions"][0]["_isDuplicate"])
+        status, forced = self.request("POST", f"/api/amazon-import-sessions/{token}/commit", {
+            "transactions": duplicate["import"]["transactions"]
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(forced["import"]["committed"], 1)
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(len(list(csv.DictReader(handle))), 2)
+
+    def test_commit_writes_only_selected_rows_and_rejects_a_stale_preview(self) -> None:
+        export = json.dumps([{"orderDate": "2026-08-20", "items": [
+            {"title": "First", "price": 10, "quantity": 1},
+            {"title": "Second", "price": 20, "quantity": 1},
+        ]}])
+        token = self.create_session()
+        _, preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
+        selected = [row for row in preview["import"]["transactions"] if row["description"] == "Second"]
+        status, committed = self.request("POST", f"/api/amazon-import-sessions/{token}/commit", {
+            "transactions": selected
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(committed["import"]["committed"], 1)
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual([row["description"] for row in csv.DictReader(handle)], ["Second"])
+
+        token = self.create_session()
+        _, stale_preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
+        status, state = self.request("GET", "/api/transactions")
+        self.assertEqual(status, 200)
+        self.request("POST", "/api/transactions", {
+            "revision": state["revision"],
+            "transaction": {
+                "date": "2026-08-21", "description": "Concurrent edit", "amount": 1,
+                "category": "Other", "accountName": "Cash", "accountType": "CASH",
+                "provider": "Manual", "notes": "",
+            },
+        })
+        status, conflict = self.request("POST", f"/api/amazon-import-sessions/{token}/commit", {
+            "transactions": stale_preview["import"]["transactions"]
+        })
+        self.assertEqual(status, 409)
+        self.assertIn("changed during review", conflict["error"])
+
+
+    def test_migrates_legacy_csv_with_blank_notes_without_losing_rows(self) -> None:
+        legacy_path = Path(self.temporary_directory.name) / "legacy.csv"
+        legacy_row = {
+            "date": "2026-08-20",
+            "description": "Legacy purchase",
+            "amount": "12.34",
+            "category": "Shopping",
+            "accountName": "Card",
+            "accountType": "CREDIT",
+            "provider": "Bank",
+        }
+        with legacy_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=LEGACY_COLUMNS)
+            writer.writeheader()
+            writer.writerow(legacy_row)
+
+        self.assertTrue(migrate_transaction_schema(legacy_path))
+        transactions, _revision = read_transaction_state(legacy_path)
+        self.assertEqual(len(transactions), 1)
+        self.assertEqual(transactions[0]["description"], "Legacy purchase")
+        self.assertEqual(transactions[0]["notes"], "")
+        with legacy_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
+        self.assertFalse(migrate_transaction_schema(legacy_path))
 
     def test_progress_cancel_and_terminal_updates_are_idempotent(self) -> None:
         token = self.create_session()
@@ -170,6 +308,18 @@ class AmazonDirectImportTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("cannot be after", error["error"])
+
+        status, error = self.request(
+            "POST",
+            "/api/amazon-import-sessions",
+            {
+                "startDate": "2026-08-01",
+                "endDate": "2026-08-31",
+                "accountName": " ",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("account fields", error["error"])
 
         token = self.create_session()
         status, error = self.request(
@@ -236,6 +386,14 @@ class AmazonDirectImportTests(unittest.TestCase):
         status, unchanged = self.request("POST", "/api/transactions/initialize")
         self.assertEqual(status, 200)
         self.assertEqual(unchanged["revision"], initialized["revision"])
+
+    def test_import_page_is_canonical_and_legacy_upload_url_redirects(self) -> None:
+        with urlopen(f"{self.base_url}/import", timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("Import data", response.read().decode("utf-8"))
+        with urlopen(f"{self.base_url}/upload", timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.geturl(), f"{self.base_url}/import")
 
 
 if __name__ == "__main__":
