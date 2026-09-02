@@ -1,7 +1,7 @@
 "use strict";
 
 const APP_SOURCE = "ledger-web-app";
-const EXTENSION_SOURCE = "ledger-amazon-extension";
+const EXTENSION_SOURCE = "ledger-data-importer";
 
 function sendToPage(action, payload = {}) {
   window.postMessage({ source: EXTENSION_SOURCE, action, payload }, window.location.origin);
@@ -30,13 +30,18 @@ window.addEventListener("message", (event) => {
     message = { action: "ledgerStartCreditKarmaImport", data: event.data.payload };
   } else if (event.data.action === "cancelCreditKarmaImport") {
     message = { action: "ledgerCancelCreditKarmaImport", data: event.data.payload };
+  } else if (event.data.action === "startAliExpressImport") {
+    message = { action: "ledgerStartAliExpressImport", data: event.data.payload };
+  } else if (event.data.action === "cancelAliExpressImport") {
+    message = { action: "ledgerCancelAliExpressImport", data: event.data.payload };
   } else {
     return;
   }
 
   chrome.runtime.sendMessage(message, (response) => {
     const isCreditKarma = event.data.action.includes("CreditKarma");
-    const errorAction = isCreditKarma ? "creditKarmaError" : "error";
+    const isAliExpress = event.data.action.includes("AliExpress");
+    const errorAction = isCreditKarma ? "creditKarmaError" : isAliExpress ? "aliExpressError" : "error";
     if (chrome.runtime.lastError) {
       sendToPage(errorAction, { message: chrome.runtime.lastError.message });
     } else if (!response?.success) {
@@ -44,7 +49,7 @@ window.addEventListener("message", (event) => {
         message: response?.error || "The extension could not start the import.",
       });
     } else {
-      sendToPage(isCreditKarma ? "creditKarmaStarted" : "started");
+      sendToPage(isCreditKarma ? "creditKarmaStarted" : isAliExpress ? "aliExpressStarted" : "started");
     }
   });
 });
@@ -66,6 +71,10 @@ chrome.runtime.onMessage.addListener((message) => {
     });
   } else if (message?.action === "ledgerCreditKarmaImportError") {
     sendToPage("creditKarmaError", message.data);
+  } else if (message?.action === "ledgerAliExpressImportProgress") {
+    sendToPage("aliExpressProgress", { ...message.data, status: "scraping" });
+  } else if (message?.action === "ledgerAliExpressImportError") {
+    sendToPage("aliExpressError", message.data);
   }
 });
 

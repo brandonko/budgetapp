@@ -854,6 +854,11 @@ h2 {
   background: #fff9f7;
 }
 
+.error-state--setup {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
 .error-state h2 {
   margin-bottom: 10px;
 }
@@ -1294,6 +1299,45 @@ h2 {
   margin: 15px 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+.import-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.import-options legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.import-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.import-options input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.import-options small {
+  color: var(--muted);
+  font-size: inherit;
 }
 
 .companion-extension .extension-state {

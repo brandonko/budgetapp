@@ -1,15 +1,24 @@
 "use strict";
 
-const PENDING_KEY = "ledgerAmazonPendingImport";
-const PENDING_BACKUP_KEY = "ledgerAmazonPendingImportBackup";
-const RECENT_COMPLETION_KEY = "ledgerAmazonRecentCompletion";
+import { exportAliExpressOrders } from "../aliexpress_extension/importer.js";
+
+// Shared service worker that coordinates source tabs with Ledger import sessions.
+
+const AMAZON_PENDING_KEY = "ledgerAmazonPendingImport";
+const AMAZON_PENDING_BACKUP_KEY = "ledgerAmazonPendingImportBackup";
+const AMAZON_RECENT_COMPLETION_KEY = "ledgerAmazonRecentCompletion";
 const CREDIT_KARMA_PENDING_KEY = "ledgerCreditKarmaPendingImport";
 const CREDIT_KARMA_BACKUP_KEY = "ledgerCreditKarmaPendingImportBackup";
+const ALIEXPRESS_PENDING_KEY = "ledgerAliExpressPendingImport";
+const ALIEXPRESS_BACKUP_KEY = "ledgerAliExpressPendingImportBackup";
 const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
-const RECENT_COMPLETION_MS = 5 * 60 * 1000;
+const AMAZON_RECENT_COMPLETION_MS = 5 * 60 * 1000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const AMAZON_ORDER_PATH = /\/(?:gp\/(?:your-account|css)\/order-history|your-orders(?:\/orders)?)/;
+const cancelledAliExpressTokens = new Set();
+
+// Shared request validation ---------------------------------------------------
 
 function isLoopbackOrigin(value) {
   try {
@@ -46,36 +55,40 @@ function validateRequest(payload, sender) {
   }
 }
 
-async function getPending() {
-  const sessionPending = (await chrome.storage.session.get(PENDING_KEY))[PENDING_KEY];
+// Amazon import coordination -------------------------------------------------
+
+async function getAmazonPending() {
+  const sessionPending = (await chrome.storage.session.get(AMAZON_PENDING_KEY))[AMAZON_PENDING_KEY];
   if (sessionPending) return sessionPending;
 
-  const backup = (await chrome.storage.local.get(PENDING_BACKUP_KEY))[PENDING_BACKUP_KEY];
+  const backup = (await chrome.storage.local.get(AMAZON_PENDING_BACKUP_KEY))[
+    AMAZON_PENDING_BACKUP_KEY
+  ];
   if (!backup) return null;
   if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
-    await chrome.storage.local.remove(PENDING_BACKUP_KEY);
+    await chrome.storage.local.remove(AMAZON_PENDING_BACKUP_KEY);
     return null;
   }
-  await chrome.storage.session.set({ [PENDING_KEY]: backup });
+  await chrome.storage.session.set({ [AMAZON_PENDING_KEY]: backup });
   return backup;
 }
 
-async function setPending(pending) {
+async function setAmazonPending(pending) {
   const saved = { ...pending, updatedAt: Date.now() };
   await Promise.all([
-    chrome.storage.session.set({ [PENDING_KEY]: saved }),
-    chrome.storage.local.set({ [PENDING_BACKUP_KEY]: saved }),
+    chrome.storage.session.set({ [AMAZON_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [AMAZON_PENDING_BACKUP_KEY]: saved }),
   ]);
 }
 
-async function clearPending() {
+async function clearAmazonPending() {
   await Promise.all([
-    chrome.storage.session.remove(PENDING_KEY),
-    chrome.storage.local.remove(PENDING_BACKUP_KEY),
+    chrome.storage.session.remove(AMAZON_PENDING_KEY),
+    chrome.storage.local.remove(AMAZON_PENDING_BACKUP_KEY),
   ]);
 }
 
-async function updateLedger(pending, data, action = "progress") {
+async function updateAmazonLedger(pending, data, action = "progress") {
   const response = await fetch(
     `${pending.ledgerOrigin}/api/amazon-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
     {
@@ -104,21 +117,21 @@ async function broadcast(action, data) {
   }
 }
 
-async function reportFailure(pending, error) {
+async function reportAmazonFailure(pending, error) {
   const message = error instanceof Error ? error.message : String(error);
   try {
-    await updateLedger(pending, { status: "error", progress: 0, message });
+    await updateAmazonLedger(pending, { status: "error", progress: 0, message });
   } catch {
     // If Ledger is no longer running there is nowhere else to report the failure.
   }
   await broadcast("ledgerImportError", { message });
 }
 
-async function startLedgerImport(payload, sender) {
+async function startAmazonImport(payload, sender) {
   validateRequest(payload, sender);
-  const existing = await getPending();
+  const existing = await getAmazonPending();
   if (existing) throw new Error("Another Amazon import is already running.");
-  await chrome.storage.local.remove(RECENT_COMPLETION_KEY);
+  await chrome.storage.local.remove(AMAZON_RECENT_COMPLETION_KEY);
 
   const pending = {
     token: payload.token,
@@ -128,8 +141,8 @@ async function startLedgerImport(payload, sender) {
     tabId: null,
     started: false,
   };
-  await setPending(pending);
-  await updateLedger(pending, {
+  await setAmazonPending(pending);
+  await updateAmazonLedger(pending, {
     status: "opening_amazon",
     progress: 2,
     message: "Opening Amazon order history. Sign in if Amazon asks you to.",
@@ -139,12 +152,12 @@ async function startLedgerImport(payload, sender) {
     active: true,
   });
   pending.tabId = tab.id;
-  await setPending(pending);
+  await setAmazonPending(pending);
   return { success: true };
 }
 
-async function cancelLedgerImport(payload) {
-  const pending = await getPending();
+async function cancelAmazonImport(payload) {
+  const pending = await getAmazonPending();
   if (!pending || pending.token !== payload?.token) return { success: true };
   if (pending.tabId !== null) {
     try {
@@ -154,9 +167,9 @@ async function cancelLedgerImport(payload) {
     }
   }
   try {
-    await updateLedger(pending, {}, "cancel");
+    await updateAmazonLedger(pending, {}, "cancel");
   } finally {
-    await clearPending();
+    await clearAmazonPending();
   }
   return { success: true };
 }
@@ -170,16 +183,16 @@ async function downloadFile(data) {
   });
 }
 
-async function handleDownload(data, sender) {
-  const pending = await getPending();
+async function handleAmazonExport(data, sender) {
+  const pending = await getAmazonPending();
   if (!pending || data.mimeType !== "application/json") {
-    const recent = (await chrome.storage.local.get(RECENT_COMPLETION_KEY))[
-      RECENT_COMPLETION_KEY
+    const recent = (await chrome.storage.local.get(AMAZON_RECENT_COMPLETION_KEY))[
+      AMAZON_RECENT_COMPLETION_KEY
     ];
     if (
       data.mimeType === "application/json" &&
       recent?.tabId === sender.tab?.id &&
-      Date.now() - recent.completedAt < RECENT_COMPLETION_MS
+      Date.now() - recent.completedAt < AMAZON_RECENT_COMPLETION_MS
     ) {
       return { success: true };
     }
@@ -188,24 +201,26 @@ async function handleDownload(data, sender) {
   }
 
   try {
-    await updateLedger(pending, {
+    await updateAmazonLedger(pending, {
       status: "importing",
       progress: 96,
       message: "Amazon export complete. Adding new transactions to Ledger…",
     });
-    const result = await updateLedger(pending, { content: data.content }, "complete");
+    const result = await updateAmazonLedger(pending, { content: data.content }, "complete");
     await broadcast("ledgerImportComplete", result);
     await chrome.storage.local.set({
-      [RECENT_COMPLETION_KEY]: { tabId: sender.tab?.id, completedAt: Date.now() },
+      [AMAZON_RECENT_COMPLETION_KEY]: { tabId: sender.tab?.id, completedAt: Date.now() },
     });
-    await clearPending();
+    await clearAmazonPending();
     return { success: true };
   } catch (error) {
-    await reportFailure(pending, error);
-    await clearPending();
+    await reportAmazonFailure(pending, error);
+    await clearAmazonPending();
     throw error;
   }
 }
+
+// Credit Karma import coordination ------------------------------------------
 
 async function getCreditKarmaPending() {
   const active = (await chrome.storage.session.get(CREDIT_KARMA_PENDING_KEY))[
@@ -311,6 +326,8 @@ async function cancelCreditKarmaImport(payload) {
   return { success: true };
 }
 
+// Credit Karma message routing ----------------------------------------------
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.forwarded) return false;
   let operation;
@@ -392,21 +409,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+// Amazon message routing -----------------------------------------------------
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.forwarded) return false;
 
   let operation;
   if (message?.action === "ledgerStartImport") {
-    operation = startLedgerImport(message.data, sender);
+    operation = startAmazonImport(message.data, sender);
   } else if (message?.action === "ledgerCancelImport") {
-    operation = cancelLedgerImport(message.data);
+    operation = cancelAmazonImport(message.data);
   } else if (message?.action === "downloadFile") {
-    operation = handleDownload(message.data, sender);
+    operation = handleAmazonExport(message.data, sender);
   } else if (message?.action === "updateProgress") {
     operation = (async () => {
-      const pending = await getPending();
+      const pending = await getAmazonPending();
       if (pending) {
-        await updateLedger(pending, {
+        await updateAmazonLedger(pending, {
           status: "scraping",
           progress: Math.max(3, Math.min(95, Math.floor(message.data?.percent || 0))),
           message: message.data?.message || "Collecting Amazon orders…",
@@ -421,17 +440,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   operation.then(sendResponse).catch(async (error) => {
-    const pending = await getPending();
-    if (pending) await reportFailure(pending, error);
-    if (message?.action === "ledgerStartImport") await clearPending();
+    const pending = await getAmazonPending();
+    if (pending) await reportAmazonFailure(pending, error);
+    if (message?.action === "ledgerStartImport") await clearAmazonPending();
     sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
   });
   return true;
 });
 
+// Amazon tab lifecycle -------------------------------------------------------
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
-  const pending = await getPending();
+  const pending = await getAmazonPending();
   if (!pending || pending.tabId !== tabId || pending.started) return;
 
   const url = tab.url || "";
@@ -443,7 +464,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
   if (parsedUrl.hostname !== "amazon.com" && !parsedUrl.hostname.endsWith(".amazon.com")) return;
   if (!AMAZON_ORDER_PATH.test(parsedUrl.pathname)) {
-    await updateLedger(pending, {
+    await updateAmazonLedger(pending, {
       status: "waiting_for_amazon",
       progress: 2,
       message: "Sign in to Amazon, then open Your Orders to continue automatically.",
@@ -452,7 +473,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 
   pending.started = true;
-  await setPending(pending);
+  await setAmazonPending(pending);
   try {
     await chrome.tabs.sendMessage(tabId, {
       action: "exportOrders",
@@ -463,17 +484,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         exportAll: false,
       },
     });
-    await updateLedger(pending, {
+    await updateAmazonLedger(pending, {
       status: "scraping",
       progress: 3,
       message: "Collecting Amazon orders…",
     });
   } catch (error) {
     pending.started = false;
-    await setPending(pending);
-    await reportFailure(pending, error);
+    await setAmazonPending(pending);
+    await reportAmazonFailure(pending, error);
   }
 });
+
+// Credit Karma tab lifecycle -------------------------------------------------
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
@@ -525,10 +548,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const pending = await getPending();
+  const pending = await getAmazonPending();
   if (!pending || pending.tabId !== tabId) return;
-  await reportFailure(pending, new Error("The Amazon tab was closed before import completed."));
-  await clearPending();
+  await reportAmazonFailure(pending, new Error("The Amazon tab was closed before import completed."));
+  await clearAmazonPending();
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -539,4 +562,134 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     new Error("The Credit Karma tab was closed before import completed."),
   );
   await clearCreditKarmaPending();
+});
+
+// AliExpress import coordination -------------------------------------------
+
+async function getAliExpressPending() {
+  const active = (await chrome.storage.session.get(ALIEXPRESS_PENDING_KEY))[ALIEXPRESS_PENDING_KEY];
+  if (active) return active;
+  const backup = (await chrome.storage.local.get(ALIEXPRESS_BACKUP_KEY))[ALIEXPRESS_BACKUP_KEY];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(ALIEXPRESS_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [ALIEXPRESS_PENDING_KEY]: backup });
+  return backup;
+}
+
+async function setAliExpressPending(pending) {
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [ALIEXPRESS_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [ALIEXPRESS_BACKUP_KEY]: saved }),
+  ]);
+}
+
+async function clearAliExpressPending() {
+  await Promise.all([
+    chrome.storage.session.remove(ALIEXPRESS_PENDING_KEY),
+    chrome.storage.local.remove(ALIEXPRESS_BACKUP_KEY),
+  ]);
+}
+
+async function updateAliExpressLedger(pending, data, action = "progress") {
+  const response = await fetch(
+    `${pending.ledgerOrigin}/api/aliexpress-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Ledger returned HTTP ${response.status}.`);
+  return payload;
+}
+
+async function reportAliExpressFailure(pending, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try { await updateAliExpressLedger(pending, { status: "error", progress: 0, message }); } catch { /* Ledger may have stopped. */ }
+  await broadcast("ledgerAliExpressImportError", { message });
+}
+
+async function startAliExpressImport(payload, sender) {
+  validateRequest(payload, sender);
+  if (await getAliExpressPending()) throw new Error("Another AliExpress import is already running.");
+  const pending = { token: payload.token, startDate: payload.startDate, endDate: payload.endDate,
+    ledgerOrigin: payload.ledgerOrigin, tabId: null, started: false };
+  cancelledAliExpressTokens.delete(pending.token);
+  await setAliExpressPending(pending);
+  await updateAliExpressLedger(pending, { status: "opening_aliexpress", progress: 2,
+    message: "Opening AliExpress. Sign in if AliExpress asks you to." });
+  const tab = await chrome.tabs.create({ url: "https://www.aliexpress.com/p/order/index.html", active: true });
+  pending.tabId = tab.id;
+  await setAliExpressPending(pending);
+  return { success: true };
+}
+
+async function cancelAliExpressImport(payload) {
+  const pending = await getAliExpressPending();
+  if (!pending || pending.token !== payload?.token) return { success: true };
+  cancelledAliExpressTokens.add(pending.token);
+  try { await updateAliExpressLedger(pending, {}, "cancel"); }
+  finally { await clearAliExpressPending(); }
+  return { success: true };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.forwarded) return false;
+  let operation;
+  if (message?.action === "ledgerStartAliExpressImport") operation = startAliExpressImport(message.data, sender);
+  else if (message?.action === "ledgerCancelAliExpressImport") operation = cancelAliExpressImport(message.data);
+  else return false;
+  operation.then(sendResponse).catch(async (error) => {
+    const pending = await getAliExpressPending();
+    if (pending) await reportAliExpressFailure(pending, error);
+    await clearAliExpressPending();
+    sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const pending = await getAliExpressPending();
+  if (!pending || pending.tabId !== tabId || pending.started) return;
+  let parsedUrl;
+  try { parsedUrl = new URL(tab.url || ""); } catch { return; }
+  if (parsedUrl.hostname !== "aliexpress.com" && !parsedUrl.hostname.endsWith(".aliexpress.com")) return;
+  if (!parsedUrl.pathname.startsWith("/p/order/index.html")) {
+    await updateAliExpressLedger(pending, { status: "waiting_for_aliexpress", progress: 2,
+      message: "Sign in to AliExpress, then open My Orders to continue automatically." });
+    return;
+  }
+  pending.started = true;
+  await setAliExpressPending(pending);
+  try {
+    const content = await exportAliExpressOrders({
+      startDate: pending.startDate,
+      endDate: pending.endDate,
+      isCancelled: () => cancelledAliExpressTokens.has(pending.token),
+      onProgress: async (progress, message) => {
+        await updateAliExpressLedger(pending, { status: "scraping", progress, message });
+        await broadcast("ledgerAliExpressImportProgress", { progress, message });
+      },
+    });
+    await updateAliExpressLedger(pending, { status: "importing", progress: 96,
+      message: "AliExpress export complete. Adding new transactions to Ledger…" });
+    const result = await updateAliExpressLedger(pending, { content }, "complete");
+    await broadcast("ledgerAliExpressImportComplete", result);
+    await clearAliExpressPending();
+  } catch (error) {
+    if (!cancelledAliExpressTokens.has(pending.token)) await reportAliExpressFailure(pending, error);
+    await clearAliExpressPending();
+  } finally {
+    cancelledAliExpressTokens.delete(pending.token);
+  }
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const pending = await getAliExpressPending();
+  if (!pending || pending.tabId !== tabId) return;
+  cancelledAliExpressTokens.add(pending.token);
+  await reportAliExpressFailure(pending, new Error("The AliExpress tab was closed before import completed."));
+  await clearAliExpressPending();
 });

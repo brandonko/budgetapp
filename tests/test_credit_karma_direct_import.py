@@ -54,11 +54,11 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
             finally:
                 error.close()
 
-    def create_session(self) -> str:
+    def create_session(self, **options: bool) -> str:
         status, payload = self.request(
             "POST",
             "/api/creditkarma-import-sessions",
-            {"startDate": "2026-08-01", "endDate": "2026-08-31"},
+            {"startDate": "2026-08-01", "endDate": "2026-08-31", **options},
         )
         self.assertEqual(status, 201)
         self.assertEqual(payload["source"], "creditkarma")
@@ -87,6 +87,7 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
                     transaction("Same-day coffee", 4.5, "debit"),
                     transaction("Paycheck", 100, "credit"),
                     transaction("AMAZON MARKETPLACE", 12, "debit"),
+                    transaction("ALIPAY US", 8, "debit"),
                 ],
                 "netWorthHistory": [],
                 "investmentHistory": [],
@@ -117,6 +118,10 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
             result["import"]["sources"]["creditkarma"]["amazonTransactionsIgnored"],
             1,
         )
+        self.assertEqual(
+            result["import"]["sources"]["creditkarma"]["aliExpressTransactionsIgnored"],
+            1,
+        )
 
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -133,6 +138,19 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(duplicate["import"]["added"], 0)
         self.assertEqual(duplicate["import"]["duplicatesSkipped"], 3)
+
+    def test_filter_options_can_keep_amazon_and_alipay_transactions(self) -> None:
+        token = self.create_session(ignoreAmazon=False, ignoreAliExpress=False)
+        status, result = self.request(
+            "POST",
+            f"/api/creditkarma-import-sessions/{token}/complete",
+            {"content": self.export()},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["import"]["added"], 5)
+        descriptions = {row["description"] for row in result["import"]["transactions"]}
+        self.assertIn("AMAZON MARKETPLACE", descriptions)
+        self.assertIn("ALIPAY US", descriptions)
 
     def test_sessions_are_source_scoped_and_support_progress(self) -> None:
         token = self.create_session()

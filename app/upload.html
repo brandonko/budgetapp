@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Import Credit Karma and Amazon data into Ledger." />
+    <meta name="description" content="Import Credit Karma, Amazon, and AliExpress data into Ledger." />
     <title>Upload data — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/navigation.js" defer></script>
@@ -59,7 +59,7 @@
           <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
           <div>
             <strong id="extension-status">Checking for the companion extension…</strong>
-            <span>Required for Credit Karma and Amazon imports</span>
+            <span>Required for Credit Karma, Amazon, and AliExpress imports</span>
           </div>
         </div>
         <details class="extension-help" id="extension-help">
@@ -77,8 +77,8 @@
           <div class="amazon-direct-copy">
             <h2 id="creditkarma-direct-title">Credit Karma</h2>
             <p>
-              Imports account transactions, applies expense-oriented signs, and excludes Amazon
-              charges that will be itemized by the Amazon parser.
+              Imports account transactions and applies expense-oriented signs. Optional filters
+              prevent Amazon and AliExpress charges from duplicating itemized order rows.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -92,6 +92,17 @@
                 <input id="creditkarma-end-date" type="date" required />
               </label>
             </div>
+            <fieldset class="import-options">
+              <legend>Transaction filters</legend>
+              <label>
+                <input id="creditkarma-ignore-amazon" type="checkbox" checked />
+                <span>Ignore Amazon transactions</span>
+              </label>
+              <label>
+                <input id="creditkarma-ignore-aliexpress" type="checkbox" checked />
+                <span>Ignore AliExpress transactions <small>(matches Alipay)</small></span>
+              </label>
+            </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="creditkarma-import-button" type="button" disabled>
                 Import Credit Karma data <span aria-hidden="true">→</span>
@@ -146,6 +157,43 @@
             <p class="upload-error amazon-direct-error" id="amazon-direct-error" role="alert" hidden></p>
           </div>
         </section>
+
+        <section class="amazon-direct" aria-labelledby="aliexpress-direct-title">
+          <div class="amazon-direct-copy">
+            <h2 id="aliexpress-direct-title">AliExpress orders</h2>
+            <p>
+              Creates one transaction per order line and reconciles discounts, shipping, and tax
+              to the amount actually charged. Currently supports orders priced in USD.
+            </p>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label>
+                <span>Start date</span>
+                <input id="aliexpress-start-date" type="date" required />
+              </label>
+              <label>
+                <span>End date</span>
+                <input id="aliexpress-end-date" type="date" required />
+              </label>
+            </div>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="aliexpress-import-button" type="button" disabled>
+                Import AliExpress orders <span aria-hidden="true">→</span>
+              </button>
+              <button class="secondary-button" id="aliexpress-cancel-button" type="button" hidden>
+                Cancel import
+              </button>
+            </div>
+            <div class="amazon-progress" id="aliexpress-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track" aria-hidden="true">
+                <span id="aliexpress-progress-bar"></span>
+              </div>
+              <p id="aliexpress-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="aliexpress-direct-error" role="alert" hidden></p>
+          </div>
+        </section>
       </div>
 
       <section class="import-roadmap" aria-labelledby="import-roadmap-title">
@@ -159,10 +207,6 @@
         <div class="roadmap-grid">
           <article class="roadmap-item">
             <span>Venmo</span>
-            <small>Planned</small>
-          </article>
-          <article class="roadmap-item">
-            <span>AliExpress items</span>
             <small>Planned</small>
           </article>
           <article class="roadmap-item">

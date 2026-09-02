@@ -145,7 +145,7 @@ the transaction budget-visible again.
 The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Upload data** page.
 
-- Show one import card per supported source: `Credit Karma` and `Amazon`.
+- Show one import card per supported source: `Credit Karma`, `Amazon`, and `AliExpress`.
 - Do not show manual JSON file pickers or an exported-files section.
 - Keep source parsing and validation on the server boundary.
 - Report parsed, added, and duplicate-skipped counts after import.
@@ -156,12 +156,19 @@ ingestion belongs in the **Upload data** page.
   permanent deletion using the same safety language as the dashboard.
 - If the database is new and empty, the first valid import populates it.
 - Show a clearly noninteractive **Work in progress** section below supported
-  sources for Venmo, AliExpress items, eBay items, and Apple Card. Label Apple
+  sources for Venmo, eBay items, and Apple Card. Label Apple
   Card as likely requiring manual import rather than promising automation.
 
 ### Direct browser ingestion
 
-- Keep browser-authenticated Credit Karma and Amazon access in the companion
+- Keep companion-extension source integrations isolated under
+  `ledger_data_importer_extension/<source>_extension/`.
+- Keep only cross-source orchestration and the localhost page bridge under
+  `ledger_data_importer_extension/shared/`.
+- The root `_locales/` catalog is Amazon-specific but must remain at the
+  manifest root because Chrome requires that location.
+
+- Keep browser-authenticated Credit Karma, Amazon, and AliExpress access in the companion
   Chrome extension; the localhost application must never request, store, or
   transmit site passwords, access tokens, or cookies.
 - The Upload data page owns date selection, progress, cancellation, results,
@@ -185,6 +192,9 @@ ingestion belongs in the **Upload data** page.
 - Direct Credit Karma import must request the BudgetLens equivalent of **All
   transactions** for the user-selected date range. Only transaction data needed
   by Ledger is required; wealth histories can remain empty.
+- Credit Karma imports expose independent **Ignore Amazon transactions** and
+  **Ignore AliExpress transactions** checkboxes. Both default to enabled, and
+  the chosen values belong to that source-scoped import session.
 - Preserve identical same-day transactions. During browser extraction, collapse
   duplicates only when Credit Karma supplies the same stable transaction ID;
   final CSV deduplication remains occurrence-aware by date and amount.
@@ -193,6 +203,12 @@ ingestion belongs in the **Upload data** page.
   source unless that project adopts a compatible license.
 - Treat browser importing as Chrome-only. Private APIs, page markup, pagination,
   and sign-in behavior can change and should produce clear errors.
+- AliExpress import uses Chrome's existing AliExpress cookies to sign MTop requests.
+  Cookies and signing tokens must stay inside the extension and must never be sent
+  to Ledger or written to disk. Normalize only order and item data for the server.
+- Derive AliExpress request behavior from `nrbrook/AliExpress-Order-Export` under
+  its MIT license, retain its copyright/license notice, and keep the integration
+  isolated in `aliexpress_extension/`.
 
 ### Credit Karma parser
 
@@ -200,8 +216,11 @@ ingestion belongs in the **Upload data** page.
 - Convert debit transactions to positive amounts.
 - Convert credit transactions to negative amounts.
 - Preserve category and account metadata.
-- Ignore descriptions containing `amazon`, case-insensitively, because Amazon
-  orders provide item-level detail.
+- When its filter is enabled, ignore descriptions containing `amazon`,
+  case-insensitively.
+- When its filter is enabled, ignore AliExpress transactions by matching
+  `alipay` case-insensitively; also accept `aliexpress` and `ali express` as
+  defensive aliases.
 - When Credit Karma and Amazon files are uploaded together, infer the Amazon
   payment account from the most common ignored Amazon card transaction.
 

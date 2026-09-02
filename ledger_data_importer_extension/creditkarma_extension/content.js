@@ -1,5 +1,7 @@
 "use strict";
 
+// Credit Karma page integration for Ledger's authenticated transaction export.
+
 const LEDGER_CK_API = "https://api.creditkarma.com/graphql";
 const LEDGER_CK_CLIENT_VERSION = "2.0.8";
 const LEDGER_CK_HUB_HASH = "f669c7e42eb464861cb77d9f27826d0847ddfb5f5079a6ab7e5e2470c9617db8";

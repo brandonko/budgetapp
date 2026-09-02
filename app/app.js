@@ -658,6 +658,7 @@ function renderDashboard() {
 
 function setError(message, code = "") {
   const fileMissing = code === "transaction_file_missing";
+  elements.errorState.classList.toggle("error-state--setup", fileMissing);
   elements.errorEyebrow.textContent = fileMissing ? "Set up Ledger" : "Unable to load data";
   elements.errorTitle.textContent = fileMissing ? "Create your transaction file." : "Something went wrong.";
   elements.errorMessage.textContent = message;
@@ -670,6 +671,7 @@ function setError(message, code = "") {
 }
 
 function clearError() {
+  elements.errorState.classList.remove("error-state--setup");
   elements.errorState.hidden = true;
   elements.dashboardSections.forEach((section) => {
     section.hidden = false;

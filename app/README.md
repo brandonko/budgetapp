@@ -12,7 +12,7 @@ python app\server.py
 
 Then visit <http://127.0.0.1:8000>.
 
-Use **Upload data** to import Credit Karma transactions or Amazon order history
+Use **Upload data** to import Credit Karma transactions, Amazon order history, or AliExpress orders
 through the companion Chrome extension. Transactions can also be added,
 edited, and deleted from the dashboard.
 
@@ -24,10 +24,10 @@ monthly net chart with green surpluses and red deficits.
 Use the top-right navigation menu to move between the dashboard, Upload data,
 and Settings. Settings is currently a placeholder for future preferences.
 
-For direct Credit Karma and Amazon workflows, load `ledger_data_importer_extension`
+For direct Credit Karma, Amazon, and AliExpress workflows, load `ledger_data_importer_extension`
 as an unpacked Chrome extension, reload the Upload data page, select a date
 range, and choose the matching import action. Credit Karma uses a BudgetLens
-bundle with all transactions; Amazon creates item-level rows. Completed imports
+bundle with all transactions; Amazon and AliExpress create item-level rows. Completed imports
 open a review modal where every new row can be edited or deleted immediately.
 
 Use a different CSV or port when needed:

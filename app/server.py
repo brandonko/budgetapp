@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
-from importers import ImportDataError, parse_amazon, parse_credit_karma
+from importers import ImportDataError, parse_aliexpress, parse_amazon, parse_credit_karma
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -57,8 +57,19 @@ CREDIT_KARMA_IMPORT_SESSION_PATH = re.compile(
 CREDIT_KARMA_IMPORT_ACTION_PATH = re.compile(
     r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
 )
+ALIEXPRESS_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/aliexpress-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+ALIEXPRESS_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/aliexpress-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+)
 AMAZON_IMPORT_SESSION_TTL_SECONDS = 60 * 60
 TERMINAL_IMPORT_STATUSES = {"complete", "error", "cancelled"}
+IMPORT_SOURCE_LABELS = {
+    "amazon": "Amazon",
+    "creditkarma": "Credit Karma",
+    "aliexpress": "AliExpress",
+}
 STATIC_FILES = {
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
@@ -373,6 +384,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 credit_karma_session_match.group(1), source="creditkarma"
             )
             return
+        aliexpress_session_match = ALIEXPRESS_IMPORT_SESSION_PATH.fullmatch(path)
+        if aliexpress_session_match is not None:
+            self.get_amazon_import_session(
+                aliexpress_session_match.group(1), source="aliexpress"
+            )
+            return
         if path in STATIC_FILES:
             self.send_static_file(STATIC_FILES[path])
             return
@@ -390,6 +407,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.create_amazon_import_session()
         elif path == "/api/creditkarma-import-sessions":
             self.create_amazon_import_session(source="creditkarma")
+        elif path == "/api/aliexpress-import-sessions":
+            self.create_amazon_import_session(source="aliexpress")
         else:
             action_match = AMAZON_IMPORT_ACTION_PATH.fullmatch(path)
             if action_match is not None:
@@ -403,6 +422,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     credit_karma_action_match.group(1),
                     credit_karma_action_match.group(2),
                     source="creditkarma",
+                )
+                return
+            aliexpress_action_match = ALIEXPRESS_IMPORT_ACTION_PATH.fullmatch(path)
+            if aliexpress_action_match is not None:
+                self.update_amazon_import_session(
+                    aliexpress_action_match.group(1),
+                    aliexpress_action_match.group(2),
+                    source="aliexpress",
                 )
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -467,6 +494,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         }
         if "import" in session:
             response["import"] = session["import"]
+        if session.get("source") == "creditkarma":
+            response["ignoreAmazon"] = session.get("ignoreAmazon", True)
+            response["ignoreAliExpress"] = session.get("ignoreAliExpress", True)
         return response
 
     def create_amazon_import_session(self, source: str = "amazon") -> None:
@@ -484,19 +514,32 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             if start_date > end_date:
                 raise CsvDataError("startDate cannot be after endDate")
 
+            ignore_amazon = payload.get("ignoreAmazon", True)
+            ignore_aliexpress = payload.get("ignoreAliExpress", True)
+            if source == "creditkarma" and (
+                not isinstance(ignore_amazon, bool) or not isinstance(ignore_aliexpress, bool)
+            ):
+                raise CsvDataError("Credit Karma ignore options must be true or false")
+
             self.prune_amazon_import_sessions()
             token = secrets.token_urlsafe(32)
             now = time.time()
+            source_label = IMPORT_SOURCE_LABELS.get(source, source)
             session: dict[str, Any] = {
                 "source": source,
                 "status": "waiting_for_extension",
                 "progress": 0,
-                "message": f"Waiting for the {'Credit Karma' if source == 'creditkarma' else 'Amazon'} importer extension.",
+                "message": f"Waiting for the {source_label} importer extension.",
                 "startDate": start_date.isoformat(),
                 "endDate": end_date.isoformat(),
                 "createdAt": now,
                 "updatedAt": now,
             }
+            if source == "creditkarma":
+                session.update(
+                    ignoreAmazon=ignore_amazon,
+                    ignoreAliExpress=ignore_aliexpress,
+                )
             with self.amazon_import_lock:
                 self.amazon_import_sessions[token] = session
             response = self.public_amazon_import_session(session)
@@ -544,10 +587,11 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 if session is None:
                     raise CsvDataError("Import session expired.")
                 if action == "cancel":
+                    source_label = IMPORT_SOURCE_LABELS.get(source, source)
                     session.update(
                         status="cancelled",
                         progress=session["progress"],
-                        message=f"{'Credit Karma' if source == 'creditkarma' else 'Amazon'} import cancelled.",
+                        message=f"{source_label} import cancelled.",
                         updatedAt=now,
                     )
                 else:
@@ -561,13 +605,15 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "opening_amazon",
                         "waiting_for_credit_karma",
                         "opening_credit_karma",
+                        "waiting_for_aliexpress",
+                        "opening_aliexpress",
                         "scraping",
                         "importing",
                         "error",
                     }
                     if raw_status not in allowed_statuses:
                         raise CsvDataError("unsupported import status")
-                    source_label = "Credit Karma" if source == "creditkarma" else "Amazon"
+                    source_label = IMPORT_SOURCE_LABELS.get(source, source)
                     raw_message = payload.get("message", f"Importing {source_label} transactions.")
                     if not isinstance(raw_message, str) or not raw_message.strip():
                         raise CsvDataError("message cannot be blank")
@@ -587,13 +633,24 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         content = payload.get("content")
         if not isinstance(content, str) or not content.strip():
-            source_label = "Credit Karma" if source == "creditkarma" else "Amazon"
+            source_label = IMPORT_SOURCE_LABELS.get(source, source)
             raise CsvDataError(f"{source_label} export content is required")
 
         try:
             if source == "creditkarma":
-                credit_karma = parse_credit_karma(content)
+                with self.amazon_import_lock:
+                    session = self.amazon_import_sessions.get(token, {})
+                    ignore_amazon = session.get("ignoreAmazon", True)
+                    ignore_aliexpress = session.get("ignoreAliExpress", True)
+                credit_karma = parse_credit_karma(
+                    content,
+                    ignore_amazon=ignore_amazon,
+                    ignore_aliexpress=ignore_aliexpress,
+                )
                 parsed_transactions = credit_karma.transactions
+            elif source == "aliexpress":
+                credit_karma = None
+                parsed_transactions = parse_aliexpress(content)
             else:
                 credit_karma = None
                 parsed_transactions = parse_amazon(content)
@@ -625,12 +682,16 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 result["sources"][source]["amazonTransactionsIgnored"] = (
                     credit_karma.ignored_amazon_count
                 )
+                result["sources"][source]["aliExpressTransactionsIgnored"] = (
+                    credit_karma.ignored_aliexpress_count
+                )
+            source_label = IMPORT_SOURCE_LABELS.get(source, source)
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions[token]
                 session.update(
                     status="complete",
                     progress=100,
-                    message=f"Imported {len(additions)} new {'Credit Karma' if source == 'creditkarma' else 'Amazon'} transactions.",
+                    message=f"Imported {len(additions)} new {source_label} transactions.",
                     updatedAt=time.time(),
                     **{"import": result},
                 )

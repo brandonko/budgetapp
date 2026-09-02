@@ -2,17 +2,24 @@
 
 const state = {
   extensionReady: false,
+  extensionVersion: "",
+  aliExpressExtensionReady: false,
   amazonSessionToken: "",
   amazonPollTimer: null,
   creditKarmaSessionToken: "",
   creditKarmaPollTimer: null,
+  aliExpressSessionToken: "",
+  aliExpressPollTimer: null,
+  aliExpressStartedAt: 0,
   revision: "",
   importedTransactions: [],
   editingImportedIndex: null,
   editBusy: false,
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress" };
+const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
+const extensionMessageSources = new Set(["ledger-data-importer", "ledger-amazon-extension"]);
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -37,12 +44,22 @@ const elements = {
   extensionHelp: document.querySelector("#extension-help"),
   creditKarmaStartDate: document.querySelector("#creditkarma-start-date"),
   creditKarmaEndDate: document.querySelector("#creditkarma-end-date"),
+  creditKarmaIgnoreAmazon: document.querySelector("#creditkarma-ignore-amazon"),
+  creditKarmaIgnoreAliExpress: document.querySelector("#creditkarma-ignore-aliexpress"),
   creditKarmaImportButton: document.querySelector("#creditkarma-import-button"),
   creditKarmaCancelButton: document.querySelector("#creditkarma-cancel-button"),
   creditKarmaProgress: document.querySelector("#creditkarma-progress"),
   creditKarmaProgressBar: document.querySelector("#creditkarma-progress-bar"),
   creditKarmaProgressMessage: document.querySelector("#creditkarma-progress-message"),
   creditKarmaDirectError: document.querySelector("#creditkarma-direct-error"),
+  aliExpressStartDate: document.querySelector("#aliexpress-start-date"),
+  aliExpressEndDate: document.querySelector("#aliexpress-end-date"),
+  aliExpressImportButton: document.querySelector("#aliexpress-import-button"),
+  aliExpressCancelButton: document.querySelector("#aliexpress-cancel-button"),
+  aliExpressProgress: document.querySelector("#aliexpress-progress"),
+  aliExpressProgressBar: document.querySelector("#aliexpress-progress-bar"),
+  aliExpressProgressMessage: document.querySelector("#aliexpress-progress-message"),
+  aliExpressDirectError: document.querySelector("#aliexpress-direct-error"),
   reviewDialog: document.querySelector("#import-review-dialog"),
   reviewSubtitle: document.querySelector("#import-review-subtitle"),
   reviewList: document.querySelector("#import-review-list"),
@@ -76,18 +93,46 @@ function initializeDirectImportDates() {
   elements.creditKarmaEndDate.value = todayIso;
   elements.creditKarmaStartDate.max = todayIso;
   elements.creditKarmaEndDate.max = todayIso;
+  elements.aliExpressStartDate.value = localIsoDate(lookbackStart);
+  elements.aliExpressEndDate.value = todayIso;
+  elements.aliExpressStartDate.max = todayIso;
+  elements.aliExpressEndDate.max = todayIso;
 }
 
-function setExtensionReady(ready) {
+function versionAtLeast(version, minimum) {
+  const actual = String(version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const required = minimum.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < Math.max(actual.length, required.length); index += 1) {
+    if ((actual[index] || 0) !== (required[index] || 0)) {
+      return (actual[index] || 0) > (required[index] || 0);
+    }
+  }
+  return true;
+}
+
+function setExtensionReady(ready, version = "") {
   state.extensionReady = ready;
+  state.extensionVersion = ready ? version : "";
+  state.aliExpressExtensionReady =
+    ready && versionAtLeast(version, MIN_ALIEXPRESS_EXTENSION_VERSION);
   elements.extensionDot.classList.toggle("extension-dot--ready", ready);
   elements.extensionStatus.textContent = ready
-    ? "Companion extension connected"
+    ? `Companion extension connected · v${version || "unknown"}`
     : "Companion extension not detected";
   elements.extensionHelp.open = !ready;
   elements.amazonImportButton.disabled = !ready || Boolean(state.amazonSessionToken);
   elements.creditKarmaImportButton.disabled =
     !ready || Boolean(state.creditKarmaSessionToken);
+  elements.aliExpressImportButton.disabled =
+    !state.aliExpressExtensionReady || Boolean(state.aliExpressSessionToken);
+  if (ready && !state.aliExpressExtensionReady) {
+    elements.aliExpressDirectError.textContent =
+      `AliExpress requires companion extension ${MIN_ALIEXPRESS_EXTENSION_VERSION} or newer. ` +
+      "Open chrome://extensions, reload Ledger Data Importer, then reload this page.";
+    elements.aliExpressDirectError.hidden = false;
+  } else if (!state.aliExpressSessionToken) {
+    clearAliExpressError();
+  }
 }
 
 function renderAmazonProgress(progress, message, status = "scraping") {
@@ -290,6 +335,8 @@ async function startCreditKarmaImport() {
   clearCreditKarmaError();
   const startDate = elements.creditKarmaStartDate.value;
   const endDate = elements.creditKarmaEndDate.value;
+  const ignoreAmazon = elements.creditKarmaIgnoreAmazon.checked;
+  const ignoreAliExpress = elements.creditKarmaIgnoreAliExpress.checked;
   if (!startDate || !endDate) {
     showCreditKarmaError("Choose both a start date and an end date.");
     return;
@@ -309,7 +356,7 @@ async function startCreditKarmaImport() {
     const response = await fetch("/api/creditkarma-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate }),
+      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -357,6 +404,131 @@ async function cancelCreditKarmaImport() {
   } finally {
     renderCreditKarmaProgress(0, "Credit Karma import cancelled.", "cancelled");
     finishCreditKarmaSession();
+  }
+}
+
+function renderAliExpressProgress(progress, message, status = "scraping") {
+  const boundedProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  elements.aliExpressProgress.hidden = false;
+  elements.aliExpressProgressBar.style.width = `${boundedProgress}%`;
+  elements.aliExpressProgressMessage.textContent = message;
+  elements.aliExpressProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showAliExpressError(message) {
+  elements.aliExpressDirectError.textContent = message;
+  elements.aliExpressDirectError.hidden = false;
+  renderAliExpressProgress(0, "AliExpress import could not continue.", "error");
+}
+
+function clearAliExpressError() {
+  elements.aliExpressDirectError.textContent = "";
+  elements.aliExpressDirectError.hidden = true;
+}
+
+function finishAliExpressSession() {
+  if (state.aliExpressPollTimer !== null) window.clearTimeout(state.aliExpressPollTimer);
+  state.aliExpressPollTimer = null;
+  state.aliExpressSessionToken = "";
+  state.aliExpressStartedAt = 0;
+  elements.aliExpressImportButton.disabled = !state.aliExpressExtensionReady;
+  elements.aliExpressCancelButton.hidden = true;
+}
+
+async function pollAliExpressSession() {
+  if (!state.aliExpressSessionToken) return;
+  try {
+    const response = await fetch(
+      `/api/aliexpress-import-sessions/${encodeURIComponent(state.aliExpressSessionToken)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `AliExpress import status failed (${response.status}).`);
+    if (
+      payload.status === "waiting_for_extension" &&
+      Date.now() - state.aliExpressStartedAt > 10000
+    ) {
+      throw new Error(
+        "The companion extension did not accept the AliExpress import. Open chrome://extensions, " +
+        "reload Ledger Data Importer, then reload this page and try again.",
+      );
+    }
+    renderAliExpressProgress(payload.progress, payload.message, payload.status);
+    if (payload.status === "complete") {
+      renderResult(payload.import);
+      finishAliExpressSession();
+      return;
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      if (payload.status === "error") showAliExpressError(payload.message);
+      finishAliExpressSession();
+      return;
+    }
+    state.aliExpressPollTimer = window.setTimeout(pollAliExpressSession, 1200);
+  } catch (error) {
+    const token = state.aliExpressSessionToken;
+    if (token) {
+      fetch(`/api/aliexpress-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+    }
+    showAliExpressError(error instanceof Error ? error.message : "AliExpress import status is unavailable.");
+    finishAliExpressSession();
+  }
+}
+
+async function startAliExpressImport() {
+  clearAliExpressError();
+  const startDate = elements.aliExpressStartDate.value;
+  const endDate = elements.aliExpressEndDate.value;
+  if (!startDate || !endDate) return showAliExpressError("Choose both a start date and an end date.");
+  if (startDate > endDate) return showAliExpressError("The AliExpress start date cannot be after the end date.");
+  if (!state.aliExpressExtensionReady) {
+    return showAliExpressError(
+      `Reload companion extension ${MIN_ALIEXPRESS_EXTENSION_VERSION} from chrome://extensions, then reload this page.`,
+    );
+  }
+
+  elements.aliExpressImportButton.disabled = true;
+  renderAliExpressProgress(0, "Creating a secure import session…", "waiting_for_extension");
+  try {
+    const response = await fetch("/api/aliexpress-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not start the AliExpress import (${response.status}).`);
+    state.aliExpressSessionToken = payload.token;
+    state.aliExpressStartedAt = Date.now();
+    elements.aliExpressCancelButton.hidden = false;
+    window.postMessage({
+      source: "ledger-web-app",
+      action: "startAliExpressImport",
+      payload: { token: payload.token, startDate, endDate, ledgerOrigin: window.location.origin },
+    }, window.location.origin);
+    renderAliExpressProgress(1, "Opening AliExpress orders…", "opening_aliexpress");
+    pollAliExpressSession();
+  } catch (error) {
+    showAliExpressError(error instanceof Error ? error.message : "Could not start the AliExpress import.");
+    finishAliExpressSession();
+  }
+}
+
+async function cancelAliExpressImport() {
+  const token = state.aliExpressSessionToken;
+  if (!token) return;
+  window.postMessage(
+    { source: "ledger-web-app", action: "cancelAliExpressImport", payload: { token } },
+    window.location.origin,
+  );
+  try {
+    await fetch(`/api/aliexpress-import-sessions/${encodeURIComponent(token)}/cancel`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  } finally {
+    renderAliExpressProgress(0, "AliExpress import cancelled.", "cancelled");
+    finishAliExpressSession();
   }
 }
 
@@ -605,6 +777,8 @@ elements.amazonImportButton.addEventListener("click", startAmazonImport);
 elements.amazonCancelButton.addEventListener("click", cancelAmazonImport);
 elements.creditKarmaImportButton.addEventListener("click", startCreditKarmaImport);
 elements.creditKarmaCancelButton.addEventListener("click", cancelCreditKarmaImport);
+elements.aliExpressImportButton.addEventListener("click", startAliExpressImport);
+elements.aliExpressCancelButton.addEventListener("click", cancelAliExpressImport);
 elements.closeReview.addEventListener("click", () => elements.reviewDialog.close());
 elements.reviewDialog.addEventListener("click", (event) => {
   if (event.target === elements.reviewDialog) elements.reviewDialog.close();
@@ -625,12 +799,12 @@ window.addEventListener("message", (event) => {
   if (
     event.source !== window ||
     event.origin !== window.location.origin ||
-    event.data?.source !== "ledger-amazon-extension"
+    !extensionMessageSources.has(event.data?.source)
   ) {
     return;
   }
   if (event.data.action === "ready") {
-    setExtensionReady(true);
+    setExtensionReady(true, event.data.payload?.version || "");
   } else if (event.data.action === "progress" && state.amazonSessionToken) {
     const { progress, message, status } = event.data.payload ?? {};
     renderAmazonProgress(progress, message || "Importing Amazon orders…", status);
@@ -664,6 +838,18 @@ window.addEventListener("message", (event) => {
         body: "{}",
       }).catch(() => {});
       finishCreditKarmaSession();
+    }
+  } else if (event.data.action === "aliExpressProgress" && state.aliExpressSessionToken) {
+    const { progress, message, status } = event.data.payload ?? {};
+    renderAliExpressProgress(progress, message || "Importing AliExpress orders…", status);
+  } else if (event.data.action === "aliExpressError") {
+    showAliExpressError(event.data.payload?.message || "The AliExpress importer extension reported an error.");
+    if (state.aliExpressSessionToken) {
+      const token = state.aliExpressSessionToken;
+      fetch(`/api/aliexpress-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(() => {});
+      finishAliExpressSession();
     }
   }
 });

@@ -1,7 +1,7 @@
 # Ledger
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
-It imports Credit Karma transactions and Amazon order history, avoids duplicate
+It imports Credit Karma transactions plus Amazon and AliExpress order history, avoids duplicate
 imports, and provides monthly and annual summaries with editable transaction
 details.
 
@@ -13,8 +13,7 @@ The dashboard includes:
 - Monthly/annual view selection with independent year and month controls
 - A shared navigation menu for the dashboard, data imports, and settings
 - Manual transaction creation, editing, and permanent deletion
-- In-app Credit Karma and Amazon browser imports
-- Direct Credit Karma and Amazon imports through a companion Chrome extension
+- Direct Credit Karma, Amazon, and AliExpress imports through a companion Chrome extension
 - One-to-one reconciliation of credit-card bill-payment transfers
 - Neutral spending presentation with green surpluses and red deficits
 
@@ -57,20 +56,24 @@ repository's `.gitignore` excludes both `raw_data_files/` and
 `processed_data_files/`.
 
 With Ledger running, open <http://127.0.0.1:8000/upload> or select **Upload
-data** from the dashboard. The page supports two sources:
+data** from the dashboard. The page supports three sources:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
-  amounts. Amazon card transactions are omitted so they can be replaced by
-  itemized Amazon rows.
+  amounts. Its two default-enabled filters omit Amazon and AliExpress/Alipay
+  transactions so they can be replaced by itemized order rows. Either filter
+  can be disabled for an individual import.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
   tax multiplier. When Credit Karma metadata is available in the same import,
   it supplies the Amazon payment account. Otherwise, unknown account fields
   default to `Amazon`.
+- **AliExpress orders** creates one transaction per order line and proportionally
+  reconciles item prices to the final order total, preserving discounts, shipping,
+  and tax. The current integration accepts USD orders.
 
 ### Companion browser extension
 
 The Upload data page supports selecting a date range and importing from an
-authenticated Credit Karma or Amazon tab without first saving a JSON file. This
+authenticated Credit Karma, Amazon, or AliExpress session without first saving a JSON file. This
 requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
@@ -78,28 +81,27 @@ requires a one-time installation of the unpacked Chrome companion extension:
 3. Select the repository's `ledger_data_importer_extension` directory.
 4. Reload <http://127.0.0.1:8000/upload>. The page should report **Companion
    extension connected**.
-5. Choose a start and end date, then select **Import Credit Karma data** or
-   **Import Amazon orders**.
+5. Choose a start and end date, then select the import action for that source.
 
 The Credit Karma action opens its Transactions page, collects **All
 transactions** for the range in the BudgetLens bundle shape, and sends it to the
-normal Credit Karma parser. The Amazon action opens order history and collects
-item details. Both use the browser's existing signed-in session; Ledger never
+normal Credit Karma parser. The Amazon and AliExpress actions open order history and collect
+item details. All three use the browser's existing signed-in session; Ledger never
 receives site credentials or cookies. Progress is shown on the Upload data
 page, and data is sent through a random, one-hour import session rather than
 being left in Downloads. When an import finishes, Ledger opens a review modal
 containing only the newly created transactions. Every field can be corrected
 there, or a row can be permanently deleted after confirmation.
 
-Credit Karma can change its private GraphQL contract, and Amazon can change its
-order-history markup or present login/CAPTCHA challenges. Closing an active
+Credit Karma and AliExpress can change their private APIs, and Amazon can change its
+order-history markup. Any source can present login/CAPTCHA challenges. Closing an active
 source tab cancels that import. See
 [`ledger_data_importer_extension/README.md`](ledger_data_importer_extension/README.md)
 for implementation and attribution details.
 
 ### Planned sources
 
-The import page identifies Venmo, AliExpress item history, and eBay item history
+The import page identifies Venmo and eBay item history
 as planned integrations. Apple Card support is also being explored, but may
 require a manual import workflow because browser automation may not be viable.
 
@@ -186,13 +188,19 @@ transactions**, where they can still be edited or deleted.
 
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
-app/importers.py    Credit Karma and Amazon source parsers
+app/importers.py    Credit Karma, Amazon, and AliExpress source parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
 app/settings.html  Settings placeholder and future preferences entry point
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
+  amazon_extension/ Amazon-specific scraper and popup
+  creditkarma_extension/
+                    Credit Karma-specific collector
+  aliexpress_extension/
+                    AliExpress signed API client
+  shared/           Ledger bridge and import coordinator
 tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)
 processed_data_files/

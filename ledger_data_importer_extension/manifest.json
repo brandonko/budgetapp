@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Ledger Data Importer",
-  "version": "0.2.0",
-  "description": "Import Amazon and Credit Karma data directly into a local Ledger instance.",
+  "version": "0.4.1",
+  "description": "Import Amazon, AliExpress, and Credit Karma data directly into a local Ledger instance.",
   "default_locale": "en",
   "icons": {
-    "48": "icons/icon-48.png",
-    "96": "icons/icon-96.png",
-    "128": "icons/icon-128.png"
+    "48": "amazon_extension/icons/icon-48.png",
+    "96": "amazon_extension/icons/icon-96.png",
+    "128": "amazon_extension/icons/icon-128.png"
   },
-  "permissions": ["activeTab", "downloads", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "cookies", "downloads", "scripting", "storage", "tabs"],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.amazon.co.uk/*",
@@ -26,16 +26,17 @@
     "*://*.amazon.com.mx/*",
     "*://*.amazon.com.be/*",
     "*://*.creditkarma.com/*",
+    "*://*.aliexpress.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "action": {
     "default_icon": {
-      "48": "icons/icon-48.png",
-      "96": "icons/icon-96.png"
+      "48": "amazon_extension/icons/icon-48.png",
+      "96": "amazon_extension/icons/icon-96.png"
     },
     "default_title": "Ledger Data Importer",
-    "default_popup": "popup/popup.html"
+    "default_popup": "amazon_extension/popup/popup.html"
   },
   "content_scripts": [
     {
@@ -83,22 +84,22 @@
         "*://*.amazon.com.be/*gp/css/order-history*",
         "*://*.amazon.com.be/*your-orders*"
       ],
-      "js": ["content/content.js"],
+      "js": ["amazon_extension/content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://www.creditkarma.com/*"],
-      "js": ["creditkarma/content.js"],
+      "js": ["creditkarma_extension/content.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["http://127.0.0.1/upload*", "http://localhost/upload*"],
-      "js": ["bridge/bridge.js"],
+      "js": ["shared/ledger_bridge.js"],
       "run_at": "document_idle"
     }
   ],
   "background": {
-    "service_worker": "background/background.js",
+    "service_worker": "shared/import_coordinator.js",
     "type": "module"
   }
 }
