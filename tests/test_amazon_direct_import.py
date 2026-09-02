@@ -91,6 +91,17 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(first["status"], "complete")
         self.assertEqual(first["import"]["added"], 2)
+        self.assertEqual(len(first["import"]["transactions"]), 2)
+        self.assertEqual(
+            {transaction["description"] for transaction in first["import"]["transactions"]},
+            {"First item", "Second item"},
+        )
+        self.assertTrue(
+            all(
+                isinstance(transaction["_id"], int)
+                for transaction in first["import"]["transactions"]
+            )
+        )
 
         second_token = self.create_session()
         status, second = self.request(
@@ -101,12 +112,31 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(second["import"]["added"], 0)
         self.assertEqual(second["import"]["duplicatesSkipped"], 2)
+        self.assertEqual(second["import"]["transactions"], [])
 
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 2)
         self.assertEqual(set(rows[0]), set(COLUMNS))
         self.assertEqual([row["amount"] for row in rows], ["11.05", "11.05"])
+
+        created = first["import"]["transactions"][0]
+        edited = {column: created[column] for column in COLUMNS}
+        edited["description"] = "Reviewed imported item"
+        edited["category"] = "Household"
+        status, updated = self.request(
+            "PUT",
+            f"/api/transactions/{created['_id']}",
+            {"revision": second["import"]["revision"], "transaction": edited},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(
+            any(
+                transaction["description"] == "Reviewed imported item"
+                and transaction["category"] == "Household"
+                for transaction in updated["transactions"]
+            )
+        )
 
     def test_progress_cancel_and_terminal_updates_are_idempotent(self) -> None:
         token = self.create_session()

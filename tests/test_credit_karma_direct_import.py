@@ -105,6 +105,14 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["import"]["added"], 3)
+        self.assertEqual(len(result["import"]["transactions"]), 3)
+        self.assertEqual(
+            [transaction["date"] for transaction in result["import"]["transactions"]],
+            sorted(
+                [transaction["date"] for transaction in result["import"]["transactions"]],
+                reverse=True,
+            ),
+        )
         self.assertEqual(
             result["import"]["sources"]["creditkarma"]["amazonTransactionsIgnored"],
             1,

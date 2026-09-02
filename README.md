@@ -84,7 +84,9 @@ normal Credit Karma parser. The Amazon action opens order history and collects
 item details. Both use the browser's existing signed-in session; Ledger never
 receives site credentials or cookies. Progress is shown on the Upload data
 page, and data is sent through a random, one-hour import session rather than
-being left in Downloads.
+being left in Downloads. When an import finishes, Ledger opens a review modal
+containing only the newly created transactions. Every field can be corrected
+there, or a row can be permanently deleted after confirmation.
 
 Credit Karma can change its private GraphQL contract, and Amazon can change its
 order-history markup or present login/CAPTCHA challenges. Closing an active

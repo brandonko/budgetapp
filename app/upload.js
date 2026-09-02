@@ -6,9 +6,18 @@ const state = {
   amazonPollTimer: null,
   creditKarmaSessionToken: "",
   creditKarmaPollTimer: null,
+  revision: "",
+  importedTransactions: [],
+  editingImportedIndex: null,
+  editBusy: false,
 };
 
 const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon" };
+const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  timeZone: "UTC",
+});
 
 const elements = {
   result: document.querySelector("#import-result"),
@@ -34,6 +43,17 @@ const elements = {
   creditKarmaProgressBar: document.querySelector("#creditkarma-progress-bar"),
   creditKarmaProgressMessage: document.querySelector("#creditkarma-progress-message"),
   creditKarmaDirectError: document.querySelector("#creditkarma-direct-error"),
+  reviewDialog: document.querySelector("#import-review-dialog"),
+  reviewSubtitle: document.querySelector("#import-review-subtitle"),
+  reviewList: document.querySelector("#import-review-list"),
+  closeReview: document.querySelector("#close-import-review"),
+  editDialog: document.querySelector("#import-edit-dialog"),
+  editForm: document.querySelector("#import-edit-form"),
+  editError: document.querySelector("#import-edit-error"),
+  closeEdit: document.querySelector("#close-import-edit"),
+  cancelEdit: document.querySelector("#cancel-import-edit"),
+  deleteImported: document.querySelector("#delete-imported-transaction"),
+  saveEdit: document.querySelector("#save-import-edit"),
 };
 
 function localIsoDate(value) {
@@ -340,6 +360,219 @@ async function cancelCreditKarmaImport() {
   }
 }
 
+function importedTransactionKey(transaction) {
+  return JSON.stringify([
+    transaction.date,
+    transaction.description,
+    Number(transaction.amount).toFixed(2),
+    transaction.category,
+    transaction.accountName,
+    transaction.accountType,
+    transaction.provider,
+  ]);
+}
+
+function remapImportedTransactions(currentTransactions) {
+  const matchesByKey = new Map();
+  for (const transaction of currentTransactions) {
+    const key = importedTransactionKey(transaction);
+    if (!matchesByKey.has(key)) matchesByKey.set(key, []);
+    matchesByKey.get(key).push(transaction);
+  }
+  state.importedTransactions = state.importedTransactions.flatMap((transaction) => {
+    const matches = matchesByKey.get(importedTransactionKey(transaction));
+    return matches?.length ? [matches.shift()] : [];
+  });
+}
+
+function createImportedTransactionRow(transaction, index) {
+  const row = document.createElement("article");
+  row.className = "transaction-row";
+
+  const parsedDate = new Date(`${transaction.date}T12:00:00Z`);
+  const dateElement = document.createElement("time");
+  dateElement.className = "transaction-date";
+  dateElement.dateTime = transaction.date;
+  const month = document.createTextNode(shortMonthFormatter.format(parsedDate));
+  const day = document.createElement("strong");
+  day.textContent = parsedDate.getUTCDate();
+  dateElement.append(month, day);
+
+  const description = document.createElement("div");
+  description.className = "transaction-description";
+  const title = document.createElement("strong");
+  title.textContent = transaction.description;
+  title.title = transaction.description;
+  const metadata = document.createElement("span");
+  metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
+  description.append(title, metadata);
+
+  const actions = document.createElement("div");
+  actions.className = "transaction-actions";
+  const amount = document.createElement("span");
+  amount.className = "transaction-amount";
+  const income = transaction.category.trim().toLocaleLowerCase() === "income";
+  amount.classList.toggle("is-credit", Number(transaction.amount) < 0 || income);
+  amount.textContent = currency.format(income ? Math.abs(transaction.amount) : transaction.amount);
+  const editButton = document.createElement("button");
+  editButton.className = "edit-button";
+  editButton.type = "button";
+  editButton.textContent = "Edit";
+  editButton.setAttribute("aria-label", `Edit ${transaction.description}`);
+  editButton.addEventListener("click", () => openImportedTransactionEditor(index));
+  actions.append(amount, editButton);
+
+  row.append(dateElement, description, actions);
+  return row;
+}
+
+function renderImportedTransactions() {
+  const count = state.importedTransactions.length;
+  elements.reviewSubtitle.textContent = `${count} new ${count === 1 ? "transaction" : "transactions"} created · Review and adjust before continuing`;
+  if (count === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-import-review";
+    empty.textContent = "No new transactions were created. Everything in this import already existed.";
+    elements.reviewList.replaceChildren(empty);
+    return;
+  }
+  elements.reviewList.replaceChildren(
+    ...state.importedTransactions.map(createImportedTransactionRow),
+  );
+}
+
+function editField(name) {
+  return elements.editForm.elements.namedItem(name);
+}
+
+function showEditError(message) {
+  elements.editError.textContent = message;
+  elements.editError.hidden = false;
+}
+
+function clearEditError() {
+  elements.editError.textContent = "";
+  elements.editError.hidden = true;
+}
+
+function setEditBusy(busy) {
+  state.editBusy = busy;
+  elements.editForm.querySelectorAll("button, input").forEach((control) => {
+    control.disabled = busy;
+  });
+  elements.saveEdit.textContent = busy ? "Saving…" : "Save transaction";
+}
+
+function openImportedTransactionEditor(index) {
+  const transaction = state.importedTransactions[index];
+  if (!transaction) return;
+  state.editingImportedIndex = index;
+  clearEditError();
+  elements.editForm.reset();
+  for (const field of [
+    "date",
+    "description",
+    "amount",
+    "category",
+    "accountName",
+    "accountType",
+    "provider",
+  ]) {
+    editField(field).value = transaction[field];
+  }
+  if (elements.reviewDialog.open) elements.reviewDialog.close();
+  elements.editDialog.showModal();
+  editField("description").focus();
+}
+
+function closeImportedTransactionEditor() {
+  if (state.editBusy) return;
+  elements.editDialog.close();
+  elements.reviewDialog.showModal();
+}
+
+function transactionFromEditForm() {
+  const formData = new FormData(elements.editForm);
+  return {
+    date: formData.get("date"),
+    description: formData.get("description"),
+    amount: formData.get("amount"),
+    category: formData.get("category"),
+    accountName: formData.get("accountName"),
+    accountType: formData.get("accountType"),
+    provider: formData.get("provider"),
+  };
+}
+
+async function importedMutation(url, method, transaction = undefined) {
+  const body = { revision: state.revision };
+  if (transaction !== undefined) body.transaction = transaction;
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+async function saveImportedTransaction(event) {
+  event.preventDefault();
+  const index = state.editingImportedIndex;
+  const current = state.importedTransactions[index];
+  if (!current) return;
+  clearEditError();
+  setEditBusy(true);
+  try {
+    const transaction = transactionFromEditForm();
+    const payload = await importedMutation(
+      `/api/transactions/${current._id}`,
+      "PUT",
+      transaction,
+    );
+    state.revision = payload.revision;
+    state.importedTransactions[index] = { ...transaction, amount: Number(transaction.amount) };
+    remapImportedTransactions(payload.transactions);
+    renderImportedTransactions();
+    elements.editDialog.close();
+    elements.reviewDialog.showModal();
+  } catch (error) {
+    showEditError(error instanceof Error ? error.message : "The transaction could not be saved.");
+  } finally {
+    setEditBusy(false);
+  }
+}
+
+async function deleteImportedTransaction() {
+  const index = state.editingImportedIndex;
+  const current = state.importedTransactions[index];
+  if (!current) return;
+  const confirmed = window.confirm(
+    `Permanently delete “${current.description}” for ${currency.format(current.amount)}?\n\n` +
+      "This updates the master CSV and cannot be undone.",
+  );
+  if (!confirmed) return;
+
+  clearEditError();
+  setEditBusy(true);
+  try {
+    const payload = await importedMutation(`/api/transactions/${current._id}`, "DELETE");
+    state.revision = payload.revision;
+    state.importedTransactions.splice(index, 1);
+    remapImportedTransactions(payload.transactions);
+    renderImportedTransactions();
+    elements.editDialog.close();
+    elements.reviewDialog.showModal();
+  } catch (error) {
+    showEditError(error instanceof Error ? error.message : "The transaction could not be deleted.");
+  } finally {
+    setEditBusy(false);
+  }
+}
+
 function renderResult(result) {
   const added = result.added;
   elements.resultTitle.textContent =
@@ -360,13 +593,33 @@ function renderResult(result) {
     }),
   );
   elements.result.hidden = false;
-  elements.result.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  state.revision = result.revision;
+  state.importedTransactions = Array.isArray(result.transactions) ? result.transactions : [];
+  state.editingImportedIndex = null;
+  renderImportedTransactions();
+  if (elements.reviewDialog.open) elements.reviewDialog.close();
+  elements.reviewDialog.showModal();
 }
 
 elements.amazonImportButton.addEventListener("click", startAmazonImport);
 elements.amazonCancelButton.addEventListener("click", cancelAmazonImport);
 elements.creditKarmaImportButton.addEventListener("click", startCreditKarmaImport);
 elements.creditKarmaCancelButton.addEventListener("click", cancelCreditKarmaImport);
+elements.closeReview.addEventListener("click", () => elements.reviewDialog.close());
+elements.reviewDialog.addEventListener("click", (event) => {
+  if (event.target === elements.reviewDialog) elements.reviewDialog.close();
+});
+elements.editForm.addEventListener("submit", saveImportedTransaction);
+elements.deleteImported.addEventListener("click", deleteImportedTransaction);
+elements.closeEdit.addEventListener("click", closeImportedTransactionEditor);
+elements.cancelEdit.addEventListener("click", closeImportedTransactionEditor);
+elements.editDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeImportedTransactionEditor();
+});
+elements.editDialog.addEventListener("click", (event) => {
+  if (event.target === elements.editDialog) closeImportedTransactionEditor();
+});
 
 window.addEventListener("message", (event) => {
   if (

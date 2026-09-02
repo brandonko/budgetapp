@@ -130,6 +130,11 @@ ingestion belongs in the **Upload data** page.
 - Do not show manual JSON file pickers or an exported-files section.
 - Keep source parsing and validation on the server boundary.
 - Report parsed, added, and duplicate-skipped counts after import.
+- After every completed import, open a modal listing only the transactions that
+  were newly added by that import, ordered latest first.
+- Allow every field on those new transactions to be edited from the modal and
+  persist changes immediately through the revision-checked CSV API. Confirm
+  permanent deletion using the same safety language as the dashboard.
 - If the database is new and empty, the first valid import populates it.
 
 ### Direct browser ingestion

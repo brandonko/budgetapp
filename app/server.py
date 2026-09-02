@@ -271,6 +271,47 @@ def public_state(transactions: list[dict[str, Any]], revision: str) -> dict[str,
     }
 
 
+def imported_transaction_state(
+    saved_transactions: list[dict[str, Any]],
+    additions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return public rows corresponding to newly appended occurrences."""
+
+    def content_identity(transaction: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(transaction["date"]),
+            str(transaction["description"]),
+            Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP),
+            str(transaction["category"]),
+            str(transaction["accountName"]),
+            str(transaction["accountType"]),
+            str(transaction["provider"]),
+        )
+
+    remaining = Counter(content_identity(transaction) for transaction in additions)
+    public_transactions = [
+        dict(transaction, _id=index)
+        for index, transaction in enumerate(saved_transactions)
+    ]
+    selected: list[dict[str, Any]] = []
+    # Existing rows precede newly appended, otherwise-identical rows after the
+    # stable CSV sort. Walking backward selects the occurrences just imported.
+    for transaction in reversed(public_transactions):
+        key = content_identity(transaction)
+        if remaining[key] <= 0:
+            continue
+        selected.append(transaction)
+        remaining[key] -= 1
+    selected.sort(
+        key=lambda transaction: (
+            transaction["date"],
+            transaction["description"].casefold(),
+        ),
+        reverse=True,
+    )
+    return selected
+
+
 class BudgetRequestHandler(BaseHTTPRequestHandler):
     server_version = "BudgetDashboard/2.0"
 
@@ -562,11 +603,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     existing.extend(additions)
                     existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
                     write_transactions_atomic(self.csv_path, existing)
-                _saved_transactions, saved_revision = read_transaction_state(self.csv_path)
+                saved_transactions, saved_revision = read_transaction_state(self.csv_path)
 
             result = {
                 "added": len(additions),
                 "duplicatesSkipped": skipped_by_source[source],
+                "transactions": imported_transaction_state(saved_transactions, additions),
                 "sources": {
                     source: {
                         "parsed": len(parsed_transactions),

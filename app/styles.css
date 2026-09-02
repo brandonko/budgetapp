@@ -544,6 +544,16 @@ h2 {
   overflow-y: auto;
 }
 
+.empty-import-review {
+  margin: 22px 0 0;
+  padding: 22px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--canvas);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .transaction-row {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;

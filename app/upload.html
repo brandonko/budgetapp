@@ -137,5 +137,85 @@
         </section>
       </div>
     </main>
+
+    <dialog class="transaction-dialog" id="import-review-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Import complete</p>
+            <h2>Review new transactions</h2>
+            <p class="dialog-subtitle" id="import-review-subtitle"></p>
+          </div>
+          <button class="icon-button" id="close-import-review" type="button" aria-label="Close imported transactions">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="transaction-list" id="import-review-list"></div>
+      </div>
+    </dialog>
+
+    <dialog class="transaction-form-dialog" id="import-edit-dialog">
+      <form class="transaction-form" id="import-edit-form">
+        <header class="form-header">
+          <div>
+            <p class="eyebrow">Edit imported transaction</p>
+            <h2>Make an adjustment</h2>
+            <p class="dialog-subtitle">Changes are saved directly to the master CSV.</p>
+          </div>
+          <button class="icon-button" id="close-import-edit" type="button" aria-label="Close transaction form">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="form-body">
+          <div class="form-grid">
+            <label class="form-field">
+              <span>Date</span>
+              <input name="date" type="date" required />
+            </label>
+            <label class="form-field">
+              <span>Amount</span>
+              <span class="amount-input-wrap">
+                <span aria-hidden="true">$</span>
+                <input name="amount" type="number" step="0.01" required />
+              </span>
+              <small>Expenses are positive; credits and income are negative.</small>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Description</span>
+              <input name="description" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Category</span>
+              <input name="category" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Account name</span>
+              <input name="accountName" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Account type</span>
+              <input name="accountType" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Provider</span>
+              <input name="provider" type="text" autocomplete="off" required />
+            </label>
+          </div>
+          <p class="form-error" id="import-edit-error" role="alert" hidden></p>
+        </div>
+
+        <footer class="form-footer">
+          <button class="danger-button" id="delete-imported-transaction" type="button">Delete transaction</button>
+          <span class="form-footer-spacer"></span>
+          <button class="secondary-button" id="cancel-import-edit" type="button">Cancel</button>
+          <button class="primary-button" id="save-import-edit" type="submit">Save transaction</button>
+        </footer>
+      </form>
+    </dialog>
   </body>
 </html>

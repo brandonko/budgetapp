@@ -19,7 +19,8 @@ edited, and deleted from the dashboard.
 For direct Credit Karma and Amazon workflows, load `ledger_data_importer_extension`
 as an unpacked Chrome extension, reload the Upload data page, select a date
 range, and choose the matching import action. Credit Karma uses a BudgetLens
-bundle with all transactions; Amazon creates item-level rows.
+bundle with all transactions; Amazon creates item-level rows. Completed imports
+open a review modal where every new row can be edited or deleted immediately.
 
 Use a different CSV or port when needed:
 
