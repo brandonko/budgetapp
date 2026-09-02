@@ -2,13 +2,16 @@
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
 It imports Credit Karma transactions and Amazon order history, avoids duplicate
-imports, and provides monthly summaries with editable transaction details.
+imports, and provides monthly and annual summaries with editable transaction
+details.
 
 The dashboard includes:
 
-- Monthly spending, income, and net summaries
+- Monthly and annual spending, income, and net summaries
+- Annual category-stacked spending and monthly net charts
 - Category breakdowns and latest-first transaction lists
-- Month and year selection
+- Monthly/annual view selection with independent year and month controls
+- A shared navigation menu for the dashboard, data imports, and settings
 - Manual transaction creation, editing, and permanent deletion
 - In-app Credit Karma and Amazon browser imports
 - Direct Credit Karma and Amazon imports through a companion Chrome extension
@@ -137,7 +140,7 @@ are negative in the CSV. In the interface, income is displayed as a positive
 value and net total is calculated as income minus spending: a surplus is green
 and a spending deficit is red.
 
-### Monthly totals
+### Dashboard periods and totals
 
 - **Total spent** is the net sum of visible, non-income transactions. It uses a
   neutral card background.
@@ -148,6 +151,11 @@ and a spending deficit is red.
 - Transaction lists are ordered latest first.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
+- **Monthly** view filters the dashboard by a selected month and year.
+- **Annual** view summarizes the selected year. Its spending chart stacks each
+  month's spending by category; selecting a category in the legend focuses the
+  chart on that category. Its net chart shows monthly surpluses in green and
+  monthly deficits in red.
 
 ### Bill-payment reconciliation
 
@@ -179,7 +187,9 @@ transactions**, where they can still be edited or deleted.
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma and Amazon source parsers
-app/index.html      Monthly dashboard
+app/index.html      Monthly and annual dashboard
+app/navigation.js  Shared accessible navigation-menu behavior
+app/settings.html  Settings placeholder and future preferences entry point
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports

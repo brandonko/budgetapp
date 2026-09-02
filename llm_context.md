@@ -68,18 +68,37 @@ on it. Translate it for people in the interface:
 - Refunds outside the `Income` category remain negative and reduce the total for
   their spending category.
 
-## Monthly dashboard
+## Dashboard periods
 
-- The home page is a month view.
+- The home page supports `Monthly` and `Annual` views.
 - Default to the latest month containing a budget-visible transaction.
-- Changing month/year updates summaries, category cards, and dialogs together.
+- Monthly view has independent month and year selectors. Annual view has a year
+  selector and summarizes the full selected year.
+- Changing the period updates summaries, category cards, charts, and dialogs
+  together.
 - Render one card for every visible category, including unmatched `Transfer`
   transactions.
 - A category card shows its transaction count and net category total.
 - Clicking a category opens its transactions in a modal.
-- Provide a **View all transactions** action for the selected month.
+- Annual view includes a monthly spending chart stacked by category. Its
+  category legend is interactive: selecting a category filters the chart to
+  that category, and selecting it again or using **Show all** clears the filter.
+- Annual view includes a zero-centered monthly net chart. Months with positive
+  net totals are green; months with negative net totals are red.
+- Provide a **View all transactions** action for the selected period.
 - All transaction lists are ordered by date, latest first.
 - The interface must remain responsive and usable on desktop and mobile.
+
+## Navigation
+
+- The Ledger brand links to the dashboard home page.
+- On the dashboard, center the view/year/month reporting controls in the header.
+- Keep page-level destinations in the top-right hamburger menu: Dashboard,
+  Upload data, and Settings.
+- Use the same menu across pages, clearly mark the current page, close it on an
+  outside click or Escape, and return focus to the menu button after Escape.
+- Settings is currently a placeholder route. Add future user preferences there
+  instead of adding unrelated controls to the dashboard or import page.
 
 ## Credit-card bill-payment reconciliation
 

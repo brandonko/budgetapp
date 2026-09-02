@@ -3,35 +3,68 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="A clear monthly view of your spending." />
-    <title>Ledger — Monthly spending</title>
+    <meta name="description" content="Clear monthly and annual views of your spending." />
+    <title>Ledger — Spending overview</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/navigation.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <header class="site-header">
+    <header class="site-header site-header--dashboard">
       <a class="brand" href="/" aria-label="Ledger home">
         <span class="brand-mark" aria-hidden="true">L</span>
         <span>Ledger</span>
       </a>
-      <div class="header-tools">
-        <a class="header-link" href="/upload">Upload data</a>
-        <div class="month-control">
-          <label for="month-select">Reporting period</label>
-          <div class="select-wrap">
-            <select id="month-select" aria-label="Select reporting month"></select>
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
-            </svg>
+      <div class="period-controls" aria-label="Reporting period">
+          <div class="period-control">
+            <label for="view-mode-select">View</label>
+            <div class="select-wrap select-wrap--compact">
+              <select id="view-mode-select" aria-label="Select monthly or annual view">
+                <option value="monthly">Monthly</option>
+                <option value="annual">Annual</option>
+              </select>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+            </div>
           </div>
-        </div>
+          <div class="period-control">
+            <label for="year-select">Year</label>
+            <div class="select-wrap select-wrap--year">
+              <select id="year-select" aria-label="Select reporting year"></select>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+            </div>
+          </div>
+          <div class="period-control" id="month-control">
+            <label for="month-select">Month</label>
+            <div class="select-wrap select-wrap--month">
+              <select id="month-select" aria-label="Select reporting month"></select>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+            </div>
+          </div>
       </div>
+      <details class="site-menu">
+        <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </summary>
+        <nav class="menu-panel" aria-label="Main navigation">
+          <a href="/" aria-current="page">Dashboard</a>
+          <a href="/upload">Upload data</a>
+          <a href="/settings">Settings</a>
+        </nav>
+      </details>
     </header>
 
     <main>
       <section class="hero" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">Monthly overview</p>
+          <p class="eyebrow" id="overview-eyebrow">Monthly overview</p>
           <h1 id="page-title">Your money, in focus.</h1>
           <p class="hero-copy" id="period-description">A clear view of where your money went.</p>
         </div>
@@ -47,7 +80,7 @@
         </div>
       </section>
 
-      <section class="summary-grid" aria-label="Monthly summary">
+      <section class="summary-grid" id="summary-grid" aria-label="Monthly summary">
         <article class="summary-card">
           <div class="summary-label">
             <span>Total spent</span>
@@ -62,7 +95,7 @@
             <span class="summary-icon summary-icon--income" aria-hidden="true">↙</span>
           </div>
           <p class="summary-value" id="total-income">—</p>
-          <p class="summary-note">Income received this month</p>
+          <p class="summary-note" id="income-summary-note">Income received this month</p>
         </article>
         <article class="summary-card" id="net-total-card">
           <div class="summary-label">
@@ -71,6 +104,38 @@
           </div>
           <p class="summary-value" id="net-total">—</p>
           <p class="summary-note" id="net-total-note">Income minus spending</p>
+        </article>
+      </section>
+
+      <section class="annual-insights" id="annual-insights" aria-labelledby="annual-insights-heading" hidden>
+        <div class="section-heading annual-heading">
+          <div>
+            <p class="eyebrow">Annual trends</p>
+            <h2 id="annual-insights-heading">A year at a glance</h2>
+          </div>
+          <p class="section-note">Select a category to focus the spending chart.</p>
+        </div>
+
+        <article class="chart-card" aria-labelledby="spending-chart-title">
+          <div class="chart-card-heading">
+            <div>
+              <h3 id="spending-chart-title">Monthly spending by category</h3>
+              <p id="spending-chart-subtitle">All spending categories</p>
+            </div>
+            <button class="text-button" id="clear-category-filter" type="button" hidden>Show all</button>
+          </div>
+          <div class="chart-legend" id="annual-category-legend" aria-label="Filter spending chart by category"></div>
+          <div class="stacked-chart" id="annual-spending-chart" aria-label="Monthly spending bar chart"></div>
+        </article>
+
+        <article class="chart-card" aria-labelledby="net-chart-title">
+          <div class="chart-card-heading">
+            <div>
+              <h3 id="net-chart-title">Monthly net total</h3>
+              <p>Income minus spending; green months are positive and red months are negative.</p>
+            </div>
+          </div>
+          <div class="net-chart" id="annual-net-chart" aria-label="Monthly net total waterfall chart"></div>
         </article>
       </section>
 
