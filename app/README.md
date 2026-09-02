@@ -1,7 +1,8 @@
 # Ledger budget dashboard
 
-The dashboard reads `processed_data_files/transactions.csv` whenever the browser
-requests transaction data. No third-party packages are required.
+The dashboard reads and writes `processed_data_files/transactions.csv`. If that
+file does not exist when the server starts, a new header-only database is
+created. No third-party packages are required.
 
 From the repository root, start it with:
 
@@ -10,6 +11,10 @@ python app\server.py
 ```
 
 Then visit <http://127.0.0.1:8000>.
+
+Use **Upload data** to import either a Credit Karma JSON export, an Amazon order
+history JSON export, or both. Transactions can also be added, edited, and
+deleted directly from the dashboard.
 
 Use a different CSV or port when needed:
 

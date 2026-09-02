@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Import transaction source files into Ledger." />
+    <title>Upload data — Ledger</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/upload.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Ledger home">
+        <span class="brand-mark" aria-hidden="true">L</span>
+        <span>Ledger</span>
+      </a>
+      <a class="header-link" href="/">Back to dashboard</a>
+    </header>
+
+    <main class="upload-main">
+      <section class="upload-hero" aria-labelledby="upload-title">
+        <p class="eyebrow">Data import</p>
+        <h1 id="upload-title">Bring your data together.</h1>
+        <p>
+          Select either source or both. Ledger validates every file before adding new transactions
+          to the master CSV, and existing matches are left untouched.
+        </p>
+      </section>
+
+      <form id="upload-form">
+        <div class="parser-grid">
+          <label class="parser-card" for="creditkarma-file">
+            <span class="parser-card-topline">
+              <span class="parser-number">01</span>
+              <span class="file-status" id="creditkarma-status">No file selected</span>
+            </span>
+            <span class="parser-name">Credit Karma</span>
+            <span class="parser-description">
+              Imports account transactions, applies expense-oriented signs, and excludes Amazon
+              charges that will be itemized by the Amazon parser.
+            </span>
+            <span class="file-picker">
+              <span id="creditkarma-filename">Choose JSON file</span>
+              <span aria-hidden="true">Browse</span>
+            </span>
+            <input id="creditkarma-file" name="creditkarma" type="file" accept=".json,application/json" />
+          </label>
+
+          <label class="parser-card" for="amazon-file">
+            <span class="parser-card-topline">
+              <span class="parser-number">02</span>
+              <span class="file-status" id="amazon-status">No file selected</span>
+            </span>
+            <span class="parser-name">Amazon orders</span>
+            <span class="parser-description">
+              Creates one transaction per item and applies the configured sales-tax estimate. If
+              card metadata is unavailable, Amazon is used as the account identity.
+            </span>
+            <span class="file-picker">
+              <span id="amazon-filename">Choose JSON file</span>
+              <span aria-hidden="true">Browse</span>
+            </span>
+            <input id="amazon-file" name="amazon" type="file" accept=".json,application/json" />
+          </label>
+        </div>
+
+        <div class="import-note">
+          <span aria-hidden="true">i</span>
+          <p>
+            Duplicate matching uses date, amount, and occurrence count. Multiple identical
+            transactions from the same day are preserved.
+          </p>
+        </div>
+
+        <div class="upload-actions">
+          <p class="upload-error" id="upload-error" role="alert" hidden></p>
+          <button class="primary-button upload-button" id="upload-button" type="submit" disabled>
+            Upload selected data
+            <span aria-hidden="true">&uarr;</span>
+          </button>
+        </div>
+      </form>
+
+      <section class="import-result" id="import-result" aria-live="polite" hidden>
+        <p class="eyebrow">Import complete</p>
+        <h2 id="result-title"></h2>
+        <p id="result-summary"></p>
+        <div class="result-sources" id="result-sources"></div>
+        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
+      </section>
+    </main>
+  </body>
+</html>

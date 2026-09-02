@@ -1,13 +1,18 @@
 # Ledger
 
-Ledger is a small, dependency-free personal budget dashboard. It combines a
-Credit Karma transaction export with an Amazon order-history export, produces a
-normalized master CSV, and presents the results as a monthly spending dashboard.
+Ledger is a dependency-free personal budget dashboard backed by a master CSV.
+It imports Credit Karma transactions and Amazon order history, avoids duplicate
+imports, and provides monthly summaries with editable transaction details.
 
-The dashboard includes monthly spending, income, and net summaries; category
-breakdowns; transaction detail views; and a month selector. Transactions in the
-`Transfer` category are excluded from the dashboard because they are typically
-credit-card payments or movements between accounts.
+The dashboard includes:
+
+- Monthly spending, income, and net summaries
+- Category breakdowns and latest-first transaction lists
+- Month and year selection
+- Manual transaction creation, editing, and permanent deletion
+- In-app Credit Karma and Amazon JSON imports
+- One-to-one reconciliation of credit-card bill-payment transfers
+- Neutral spending presentation with green surpluses and red deficits
 
 ## Requirements
 
@@ -16,58 +21,7 @@ credit-card payments or movements between accounts.
 
 No third-party Python packages are required.
 
-## Download the raw data
-
-Raw financial data is private and must not be committed to Git. This repository's
-`.gitignore` excludes both `raw_data_files/` and `processed_data_files/`.
-
-### Credit Karma transactions
-
-Download your Credit Karma transactions as JSON using
-[CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor), then
-place the downloaded file in `raw_data_files/`.
-
-For example:
-
-```text
-raw_data_files/budgetlens_2026-01-01_to_2026-12-31.json
-```
-
-### Amazon orders
-
-From the Amazon orders page, download your order history using the
-[Amazon Order History Reporter Chrome extension](https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi?hl=en),
-then place its JSON export in `raw_data_files/`.
-
-For example:
-
-```text
-raw_data_files/amazon-orders-2026.json
-```
-
-## Build the master transaction list
-
-Run the transaction builder with the Credit Karma file, Amazon orders file, and
-desired output path:
-
-```powershell
-python scripts\build_transactions.py `
-  raw_data_files\budgetlens_2026-01-01_to_2026-12-31.json `
-  raw_data_files\amazon-orders-2026.json `
-  processed_data_files\transactions.csv
-```
-
-The generated CSV contains:
-
-```text
-date, description, amount, category, accountName, accountType, provider
-```
-
-Debit expenses and Amazon purchases are positive. Credits and refunds are
-negative. Amazon card transactions from the Credit Karma export are omitted and
-replaced with individual Amazon item rows, including estimated sales tax.
-
-## Run the dashboard
+## Run Ledger
 
 From the repository root:
 
@@ -75,9 +29,13 @@ From the repository root:
 python app\server.py
 ```
 
-Open <http://127.0.0.1:8000> in a browser. The server reads
-`processed_data_files/transactions.csv` for every data request, so rebuilding
-the CSV is enough to refresh the available dashboard data.
+Open <http://127.0.0.1:8000>. If
+`processed_data_files/transactions.csv` does not exist, Ledger creates a new
+header-only database automatically.
+
+`processed_data_files/transactions.csv` is always the default database. Ledger
+does not automatically select other CSV files in that directory. A different
+file is used only when it is explicitly supplied with `--csv`.
 
 To use a different CSV or port:
 
@@ -85,12 +43,118 @@ To use a different CSV or port:
 python app\server.py --csv path\to\transactions.csv --port 8080
 ```
 
+The server binds to `127.0.0.1` by default so the financial data and editing
+endpoints are accessible only from the local machine.
+
+## Download source data
+
+Raw financial data is private and must not be committed to Git. This
+repository's `.gitignore` excludes both `raw_data_files/` and
+`processed_data_files/`.
+
+### Credit Karma transactions
+
+Download Credit Karma transactions as JSON using
+[CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor).
+
+### Amazon orders
+
+From the Amazon orders page, download order history using the
+[Amazon Order History Reporter Chrome extension](https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi?hl=en).
+
+## Import source files
+
+With Ledger running, open <http://127.0.0.1:8000/upload> or select **Upload
+data** from the dashboard. The page has one file card for each supported parser:
+
+- **Credit Karma** converts debits to positive expenses and credits to negative
+  amounts. Amazon card transactions are omitted so they can be replaced by
+  itemized Amazon rows.
+- **Amazon orders** creates one transaction per item and applies the `1.10502`
+  tax multiplier. When Credit Karma metadata is available in the same import,
+  it supplies the Amazon payment account. Otherwise, unknown account fields
+  default to `Amazon`.
+
+Either file can be imported by itself, or both can be selected together. All
+selected files are parsed and validated before the CSV is changed, preventing a
+partially completed import. Import results report how many rows were parsed,
+added, and skipped as duplicates.
+
+### Duplicate handling
+
+Imports identify existing transactions by normalized `date` and `amount` while
+also counting repeated occurrences. For example, if an uploaded file contains
+two transactions for the same amount on the same date and neither exists in the
+CSV, both are added. Uploading that file again skips both. If only one already
+exists, one additional occurrence is added.
+
+This deliberately ignores descriptions so an edited description does not cause
+the source transaction to be imported again.
+
+## Edit transaction data
+
+Open any category or the all-transactions view and select **Edit** on a
+transaction. All seven CSV fields can be changed. The same form supports
+permanent deletion after an explicit confirmation. Use **Add transaction** on
+the dashboard to create a row manually.
+
+Every mutation is validated, revision-checked, and saved with an atomic file
+replacement. If another browser or process changes the CSV first, Ledger rejects
+the stale write instead of silently overwriting newer data.
+
+## Master CSV schema
+
+```text
+date,description,amount,category,accountName,accountType,provider
+```
+
+Debit expenses and Amazon purchases are positive. Credits, refunds, and income
+are negative in the CSV. In the interface, income is displayed as a positive
+value and net total is calculated as income minus spending: a surplus is green
+and a spending deficit is red.
+
+### Monthly totals
+
+- **Total spent** is the net sum of visible, non-income transactions. It uses a
+  neutral card background.
+- **Total income** uses transactions in the `Income` category and is displayed
+  as a positive number even though those values remain negative in the CSV.
+- **Net total** is income minus spending. Positive values use a light-green
+  background; negative values use a light-red background.
+- Transaction lists are ordered latest first.
+- The default reporting period is the latest month containing at least one
+  budget-visible transaction.
+
+### Bill-payment reconciliation
+
+Ledger does not exclude every transaction categorized as `Transfer`. It excludes
+only matched pairs where a positive bank-account transfer and an equal negative
+credit-account transfer post within five days. Matching is one-to-one and runs
+across the complete database, including month boundaries. Unmatched transfers,
+such as Venmo or Zelle payments, remain visible and affect the budget normally.
+
+Matched rows remain available through **View excluded bill-payment
+transactions**, where they can still be edited or deleted.
+
+## Data integrity and privacy
+
+- CSV writes use an atomic replacement so a reader cannot observe a partial
+  file.
+- Every edit and import includes a file revision. A stale browser is prevented
+  from overwriting a newer change.
+- Deletion requires confirmation and is permanent.
+- Source files and the master CSV are ignored by Git.
+- The server listens only on localhost unless a different host is explicitly
+  requested.
+
 ## Project structure
 
 ```text
-app/                       Web dashboard and local HTTP server
-scripts/build_transactions.py
-                           Credit Karma + Amazon normalization script
-raw_data_files/            Private source exports (ignored by Git)
-processed_data_files/      Generated transaction data (ignored by Git)
+app/server.py       Local HTTP server and atomic CSV persistence API
+app/importers.py    Credit Karma and Amazon source parsers
+app/index.html      Monthly dashboard
+app/upload.html     Data import page
+raw_data_files/     Optional private source exports (ignored by Git)
+processed_data_files/
+                    Master CSV database (ignored by Git)
 ```
