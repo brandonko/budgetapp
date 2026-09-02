@@ -778,6 +778,11 @@ h2 {
   opacity: 0.58;
 }
 
+.amazon-direct-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .upload-main {
   width: min(1040px, calc(100% - 44px));
 }
@@ -797,6 +802,172 @@ h2 {
   color: var(--muted);
   font-size: 16px;
   line-height: 1.65;
+}
+
+.amazon-direct {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
+  gap: 46px;
+  margin-bottom: 42px;
+  padding: 34px;
+  border: 1px solid #bed3c4;
+  border-radius: 16px;
+  background: #f1f7f2;
+  box-shadow: 0 12px 34px rgb(23 34 29 / 5%);
+}
+
+.amazon-direct h2 {
+  margin: 7px 0 13px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.amazon-direct-copy > p:last-child {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.amazon-direct-controls {
+  min-width: 0;
+}
+
+.date-range-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.date-range-fields label > span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.date-range-fields input {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+}
+
+.extension-state {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 15px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.extension-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b77b72;
+}
+
+.extension-dot--ready {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgb(46 106 80 / 10%);
+}
+
+.amazon-direct-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.amazon-direct-actions .primary-button,
+.amazon-direct-actions .secondary-button {
+  min-height: 46px;
+}
+
+.amazon-progress {
+  margin-top: 18px;
+}
+
+.amazon-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgb(46 106 80 / 12%);
+}
+
+.amazon-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 220ms ease;
+}
+
+.amazon-progress--error .amazon-progress-track span {
+  background: #a64f46;
+}
+
+.amazon-progress p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.extension-help {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.extension-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.extension-help p {
+  margin-bottom: 0;
+}
+
+.extension-help code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 70%);
+}
+
+.upload-divider {
+  display: flex;
+  align-items: center;
+  margin: 0 0 28px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.upload-divider::before,
+.upload-divider::after {
+  height: 1px;
+  flex: 1;
+  content: "";
+  background: var(--line);
+}
+
+.upload-divider span {
+  padding: 0 15px;
 }
 
 .parser-grid {
@@ -1156,6 +1327,21 @@ body:has(dialog[open]) {
 
   .upload-main {
     width: min(100% - 28px, 1040px);
+  }
+
+  .amazon-direct {
+    grid-template-columns: 1fr;
+    gap: 26px;
+    padding: 28px 22px;
+  }
+
+  .date-range-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .amazon-direct-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .parser-grid,

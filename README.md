@@ -11,6 +11,7 @@ The dashboard includes:
 - Month and year selection
 - Manual transaction creation, editing, and permanent deletion
 - In-app Credit Karma and Amazon JSON imports
+- Experimental direct Amazon imports through a companion Chrome extension
 - One-to-one reconciliation of credit-card bill-payment transfers
 - Neutral spending presentation with green surpluses and red deficits
 
@@ -59,8 +60,10 @@ Download Credit Karma transactions as JSON using
 
 ### Amazon orders
 
-From the Amazon orders page, download order history using the
-[Amazon Order History Reporter Chrome extension](https://chromewebstore.google.com/detail/amazon-order-history-repo/mgkilgclilajckgnedgjgnfdokkgnibi?hl=en).
+Amazon data can be collected directly with Ledger's experimental companion
+extension, described below. For the manual workflow, export JSON from Amazon's
+orders page using
+[Order History Exporter for Amazon](https://github.com/xenolphthalein/order-history-exporter-for-amazon).
 
 ## Import source files
 
@@ -79,6 +82,32 @@ Either file can be imported by itself, or both can be selected together. All
 selected files are parsed and validated before the CSV is changed, preventing a
 partially completed import. Import results report how many rows were parsed,
 added, and skipped as duplicates.
+
+### Experimental direct Amazon import
+
+The Upload data page also supports selecting a date range and importing from an
+authenticated Amazon tab without first saving a JSON file. This requires a
+one-time installation of the unpacked Chrome companion extension:
+
+1. Open `chrome://extensions` in Chrome.
+2. Enable **Developer mode** and select **Load unpacked**.
+3. Select the repository's `amazon_importer_extension` directory.
+4. Reload <http://127.0.0.1:8000/upload>. The page should report **Companion
+   extension connected**.
+5. Choose a start and end date and select **Import Amazon orders**.
+
+The extension opens Amazon order history and waits for sign-in when necessary.
+It uses the browser's existing Amazon session; Ledger never receives Amazon
+credentials or cookies. Progress is shown on the Upload data page, and the
+finished JSON is sent directly through a random, one-hour import session rather
+than being left in the Downloads folder. The normal Amazon JSON file picker
+remains available as a fallback.
+
+The integration is experimental because Amazon can change its order-history
+markup or present login/CAPTCHA challenges. Closing the Amazon tab cancels the
+active scrape. See
+[`amazon_importer_extension/README.md`](amazon_importer_extension/README.md)
+for implementation and attribution details.
 
 ### Duplicate handling
 
@@ -154,6 +183,9 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma and Amazon source parsers
 app/index.html      Monthly dashboard
 app/upload.html     Data import page
+amazon_importer_extension/
+                    Experimental unpacked Chrome companion extension
+tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)
 processed_data_files/
                     Master CSV database (ignored by Git)
