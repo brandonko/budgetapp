@@ -524,10 +524,10 @@ async function saveImportedTransaction(event) {
   const index = state.editingImportedIndex;
   const current = state.importedTransactions[index];
   if (!current) return;
+  const transaction = transactionFromEditForm();
   clearEditError();
   setEditBusy(true);
   try {
-    const transaction = transactionFromEditForm();
     const payload = await importedMutation(
       `/api/transactions/${current._id}`,
       "PUT",
