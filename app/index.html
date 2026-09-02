@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A clear monthly view of your spending." />
+    <title>Ledger — Monthly spending</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Ledger home">
+        <span class="brand-mark" aria-hidden="true">L</span>
+        <span>Ledger</span>
+      </a>
+      <div class="month-control">
+        <label for="month-select">Reporting period</label>
+        <div class="select-wrap">
+          <select id="month-select" aria-label="Select reporting month"></select>
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
+          </svg>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Monthly overview</p>
+          <h1 id="page-title">Your money, in focus.</h1>
+          <p class="hero-copy" id="period-description">A clear view of where your money went.</p>
+        </div>
+        <button class="primary-button" id="view-all-button" type="button">
+          View all transactions
+          <span aria-hidden="true">→</span>
+        </button>
+      </section>
+
+      <section class="summary-grid" aria-label="Monthly summary">
+        <article class="summary-card summary-card--featured">
+          <div class="summary-label">
+            <span>Total spent</span>
+            <span class="summary-icon" aria-hidden="true">↗</span>
+          </div>
+          <p class="summary-value" id="total-spent">—</p>
+          <p class="summary-note">Transfers and income excluded</p>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">
+            <span>Total income</span>
+            <span class="summary-icon summary-icon--income" aria-hidden="true">↙</span>
+          </div>
+          <p class="summary-value" id="total-income">—</p>
+          <p class="summary-note">Income received this month</p>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">
+            <span>Net total</span>
+            <span class="summary-icon summary-icon--net" aria-hidden="true">=</span>
+          </div>
+          <p class="summary-value" id="net-total">—</p>
+          <p class="summary-note" id="net-total-note">Spending minus income</p>
+        </article>
+      </section>
+
+      <section class="categories-section" aria-labelledby="categories-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Breakdown</p>
+            <h2 id="categories-heading">Spending by category</h2>
+          </div>
+          <span class="excluded-note"><span aria-hidden="true">✓</span> Transfers excluded</span>
+        </div>
+        <div class="category-grid" id="category-grid" aria-live="polite"></div>
+      </section>
+
+      <section class="error-state" id="error-state" hidden>
+        <p class="eyebrow">Unable to load data</p>
+        <h2>Something went wrong.</h2>
+        <p id="error-message"></p>
+        <button class="secondary-button" id="retry-button" type="button">Try again</button>
+      </section>
+    </main>
+
+    <dialog class="transaction-dialog" id="transaction-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow" id="dialog-eyebrow">Transactions</p>
+            <h2 id="dialog-title">All transactions</h2>
+            <p class="dialog-subtitle" id="dialog-subtitle"></p>
+          </div>
+          <button class="icon-button" id="close-dialog" type="button" aria-label="Close transaction list">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="transaction-list" id="transaction-list"></div>
+      </div>
+    </dialog>
+
+    <template id="category-template">
+      <button class="category-card" type="button">
+        <span class="category-topline">
+          <span class="category-dot" aria-hidden="true"></span>
+          <span class="category-count"></span>
+        </span>
+        <span class="category-name"></span>
+        <span class="category-total"></span>
+        <span class="category-footer">
+          <span class="category-bar"><span></span></span>
+          <span class="category-arrow" aria-hidden="true">↗</span>
+        </span>
+      </button>
+    </template>
+  </body>
+</html>

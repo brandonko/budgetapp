@@ -1,0 +1,16 @@
+# Private financial data and generated outputs
+raw_data_files/
+processed_data_files/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local configuration and editor files
+.env
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
