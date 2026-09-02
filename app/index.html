@@ -89,10 +89,15 @@
       </section>
 
       <section class="error-state" id="error-state" hidden>
-        <p class="eyebrow">Unable to load data</p>
-        <h2>Something went wrong.</h2>
+        <p class="eyebrow" id="error-eyebrow">Unable to load data</p>
+        <h2 id="error-title">Something went wrong.</h2>
         <p id="error-message"></p>
-        <button class="secondary-button" id="retry-button" type="button">Try again</button>
+        <div class="error-actions">
+          <button class="primary-button" id="create-file-button" type="button" hidden>
+            Create transaction file
+          </button>
+          <button class="secondary-button" id="retry-button" type="button">Try again</button>
+        </div>
       </section>
     </main>
 

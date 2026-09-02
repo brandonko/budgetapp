@@ -74,6 +74,10 @@ class CsvDataError(ValueError):
     """Raised when transaction data is invalid."""
 
 
+class CsvFileMissingError(CsvDataError):
+    """Raised when the transaction CSV has not been created yet."""
+
+
 class RevisionConflict(RuntimeError):
     """Raised when a client tries to modify an out-of-date CSV revision."""
 
@@ -118,6 +122,8 @@ def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
     try:
         raw_bytes = csv_path.read_bytes()
         text = raw_bytes.decode("utf-8-sig")
+    except FileNotFoundError as exc:
+        raise CsvFileMissingError(f"transaction file does not exist: {csv_path}") from exc
     except (OSError, UnicodeDecodeError) as exc:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
 
@@ -302,6 +308,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 with self.data_lock:
                     transactions, revision = read_transaction_state(self.csv_path)
                 self.send_json(HTTPStatus.OK, public_state(transactions, revision))
+            except CsvFileMissingError:
+                self.send_json(
+                    HTTPStatus.NOT_FOUND,
+                    {
+                        "code": "transaction_file_missing",
+                        "error": "Create a transaction file to start using Ledger.",
+                    },
+                )
             except CsvDataError as exc:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
             return
@@ -322,7 +336,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path
-        if path == "/api/transactions":
+        if path == "/api/transactions/initialize":
+            self.initialize_transaction_file()
+        elif path == "/api/transactions":
             self.mutate_transactions("create")
         elif path == "/api/import":
             self.import_transactions()
@@ -346,6 +362,22 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def initialize_transaction_file(self) -> None:
+        try:
+            with self.data_lock:
+                created = not self.csv_path.exists()
+                initialize_csv_if_missing(self.csv_path)
+                transactions, revision = read_transaction_state(self.csv_path)
+            status = HTTPStatus.CREATED if created else HTTPStatus.OK
+            self.send_json(status, public_state(transactions, revision))
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not create {self.csv_path}: {exc}"},
+            )
 
     def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         match = TRANSACTION_PATH.fullmatch(urlparse(self.path).path)

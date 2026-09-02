@@ -107,6 +107,10 @@ the transaction budget-visible again.
 
 ## Transaction editing
 
+- A missing master CSV is an uninitialized state, not a generic load failure.
+  Show a button that creates a header-only CSV without replacing an existing
+  file, then render the empty dashboard.
+
 - Every CSV field must be editable: date, description, amount, category,
   accountName, accountType, and provider.
 - Saving updates the master CSV, then refreshes all derived dashboard state.
