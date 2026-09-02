@@ -52,9 +52,6 @@ const elements = {
   creditKarmaProgressBar: document.querySelector("#creditkarma-progress-bar"),
   creditKarmaProgressMessage: document.querySelector("#creditkarma-progress-message"),
   creditKarmaDirectError: document.querySelector("#creditkarma-direct-error"),
-  creditKarmaExtensionDot: document.querySelector("#creditkarma-extension-dot"),
-  creditKarmaExtensionStatus: document.querySelector("#creditkarma-extension-status"),
-  creditKarmaExtensionHelp: document.querySelector("#creditkarma-extension-help"),
 };
 
 function localIsoDate(value) {
@@ -87,11 +84,6 @@ function setExtensionReady(ready) {
     : "Companion extension not detected";
   elements.extensionHelp.open = !ready;
   elements.amazonImportButton.disabled = !ready || Boolean(state.amazonSessionToken);
-  elements.creditKarmaExtensionDot.classList.toggle("extension-dot--ready", ready);
-  elements.creditKarmaExtensionStatus.textContent = ready
-    ? "Companion extension connected"
-    : "Companion extension not detected";
-  elements.creditKarmaExtensionHelp.open = !ready;
   elements.creditKarmaImportButton.disabled =
     !ready || Boolean(state.creditKarmaSessionToken);
 }

@@ -810,6 +810,18 @@ h2 {
   line-height: 1.65;
 }
 
+.companion-extension {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 18px 22px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faf8;
+}
+
 .direct-import-stack {
   display: grid;
   gap: 18px;
@@ -884,6 +896,25 @@ h2 {
   font-size: 11px;
 }
 
+.companion-extension .extension-state {
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+}
+
+.extension-state > div {
+  display: grid;
+  gap: 3px;
+}
+
+.extension-state strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.extension-state > div > span {
+  font-size: 10px;
+}
+
 .extension-dot {
   width: 8px;
   height: 8px;
@@ -899,6 +930,7 @@ h2 {
 .amazon-direct-actions {
   display: flex;
   gap: 10px;
+  margin-top: 15px;
 }
 
 .amazon-direct-actions .primary-button,
@@ -946,6 +978,11 @@ h2 {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
+}
+
+.companion-extension .extension-help {
+  max-width: 565px;
+  margin-top: 0;
 }
 
 .extension-help summary {
@@ -1350,6 +1387,11 @@ body:has(dialog[open]) {
     grid-template-columns: 1fr;
     gap: 26px;
     padding: 28px 22px;
+  }
+
+  .companion-extension {
+    gap: 14px;
+    flex-direction: column;
   }
 
   .date-range-fields {
