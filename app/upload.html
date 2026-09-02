@@ -27,6 +27,22 @@
         </p>
       </section>
 
+      <div class="import-note">
+        <span aria-hidden="true">i</span>
+        <p>
+          Duplicate matching uses date, amount, and occurrence count. Multiple identical
+          transactions from the same day are preserved.
+        </p>
+      </div>
+
+      <section class="import-result" id="import-result" aria-live="polite" hidden>
+        <p class="eyebrow">Import complete</p>
+        <h2 id="result-title"></h2>
+        <p id="result-summary"></p>
+        <div class="result-sources" id="result-sources"></div>
+        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
+      </section>
+
       <section class="amazon-direct" aria-labelledby="amazon-direct-title">
         <div class="amazon-direct-copy">
           <p class="eyebrow">Experimental</p>
@@ -116,14 +132,6 @@
           </label>
         </div>
 
-        <div class="import-note">
-          <span aria-hidden="true">i</span>
-          <p>
-            Duplicate matching uses date, amount, and occurrence count. Multiple identical
-            transactions from the same day are preserved.
-          </p>
-        </div>
-
         <div class="upload-actions">
           <p class="upload-error" id="upload-error" role="alert" hidden></p>
           <button class="primary-button upload-button" id="upload-button" type="submit" disabled>
@@ -133,13 +141,6 @@
         </div>
       </form>
 
-      <section class="import-result" id="import-result" aria-live="polite" hidden>
-        <p class="eyebrow">Import complete</p>
-        <h2 id="result-title"></h2>
-        <p id="result-summary"></p>
-        <div class="result-sources" id="result-sources"></div>
-        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
-      </section>
     </main>
   </body>
 </html>

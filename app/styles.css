@@ -1092,7 +1092,7 @@ h2 {
   display: flex;
   gap: 12px;
   align-items: center;
-  margin-top: 18px;
+  margin: 0 0 28px;
   padding: 15px 18px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1139,7 +1139,7 @@ h2 {
 }
 
 .import-result {
-  margin-top: 72px;
+  margin: -14px 0 32px;
   padding: 38px;
   border: 1px solid #bed3c4;
   border-radius: 16px;
