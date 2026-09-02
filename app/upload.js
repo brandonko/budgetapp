@@ -6,6 +6,8 @@ const state = {
   extensionReady: false,
   amazonSessionToken: "",
   amazonPollTimer: null,
+  creditKarmaSessionToken: "",
+  creditKarmaPollTimer: null,
 };
 
 const parsers = {
@@ -42,6 +44,17 @@ const elements = {
   extensionDot: document.querySelector("#extension-dot"),
   extensionStatus: document.querySelector("#extension-status"),
   extensionHelp: document.querySelector("#extension-help"),
+  creditKarmaStartDate: document.querySelector("#creditkarma-start-date"),
+  creditKarmaEndDate: document.querySelector("#creditkarma-end-date"),
+  creditKarmaImportButton: document.querySelector("#creditkarma-import-button"),
+  creditKarmaCancelButton: document.querySelector("#creditkarma-cancel-button"),
+  creditKarmaProgress: document.querySelector("#creditkarma-progress"),
+  creditKarmaProgressBar: document.querySelector("#creditkarma-progress-bar"),
+  creditKarmaProgressMessage: document.querySelector("#creditkarma-progress-message"),
+  creditKarmaDirectError: document.querySelector("#creditkarma-direct-error"),
+  creditKarmaExtensionDot: document.querySelector("#creditkarma-extension-dot"),
+  creditKarmaExtensionStatus: document.querySelector("#creditkarma-extension-status"),
+  creditKarmaExtensionHelp: document.querySelector("#creditkarma-extension-help"),
 };
 
 function localIsoDate(value) {
@@ -51,7 +64,7 @@ function localIsoDate(value) {
   return `${year}-${month}-${day}`;
 }
 
-function initializeAmazonDates() {
+function initializeDirectImportDates() {
   const today = new Date();
   const lookbackStart = new Date(today);
   lookbackStart.setDate(lookbackStart.getDate() - 14);
@@ -60,6 +73,10 @@ function initializeAmazonDates() {
   elements.amazonEndDate.value = todayIso;
   elements.amazonStartDate.max = todayIso;
   elements.amazonEndDate.max = todayIso;
+  elements.creditKarmaStartDate.value = localIsoDate(lookbackStart);
+  elements.creditKarmaEndDate.value = todayIso;
+  elements.creditKarmaStartDate.max = todayIso;
+  elements.creditKarmaEndDate.max = todayIso;
 }
 
 function setExtensionReady(ready) {
@@ -70,6 +87,13 @@ function setExtensionReady(ready) {
     : "Companion extension not detected";
   elements.extensionHelp.open = !ready;
   elements.amazonImportButton.disabled = !ready || Boolean(state.amazonSessionToken);
+  elements.creditKarmaExtensionDot.classList.toggle("extension-dot--ready", ready);
+  elements.creditKarmaExtensionStatus.textContent = ready
+    ? "Companion extension connected"
+    : "Companion extension not detected";
+  elements.creditKarmaExtensionHelp.open = !ready;
+  elements.creditKarmaImportButton.disabled =
+    !ready || Boolean(state.creditKarmaSessionToken);
 }
 
 function renderAmazonProgress(progress, message, status = "scraping") {
@@ -205,6 +229,147 @@ async function cancelAmazonImport() {
   }
 }
 
+function renderCreditKarmaProgress(progress, message, status = "scraping") {
+  const boundedProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+  elements.creditKarmaProgress.hidden = false;
+  elements.creditKarmaProgressBar.style.width = `${boundedProgress}%`;
+  elements.creditKarmaProgressMessage.textContent = message;
+  elements.creditKarmaProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showCreditKarmaError(message) {
+  elements.creditKarmaDirectError.textContent = message;
+  elements.creditKarmaDirectError.hidden = false;
+  renderCreditKarmaProgress(0, "Credit Karma import could not continue.", "error");
+}
+
+function clearCreditKarmaError() {
+  elements.creditKarmaDirectError.textContent = "";
+  elements.creditKarmaDirectError.hidden = true;
+}
+
+function stopCreditKarmaPolling() {
+  if (state.creditKarmaPollTimer !== null) {
+    window.clearTimeout(state.creditKarmaPollTimer);
+    state.creditKarmaPollTimer = null;
+  }
+}
+
+function finishCreditKarmaSession() {
+  stopCreditKarmaPolling();
+  state.creditKarmaSessionToken = "";
+  elements.creditKarmaImportButton.disabled = !state.extensionReady;
+  elements.creditKarmaCancelButton.hidden = true;
+}
+
+async function pollCreditKarmaSession() {
+  if (!state.creditKarmaSessionToken) return;
+  try {
+    const response = await fetch(
+      `/api/creditkarma-import-sessions/${encodeURIComponent(state.creditKarmaSessionToken)}`,
+      { cache: "no-store" },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Credit Karma import status failed (${response.status}).`);
+    }
+
+    renderCreditKarmaProgress(payload.progress, payload.message, payload.status);
+    if (payload.status === "complete") {
+      if (payload.import?.revision) state.revision = payload.import.revision;
+      renderResult(payload.import);
+      finishCreditKarmaSession();
+      return;
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      if (payload.status === "error") showCreditKarmaError(payload.message);
+      finishCreditKarmaSession();
+      return;
+    }
+    state.creditKarmaPollTimer = window.setTimeout(pollCreditKarmaSession, 1200);
+  } catch (error) {
+    showCreditKarmaError(
+      error instanceof Error ? error.message : "Credit Karma import status is unavailable.",
+    );
+    finishCreditKarmaSession();
+  }
+}
+
+async function startCreditKarmaImport() {
+  clearError();
+  clearCreditKarmaError();
+  const startDate = elements.creditKarmaStartDate.value;
+  const endDate = elements.creditKarmaEndDate.value;
+  if (!startDate || !endDate) {
+    showCreditKarmaError("Choose both a start date and an end date.");
+    return;
+  }
+  if (startDate > endDate) {
+    showCreditKarmaError("The Credit Karma start date cannot be after the end date.");
+    return;
+  }
+  if (!state.extensionReady) {
+    showCreditKarmaError("Install the companion extension and reload this page first.");
+    return;
+  }
+
+  elements.creditKarmaImportButton.disabled = true;
+  renderCreditKarmaProgress(0, "Creating a secure import session…", "waiting_for_extension");
+  try {
+    const response = await fetch("/api/creditkarma-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate, endDate }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Could not start the Credit Karma import (${response.status}).`);
+    }
+
+    state.creditKarmaSessionToken = payload.token;
+    elements.creditKarmaCancelButton.hidden = false;
+    window.postMessage(
+      {
+        source: "ledger-web-app",
+        action: "startCreditKarmaImport",
+        payload: {
+          token: payload.token,
+          startDate,
+          endDate,
+          ledgerOrigin: window.location.origin,
+        },
+      },
+      window.location.origin,
+    );
+    renderCreditKarmaProgress(1, "Opening Credit Karma transactions…", "opening_credit_karma");
+    pollCreditKarmaSession();
+  } catch (error) {
+    showCreditKarmaError(
+      error instanceof Error ? error.message : "Could not start the Credit Karma import.",
+    );
+    finishCreditKarmaSession();
+  }
+}
+
+async function cancelCreditKarmaImport() {
+  const token = state.creditKarmaSessionToken;
+  if (!token) return;
+  window.postMessage(
+    { source: "ledger-web-app", action: "cancelCreditKarmaImport", payload: { token } },
+    window.location.origin,
+  );
+  try {
+    await fetch(`/api/creditkarma-import-sessions/${encodeURIComponent(token)}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } finally {
+    renderCreditKarmaProgress(0, "Credit Karma import cancelled.", "cancelled");
+    finishCreditKarmaSession();
+  }
+}
+
 function selectedFiles() {
   return Object.entries(parsers).filter(([, parser]) => parser.input.files.length > 0);
 }
@@ -323,6 +488,8 @@ for (const [key, parser] of Object.entries(parsers)) {
 elements.form.addEventListener("submit", uploadData);
 elements.amazonImportButton.addEventListener("click", startAmazonImport);
 elements.amazonCancelButton.addEventListener("click", cancelAmazonImport);
+elements.creditKarmaImportButton.addEventListener("click", startCreditKarmaImport);
+elements.creditKarmaCancelButton.addEventListener("click", cancelCreditKarmaImport);
 
 window.addEventListener("message", (event) => {
   if (
@@ -348,10 +515,30 @@ window.addEventListener("message", (event) => {
       }).catch(() => {});
       finishAmazonSession();
     }
+  } else if (event.data.action === "creditKarmaProgress" && state.creditKarmaSessionToken) {
+    const { progress, message, status } = event.data.payload ?? {};
+    renderCreditKarmaProgress(
+      progress,
+      message || "Importing Credit Karma transactions…",
+      status,
+    );
+  } else if (event.data.action === "creditKarmaError") {
+    showCreditKarmaError(
+      event.data.payload?.message || "The Credit Karma importer extension reported an error.",
+    );
+    if (state.creditKarmaSessionToken) {
+      const token = state.creditKarmaSessionToken;
+      fetch(`/api/creditkarma-import-sessions/${encodeURIComponent(token)}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => {});
+      finishCreditKarmaSession();
+    }
   }
 });
 
-initializeAmazonDates();
+initializeDirectImportDates();
 setExtensionReady(false);
 for (const delay of [0, 400, 1200]) {
   window.setTimeout(

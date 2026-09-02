@@ -51,6 +51,12 @@ AMAZON_IMPORT_SESSION_PATH = re.compile(
 AMAZON_IMPORT_ACTION_PATH = re.compile(
     r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
 )
+CREDIT_KARMA_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+CREDIT_KARMA_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/creditkarma-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+)
 AMAZON_IMPORT_SESSION_TTL_SECONDS = 60 * 60
 TERMINAL_IMPORT_STATUSES = {"complete", "error", "cancelled"}
 STATIC_FILES = {
@@ -303,6 +309,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if session_match is not None:
             self.get_amazon_import_session(session_match.group(1))
             return
+        credit_karma_session_match = CREDIT_KARMA_IMPORT_SESSION_PATH.fullmatch(path)
+        if credit_karma_session_match is not None:
+            self.get_amazon_import_session(
+                credit_karma_session_match.group(1), source="creditkarma"
+            )
+            return
         if path in STATIC_FILES:
             self.send_static_file(STATIC_FILES[path])
             return
@@ -316,12 +328,24 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.import_transactions()
         elif path == "/api/amazon-import-sessions":
             self.create_amazon_import_session()
+        elif path == "/api/creditkarma-import-sessions":
+            self.create_amazon_import_session(source="creditkarma")
         else:
             action_match = AMAZON_IMPORT_ACTION_PATH.fullmatch(path)
-            if action_match is None:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            if action_match is not None:
+                self.update_amazon_import_session(
+                    action_match.group(1), action_match.group(2)
+                )
                 return
-            self.update_amazon_import_session(action_match.group(1), action_match.group(2))
+            credit_karma_action_match = CREDIT_KARMA_IMPORT_ACTION_PATH.fullmatch(path)
+            if credit_karma_action_match is not None:
+                self.update_amazon_import_session(
+                    credit_karma_action_match.group(1),
+                    credit_karma_action_match.group(2),
+                    source="creditkarma",
+                )
+                return
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         match = TRANSACTION_PATH.fullmatch(urlparse(self.path).path)
@@ -358,6 +382,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     @staticmethod
     def public_amazon_import_session(session: Mapping[str, Any]) -> dict[str, Any]:
         response = {
+            "source": session.get("source", "amazon"),
             "status": session["status"],
             "progress": session["progress"],
             "message": session["message"],
@@ -368,7 +393,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             response["import"] = session["import"]
         return response
 
-    def create_amazon_import_session(self) -> None:
+    def create_amazon_import_session(self, source: str = "amazon") -> None:
         try:
             payload = self.read_json_body()
             raw_start = payload.get("startDate")
@@ -387,9 +412,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             token = secrets.token_urlsafe(32)
             now = time.time()
             session: dict[str, Any] = {
+                "source": source,
                 "status": "waiting_for_extension",
                 "progress": 0,
-                "message": "Waiting for the Amazon importer extension.",
+                "message": f"Waiting for the {'Credit Karma' if source == 'creditkarma' else 'Amazon'} importer extension.",
                 "startDate": start_date.isoformat(),
                 "endDate": end_date.isoformat(),
                 "createdAt": now,
@@ -403,25 +429,27 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         except CsvDataError as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
-    def get_amazon_import_session(self, token: str) -> None:
+    def get_amazon_import_session(self, token: str, source: str = "amazon") -> None:
         self.prune_amazon_import_sessions()
         with self.amazon_import_lock:
             session = self.amazon_import_sessions.get(token)
-            response = (
-                self.public_amazon_import_session(session) if session is not None else None
-            )
+            response = None
+            if session is not None and session.get("source", "amazon") == source:
+                response = self.public_amazon_import_session(session)
         if response is None:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Import session not found or expired."})
             return
         self.send_json(HTTPStatus.OK, response)
 
-    def update_amazon_import_session(self, token: str, action: str) -> None:
+    def update_amazon_import_session(
+        self, token: str, action: str, source: str = "amazon"
+    ) -> None:
         try:
             payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
             self.prune_amazon_import_sessions()
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions.get(token)
-                if session is None:
+                if session is None or session.get("source", "amazon") != source:
                     self.send_json(
                         HTTPStatus.NOT_FOUND, {"error": "Import session not found or expired."}
                     )
@@ -431,7 +459,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     return
 
             if action == "complete":
-                self.complete_amazon_import_session(token, payload)
+                self.complete_amazon_import_session(token, payload, source=source)
                 return
 
             now = time.time()
@@ -443,7 +471,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     session.update(
                         status="cancelled",
                         progress=session["progress"],
-                        message="Amazon import cancelled.",
+                        message=f"{'Credit Karma' if source == 'creditkarma' else 'Amazon'} import cancelled.",
                         updatedAt=now,
                     )
                 else:
@@ -455,13 +483,16 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     allowed_statuses = {
                         "waiting_for_amazon",
                         "opening_amazon",
+                        "waiting_for_credit_karma",
+                        "opening_credit_karma",
                         "scraping",
                         "importing",
                         "error",
                     }
                     if raw_status not in allowed_statuses:
                         raise CsvDataError("unsupported import status")
-                    raw_message = payload.get("message", "Importing Amazon orders.")
+                    source_label = "Credit Karma" if source == "creditkarma" else "Amazon"
+                    raw_message = payload.get("message", f"Importing {source_label} transactions.")
                     if not isinstance(raw_message, str) or not raw_message.strip():
                         raise CsvDataError("message cannot be blank")
                     session.update(
@@ -476,18 +507,24 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
     def complete_amazon_import_session(
-        self, token: str, payload: Mapping[str, Any]
+        self, token: str, payload: Mapping[str, Any], source: str = "amazon"
     ) -> None:
         content = payload.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise CsvDataError("Amazon export content is required")
+            source_label = "Credit Karma" if source == "creditkarma" else "Amazon"
+            raise CsvDataError(f"{source_label} export content is required")
 
         try:
-            parsed_amazon = parse_amazon(content)
+            if source == "creditkarma":
+                credit_karma = parse_credit_karma(content)
+                parsed_transactions = credit_karma.transactions
+            else:
+                credit_karma = None
+                parsed_transactions = parse_amazon(content)
             with self.data_lock:
                 existing, _revision = read_transaction_state(self.csv_path)
                 additions, added_by_source, skipped_by_source = merge_imported_transactions(
-                    existing, {"amazon": parsed_amazon}
+                    existing, {source: parsed_transactions}
                 )
                 if additions:
                     existing.extend(additions)
@@ -497,22 +534,26 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
             result = {
                 "added": len(additions),
-                "duplicatesSkipped": skipped_by_source["amazon"],
+                "duplicatesSkipped": skipped_by_source[source],
                 "sources": {
-                    "amazon": {
-                        "parsed": len(parsed_amazon),
-                        "added": added_by_source["amazon"],
-                        "duplicatesSkipped": skipped_by_source["amazon"],
+                    source: {
+                        "parsed": len(parsed_transactions),
+                        "added": added_by_source[source],
+                        "duplicatesSkipped": skipped_by_source[source],
                     }
                 },
                 "revision": saved_revision,
             }
+            if credit_karma is not None:
+                result["sources"][source]["amazonTransactionsIgnored"] = (
+                    credit_karma.ignored_amazon_count
+                )
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions[token]
                 session.update(
                     status="complete",
                     progress=100,
-                    message=f"Imported {len(additions)} new Amazon transactions.",
+                    message=f"Imported {len(additions)} new {'Credit Karma' if source == 'creditkarma' else 'Amazon'} transactions.",
                     updatedAt=time.time(),
                     **{"import": result},
                 )
@@ -680,7 +721,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, message_format: str, *args: object) -> None:
         message = message_format % args
         message = re.sub(
-            r"(/api/amazon-import-sessions/)[A-Za-z0-9_-]{32,}",
+            r"(/api/(?:amazon|creditkarma)-import-sessions/)[A-Za-z0-9_-]{32,}",
             r"\1[redacted]",
             message,
         )

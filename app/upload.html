@@ -22,8 +22,9 @@
         <p class="eyebrow">Data import</p>
         <h1 id="upload-title">Bring your data together.</h1>
         <p>
-          Import directly from Amazon or select one or both exported files. Ledger validates data
-          before adding new transactions, and existing matches are left untouched.
+          Import directly from Credit Karma or Amazon, or select one or both exported files.
+          Ledger validates data before adding new transactions, and existing matches are left
+          untouched.
         </p>
       </section>
 
@@ -41,6 +42,56 @@
         <p id="result-summary"></p>
         <div class="result-sources" id="result-sources"></div>
         <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
+      </section>
+
+      <div class="direct-import-stack">
+      <section class="amazon-direct" aria-labelledby="creditkarma-direct-title">
+        <div class="amazon-direct-copy">
+          <h2 id="creditkarma-direct-title">Import directly from Credit Karma</h2>
+          <p>
+            Choose a date range and Ledger's companion extension will import all transactions as a
+            BudgetLens bundle using your signed-in Credit Karma tab. Login details stay in Chrome.
+          </p>
+        </div>
+        <div class="amazon-direct-controls">
+          <div class="date-range-fields">
+            <label>
+              <span>Start date</span>
+              <input id="creditkarma-start-date" type="date" required />
+            </label>
+            <label>
+              <span>End date</span>
+              <input id="creditkarma-end-date" type="date" required />
+            </label>
+          </div>
+          <div class="extension-state">
+            <span class="extension-dot" id="creditkarma-extension-dot" aria-hidden="true"></span>
+            <span id="creditkarma-extension-status">Checking for the companion extension…</span>
+          </div>
+          <div class="amazon-direct-actions">
+            <button class="primary-button" id="creditkarma-import-button" type="button" disabled>
+              Import Credit Karma data <span aria-hidden="true">→</span>
+            </button>
+            <button class="secondary-button" id="creditkarma-cancel-button" type="button" hidden>
+              Cancel import
+            </button>
+          </div>
+          <div class="amazon-progress" id="creditkarma-progress" aria-live="polite" hidden>
+            <div class="amazon-progress-track" aria-hidden="true">
+              <span id="creditkarma-progress-bar"></span>
+            </div>
+            <p id="creditkarma-progress-message"></p>
+          </div>
+          <p class="upload-error amazon-direct-error" id="creditkarma-direct-error" role="alert" hidden></p>
+          <details class="extension-help" id="creditkarma-extension-help">
+            <summary>Companion extension not installed?</summary>
+            <p>
+              Open <code>chrome://extensions</code>, enable Developer mode, choose
+              <strong>Load unpacked</strong>, and select this repository's
+              <code>amazon_importer_extension</code> folder. Reload this page afterward.
+            </p>
+          </details>
+        </div>
       </section>
 
       <section class="amazon-direct" aria-labelledby="amazon-direct-title">
@@ -91,6 +142,7 @@
           </details>
         </div>
       </section>
+      </div>
 
       <div class="upload-divider"><span>or upload exported JSON files</span></div>
 

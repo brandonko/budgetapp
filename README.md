@@ -11,7 +11,7 @@ The dashboard includes:
 - Month and year selection
 - Manual transaction creation, editing, and permanent deletion
 - In-app Credit Karma and Amazon JSON imports
-- Experimental direct Amazon imports through a companion Chrome extension
+- Direct Credit Karma and Amazon imports through a companion Chrome extension
 - One-to-one reconciliation of credit-card bill-payment transfers
 - Neutral spending presentation with green surpluses and red deficits
 
@@ -55,13 +55,15 @@ repository's `.gitignore` excludes both `raw_data_files/` and
 
 ### Credit Karma transactions
 
-Download Credit Karma transactions as JSON using
-[CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor).
+Ledger can collect transactions directly with its Chrome companion extension,
+as described below. For the manual workflow, download a BudgetLens JSON bundle
+using [CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor)
+with **All transactions** selected.
 
 ### Amazon orders
 
-Amazon data can be collected directly with Ledger's experimental companion
-extension, described below. For the manual workflow, export JSON from Amazon's
+Amazon data can be collected directly with Ledger's companion extension,
+described below. For the manual workflow, export JSON from Amazon's
 orders page using
 [Order History Exporter for Amazon](https://github.com/xenolphthalein/order-history-exporter-for-amazon).
 
@@ -83,29 +85,32 @@ selected files are parsed and validated before the CSV is changed, preventing a
 partially completed import. Import results report how many rows were parsed,
 added, and skipped as duplicates.
 
-### Experimental direct Amazon import
+### Direct browser imports
 
-The Upload data page also supports selecting a date range and importing from an
-authenticated Amazon tab without first saving a JSON file. This requires a
-one-time installation of the unpacked Chrome companion extension:
+The Upload data page supports selecting a date range and importing from an
+authenticated Credit Karma or Amazon tab without first saving a JSON file. This
+requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode** and select **Load unpacked**.
 3. Select the repository's `amazon_importer_extension` directory.
 4. Reload <http://127.0.0.1:8000/upload>. The page should report **Companion
    extension connected**.
-5. Choose a start and end date and select **Import Amazon orders**.
+5. Choose a start and end date, then select **Import Credit Karma data** or
+   **Import Amazon orders**.
 
-The extension opens Amazon order history and waits for sign-in when necessary.
-It uses the browser's existing Amazon session; Ledger never receives Amazon
-credentials or cookies. Progress is shown on the Upload data page, and the
-finished JSON is sent directly through a random, one-hour import session rather
-than being left in the Downloads folder. The normal Amazon JSON file picker
-remains available as a fallback.
+The Credit Karma action opens its Transactions page, collects **All
+transactions** for the range in the BudgetLens bundle shape, and sends it to the
+normal Credit Karma parser. The Amazon action opens order history and collects
+item details. Both use the browser's existing signed-in session; Ledger never
+receives site credentials or cookies. Progress is shown on the Upload data
+page, and data is sent directly through a random, one-hour import session rather
+than being left in Downloads. The normal JSON file pickers remain available as
+fallbacks.
 
-The integration is experimental because Amazon can change its order-history
-markup or present login/CAPTCHA challenges. Closing the Amazon tab cancels the
-active scrape. See
+Credit Karma can change its private GraphQL contract, and Amazon can change its
+order-history markup or present login/CAPTCHA challenges. Closing an active
+source tab cancels that import. See
 [`amazon_importer_extension/README.md`](amazon_importer_extension/README.md)
 for implementation and attribution details.
 
@@ -187,7 +192,7 @@ app/importers.py    Credit Karma and Amazon source parsers
 app/index.html      Monthly dashboard
 app/upload.html     Data import page
 amazon_importer_extension/
-                    Experimental unpacked Chrome companion extension
+                    Unpacked Chrome companion extension for direct imports
 tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)
 processed_data_files/

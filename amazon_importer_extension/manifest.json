@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Ledger Amazon Importer (Experimental)",
-  "version": "0.1.0",
-  "description": "Import Amazon order history directly into a local Ledger instance.",
+  "name": "Ledger Data Importer",
+  "version": "0.2.0",
+  "description": "Import Amazon and Credit Karma data directly into a local Ledger instance.",
   "default_locale": "en",
   "icons": {
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["activeTab", "downloads", "storage", "tabs"],
+  "permissions": ["activeTab", "downloads", "scripting", "storage", "tabs"],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.amazon.co.uk/*",
@@ -25,6 +25,7 @@
     "*://*.amazon.com.br/*",
     "*://*.amazon.com.mx/*",
     "*://*.amazon.com.be/*",
+    "*://*.creditkarma.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
@@ -33,7 +34,7 @@
       "48": "icons/icon-48.png",
       "96": "icons/icon-96.png"
     },
-    "default_title": "__MSG_extensionName__",
+    "default_title": "Ledger Data Importer",
     "default_popup": "popup/popup.html"
   },
   "content_scripts": [
@@ -83,6 +84,11 @@
         "*://*.amazon.com.be/*your-orders*"
       ],
       "js": ["content/content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.creditkarma.com/*"],
+      "js": ["creditkarma/content.js"],
       "run_at": "document_idle"
     },
     {

@@ -26,17 +26,25 @@ window.addEventListener("message", (event) => {
     message = { action: "ledgerStartImport", data: event.data.payload };
   } else if (event.data.action === "cancelAmazonImport") {
     message = { action: "ledgerCancelImport", data: event.data.payload };
+  } else if (event.data.action === "startCreditKarmaImport") {
+    message = { action: "ledgerStartCreditKarmaImport", data: event.data.payload };
+  } else if (event.data.action === "cancelCreditKarmaImport") {
+    message = { action: "ledgerCancelCreditKarmaImport", data: event.data.payload };
   } else {
     return;
   }
 
   chrome.runtime.sendMessage(message, (response) => {
+    const isCreditKarma = event.data.action.includes("CreditKarma");
+    const errorAction = isCreditKarma ? "creditKarmaError" : "error";
     if (chrome.runtime.lastError) {
-      sendToPage("error", { message: chrome.runtime.lastError.message });
+      sendToPage(errorAction, { message: chrome.runtime.lastError.message });
     } else if (!response?.success) {
-      sendToPage("error", { message: response?.error || "The extension could not start the import." });
+      sendToPage(errorAction, {
+        message: response?.error || "The extension could not start the import.",
+      });
     } else {
-      sendToPage("started");
+      sendToPage(isCreditKarma ? "creditKarmaStarted" : "started");
     }
   });
 });
@@ -50,6 +58,14 @@ chrome.runtime.onMessage.addListener((message) => {
     });
   } else if (message?.action === "ledgerImportError") {
     sendToPage("error", message.data);
+  } else if (message?.action === "ledgerCreditKarmaImportProgress") {
+    sendToPage("creditKarmaProgress", {
+      progress: message.data?.progress,
+      message: message.data?.message,
+      status: "scraping",
+    });
+  } else if (message?.action === "ledgerCreditKarmaImportError") {
+    sendToPage("creditKarmaError", message.data);
   }
 });
 

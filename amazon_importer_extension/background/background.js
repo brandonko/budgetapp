@@ -3,6 +3,8 @@
 const PENDING_KEY = "ledgerAmazonPendingImport";
 const PENDING_BACKUP_KEY = "ledgerAmazonPendingImportBackup";
 const RECENT_COMPLETION_KEY = "ledgerAmazonRecentCompletion";
+const CREDIT_KARMA_PENDING_KEY = "ledgerCreditKarmaPendingImport";
+const CREDIT_KARMA_BACKUP_KEY = "ledgerCreditKarmaPendingImportBackup";
 const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const RECENT_COMPLETION_MS = 5 * 60 * 1000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
@@ -205,6 +207,191 @@ async function handleDownload(data, sender) {
   }
 }
 
+async function getCreditKarmaPending() {
+  const active = (await chrome.storage.session.get(CREDIT_KARMA_PENDING_KEY))[
+    CREDIT_KARMA_PENDING_KEY
+  ];
+  if (active) return active;
+  const backup = (await chrome.storage.local.get(CREDIT_KARMA_BACKUP_KEY))[
+    CREDIT_KARMA_BACKUP_KEY
+  ];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(CREDIT_KARMA_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [CREDIT_KARMA_PENDING_KEY]: backup });
+  return backup;
+}
+
+async function setCreditKarmaPending(pending) {
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [CREDIT_KARMA_PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [CREDIT_KARMA_BACKUP_KEY]: saved }),
+  ]);
+}
+
+async function clearCreditKarmaPending() {
+  await Promise.all([
+    chrome.storage.session.remove(CREDIT_KARMA_PENDING_KEY),
+    chrome.storage.local.remove(CREDIT_KARMA_BACKUP_KEY),
+  ]);
+}
+
+async function updateCreditKarmaLedger(pending, data, action = "progress") {
+  const response = await fetch(
+    `${pending.ledgerOrigin}/api/creditkarma-import-sessions/${encodeURIComponent(pending.token)}/${action}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Ledger returned HTTP ${response.status}.`);
+  }
+  return payload;
+}
+
+async function reportCreditKarmaFailure(pending, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    await updateCreditKarmaLedger(pending, { status: "error", progress: 0, message });
+  } catch {
+    // Ledger may have stopped while Credit Karma was exporting.
+  }
+  await broadcast("ledgerCreditKarmaImportError", { message });
+}
+
+async function startCreditKarmaImport(payload, sender) {
+  validateRequest(payload, sender);
+  if (await getCreditKarmaPending()) {
+    throw new Error("Another Credit Karma import is already running.");
+  }
+  const pending = {
+    token: payload.token,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    ledgerOrigin: payload.ledgerOrigin,
+    tabId: null,
+    started: false,
+  };
+  await setCreditKarmaPending(pending);
+  await updateCreditKarmaLedger(pending, {
+    status: "opening_credit_karma",
+    progress: 2,
+    message: "Opening Credit Karma. Sign in if Credit Karma asks you to.",
+  });
+  const tab = await chrome.tabs.create({
+    url: "https://www.creditkarma.com/networth/transactions",
+    active: true,
+  });
+  pending.tabId = tab.id;
+  await setCreditKarmaPending(pending);
+  return { success: true };
+}
+
+async function cancelCreditKarmaImport(payload) {
+  const pending = await getCreditKarmaPending();
+  if (!pending || pending.token !== payload?.token) return { success: true };
+  if (pending.tabId !== null) {
+    try {
+      await chrome.tabs.sendMessage(pending.tabId, { action: "ledgerCancelCreditKarma" });
+    } catch {
+      // The Credit Karma content script may not have started yet.
+    }
+  }
+  try {
+    await updateCreditKarmaLedger(pending, {}, "cancel");
+  } finally {
+    await clearCreditKarmaPending();
+  }
+  return { success: true };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.forwarded) return false;
+  let operation;
+  if (message?.action === "ledgerCreditKarmaAccessToken") {
+    operation = (async () => {
+      if (!sender.tab?.id) throw new Error("Credit Karma tab was not available.");
+      const senderUrl = new URL(sender.url || "");
+      if (
+        senderUrl.hostname !== "creditkarma.com" &&
+        !senderUrl.hostname.endsWith(".creditkarma.com")
+      ) {
+        throw new Error("Login tokens can only be read from Credit Karma.");
+      }
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: sender.tab.id },
+        world: "MAIN",
+        func: () => window._ACCESS_TOKEN || null,
+      });
+      return { success: true, token: results[0]?.result || null };
+    })();
+  } else if (message?.action === "ledgerStartCreditKarmaImport") {
+    operation = startCreditKarmaImport(message.data, sender);
+  } else if (message?.action === "ledgerCancelCreditKarmaImport") {
+    operation = cancelCreditKarmaImport(message.data);
+  } else if (message?.action === "ledgerCreditKarmaProgress") {
+    operation = (async () => {
+      const pending = await getCreditKarmaPending();
+      if (!pending || pending.tabId !== sender.tab?.id) return { success: false };
+      await updateCreditKarmaLedger(pending, {
+        status: "scraping",
+        progress: Math.max(3, Math.min(95, Math.floor(message.data?.progress || 0))),
+        message: message.data?.message || "Collecting Credit Karma transactions…",
+      });
+      await broadcast("ledgerCreditKarmaImportProgress", message.data);
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerCreditKarmaComplete") {
+    operation = (async () => {
+      const pending = await getCreditKarmaPending();
+      if (!pending || pending.tabId !== sender.tab?.id) {
+        throw new Error("The active Credit Karma import session was lost.");
+      }
+      await updateCreditKarmaLedger(pending, {
+        status: "importing",
+        progress: 96,
+        message: "Credit Karma export complete. Adding new transactions to Ledger…",
+      });
+      const result = await updateCreditKarmaLedger(
+        pending,
+        { content: message.data?.content },
+        "complete",
+      );
+      await broadcast("ledgerCreditKarmaImportComplete", result);
+      await clearCreditKarmaPending();
+      return { success: true };
+    })();
+  } else if (message?.action === "ledgerCreditKarmaError") {
+    operation = (async () => {
+      const pending = await getCreditKarmaPending();
+      if (pending) await reportCreditKarmaFailure(pending, message.data?.message || "Export failed.");
+      await clearCreditKarmaPending();
+      return { success: true };
+    })();
+  } else {
+    return false;
+  }
+
+  operation.then(sendResponse).catch(async (error) => {
+    const pending = await getCreditKarmaPending();
+    if (pending) await reportCreditKarmaFailure(pending, error);
+    if (
+      message?.action === "ledgerStartCreditKarmaImport" ||
+      message?.action === "ledgerCreditKarmaComplete"
+    ) {
+      await clearCreditKarmaPending();
+    }
+    sendResponse({ success: false, error: error instanceof Error ? error.message : String(error) });
+  });
+  return true;
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.forwarded) return false;
 
@@ -288,9 +475,68 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const pending = await getCreditKarmaPending();
+  if (!pending || pending.tabId !== tabId || pending.started) return;
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(tab.url || "");
+  } catch {
+    return;
+  }
+  if (
+    parsedUrl.hostname !== "creditkarma.com" &&
+    !parsedUrl.hostname.endsWith(".creditkarma.com")
+  ) {
+    return;
+  }
+  if (
+    parsedUrl.hostname !== "www.creditkarma.com" ||
+    !parsedUrl.pathname.startsWith("/networth/transactions")
+  ) {
+    await updateCreditKarmaLedger(pending, {
+      status: "waiting_for_credit_karma",
+      progress: 2,
+      message: "Sign in to Credit Karma, then open Transactions to continue automatically.",
+    });
+    return;
+  }
+
+  pending.started = true;
+  await setCreditKarmaPending(pending);
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      action: "ledgerCaptureCreditKarma",
+      startDate: pending.startDate,
+      endDate: pending.endDate,
+    });
+    await updateCreditKarmaLedger(pending, {
+      status: "scraping",
+      progress: 3,
+      message: "Collecting all Credit Karma transactions in the selected date range…",
+    });
+  } catch (error) {
+    pending.started = false;
+    await setCreditKarmaPending(pending);
+    await reportCreditKarmaFailure(pending, error);
+  }
+});
+
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const pending = await getPending();
   if (!pending || pending.tabId !== tabId) return;
   await reportFailure(pending, new Error("The Amazon tab was closed before import completed."));
   await clearPending();
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const pending = await getCreditKarmaPending();
+  if (!pending || pending.tabId !== tabId) return;
+  await reportCreditKarmaFailure(
+    pending,
+    new Error("The Credit Karma tab was closed before import completed."),
+  );
+  await clearCreditKarmaPending();
 });
