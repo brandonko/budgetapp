@@ -65,7 +65,10 @@ const elements = {
   deleteTransactionButton: document.querySelector("#delete-transaction-button"),
   saveTransactionButton: document.querySelector("#save-transaction-button"),
   errorState: document.querySelector("#error-state"),
+  errorEyebrow: document.querySelector("#error-eyebrow"),
+  errorTitle: document.querySelector("#error-title"),
   errorMessage: document.querySelector("#error-message"),
+  createFileButton: document.querySelector("#create-file-button"),
   retryButton: document.querySelector("#retry-button"),
   dashboardSections: document.querySelectorAll(".hero, .summary-grid, .categories-section"),
   datalists: {
@@ -438,8 +441,13 @@ function renderDashboard() {
   }`;
 }
 
-function setError(message) {
+function setError(message, code = "") {
+  const fileMissing = code === "transaction_file_missing";
+  elements.errorEyebrow.textContent = fileMissing ? "Set up Ledger" : "Unable to load data";
+  elements.errorTitle.textContent = fileMissing ? "Create your transaction file." : "Something went wrong.";
   elements.errorMessage.textContent = message;
+  elements.createFileButton.hidden = !fileMissing;
+  elements.retryButton.hidden = fileMissing;
   elements.errorState.hidden = false;
   elements.dashboardSections.forEach((section) => {
     section.hidden = true;
@@ -459,11 +467,34 @@ async function loadTransactions() {
     const response = await fetch("/api/transactions", { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) {
+      if (payload.code === "transaction_file_missing") {
+        setError(payload.error, payload.code);
+        return;
+      }
       throw new Error(payload.error || `Request failed with status ${response.status}`);
     }
     applyPayload(payload);
   } catch (error) {
     setError(error instanceof Error ? error.message : "The transaction data could not be loaded.");
+  }
+}
+
+async function createTransactionFile() {
+  elements.createFileButton.disabled = true;
+  elements.createFileButton.textContent = "Creating…";
+  try {
+    const response = await fetch("/api/transactions/initialize", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `Request failed with status ${response.status}`);
+    }
+    clearError();
+    applyPayload(payload);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "The transaction file could not be created.");
+  } finally {
+    elements.createFileButton.disabled = false;
+    elements.createFileButton.textContent = "Create transaction file";
   }
 }
 
@@ -494,5 +525,6 @@ elements.formDialog.addEventListener("click", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
+elements.createFileButton.addEventListener("click", createTransactionFile);
 
 loadTransactions();

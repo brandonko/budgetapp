@@ -133,6 +133,10 @@ the stale write instead of silently overwriting newer data.
 
 ## Master CSV schema
 
+If the master CSV is deleted while Ledger is running, the dashboard offers to
+create a new, header-only transaction file. Existing files are never replaced
+by this initialization action.
+
 ```text
 date,description,amount,category,accountName,accountType,provider
 ```

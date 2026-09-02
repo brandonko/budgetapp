@@ -471,6 +471,12 @@ h2 {
   color: var(--muted);
 }
 
+.error-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+}
+
 .secondary-button {
   border: 1px solid var(--line);
   background: white;
