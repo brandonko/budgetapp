@@ -810,9 +810,9 @@ h2 {
   gap: 46px;
   margin-bottom: 42px;
   padding: 34px;
-  border: 1px solid #bed3c4;
+  border: 1px solid var(--line);
   border-radius: 16px;
-  background: #f1f7f2;
+  background: var(--surface);
   box-shadow: 0 12px 34px rgb(23 34 29 / 5%);
 }
 
