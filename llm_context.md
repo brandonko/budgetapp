@@ -130,6 +130,36 @@ ingestion belongs in the **Upload data** page.
 - Report parsed, added, and duplicate-skipped counts after import.
 - If the database is new and empty, the first valid import populates it.
 
+### Experimental direct Amazon ingestion
+
+- Direct Amazon import is being evaluated on the
+  `experimental/amazon-direct-import` branch.
+- Keep browser-authenticated Amazon access in the companion Chrome extension;
+  the localhost application must never request, store, or transmit Amazon
+  passwords or cookies.
+- The Upload data page owns date selection, progress, cancellation, results,
+  and extension-install guidance.
+- Default the direct Amazon date range to a 14-day lookback ending today while
+  keeping both dates editable.
+- Use random, expiring server-side import sessions. Do not place an import token
+  in an Amazon URL, persist it to the CSV, or print it in server request logs.
+- Preserve an active extension request across Manifest V3 background-worker
+  suspension. A short-lived extension-local recovery copy is acceptable when
+  it is deleted on completion/cancellation and rejected when stale.
+- The extension may communicate only with loopback Ledger origins and must
+  verify that start requests came from that origin's Upload data page.
+- Direct imports merge against the latest CSV state at completion rather than
+  requiring the CSV revision from the start of a potentially long scrape.
+  Imports append through the same validation, occurrence-aware deduplication,
+  data lock, and atomic write path as file uploads.
+- Preserve the manual Amazon JSON uploader as a fallback for extension errors,
+  Amazon page changes, login challenges, and unsupported browsers.
+- Keep the upstream scraper isolated and attributed. It currently derives from
+  Order History Exporter for Amazon 1.3.0 under the Unlicense.
+- Treat direct importing as Chrome-only and experimental until real-account
+  testing establishes that pagination, sign-in resumption, cancellation, and
+  item prices work reliably.
+
 ### Credit Karma parser
 
 - Read the export's `transactions` array.

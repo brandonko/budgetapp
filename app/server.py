@@ -11,8 +11,10 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import tempfile
 import threading
+import time
 from collections import Counter
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -43,6 +45,14 @@ MAX_REQUEST_BYTES = 1_000_000
 MAX_IMPORT_REQUEST_BYTES = 50_000_000
 BILL_PAYMENT_WINDOW_DAYS = 5
 TRANSACTION_PATH = re.compile(r"^/api/transactions/(\d+)$")
+AMAZON_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+AMAZON_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|cancel)$"
+)
+AMAZON_IMPORT_SESSION_TTL_SECONDS = 60 * 60
+TERMINAL_IMPORT_STATUSES = {"complete", "error", "cancelled"}
 STATIC_FILES = {
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
@@ -176,6 +186,30 @@ def transaction_identity(transaction: Mapping[str, Any]) -> tuple[str, Decimal]:
     )
 
 
+def merge_imported_transactions(
+    existing: list[dict[str, Any]],
+    parsed_by_source: Mapping[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, int]]:
+    """Merge imports using occurrence-aware date-and-amount deduplication."""
+    existing_counts = Counter(transaction_identity(row) for row in existing)
+    upload_occurrences: Counter[tuple[str, Decimal]] = Counter()
+    added_by_source = {source: 0 for source in parsed_by_source}
+    skipped_by_source = {source: 0 for source in parsed_by_source}
+    additions: list[dict[str, Any]] = []
+
+    for source, parsed_transactions in parsed_by_source.items():
+        for parsed_transaction in parsed_transactions:
+            normalized = normalize_transaction(parsed_transaction, f"{source} transaction")
+            key = transaction_identity(normalized)
+            upload_occurrences[key] += 1
+            if upload_occurrences[key] <= existing_counts[key]:
+                skipped_by_source[source] += 1
+            else:
+                additions.append(normalized)
+                added_by_source[source] += 1
+    return additions, added_by_source, skipped_by_source
+
+
 def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
     """Reconcile one-to-one transfers between bank and credit accounts."""
     bank_entries: list[tuple[int, date, Decimal, str]] = []
@@ -236,6 +270,25 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def data_lock(self) -> threading.Lock:
         return self.server.data_lock  # type: ignore[attr-defined]
 
+    @property
+    def amazon_import_sessions(self) -> dict[str, dict[str, Any]]:
+        return self.server.amazon_import_sessions  # type: ignore[attr-defined]
+
+    @property
+    def amazon_import_lock(self) -> threading.Lock:
+        return self.server.amazon_import_lock  # type: ignore[attr-defined]
+
+    def prune_amazon_import_sessions(self) -> None:
+        cutoff = time.time() - AMAZON_IMPORT_SESSION_TTL_SECONDS
+        with self.amazon_import_lock:
+            expired = [
+                token
+                for token, session in self.amazon_import_sessions.items()
+                if float(session["updatedAt"]) < cutoff
+            ]
+            for token in expired:
+                del self.amazon_import_sessions[token]
+
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path
         if path == "/api/transactions":
@@ -245,6 +298,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.OK, public_state(transactions, revision))
             except CsvDataError as exc:
                 self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+        session_match = AMAZON_IMPORT_SESSION_PATH.fullmatch(path)
+        if session_match is not None:
+            self.get_amazon_import_session(session_match.group(1))
             return
         if path in STATIC_FILES:
             self.send_static_file(STATIC_FILES[path])
@@ -257,8 +314,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.mutate_transactions("create")
         elif path == "/api/import":
             self.import_transactions()
+        elif path == "/api/amazon-import-sessions":
+            self.create_amazon_import_session()
         else:
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            action_match = AMAZON_IMPORT_ACTION_PATH.fullmatch(path)
+            if action_match is None:
+                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+                return
+            self.update_amazon_import_session(action_match.group(1), action_match.group(2))
 
     def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         match = TRANSACTION_PATH.fullmatch(urlparse(self.path).path)
@@ -291,6 +354,184 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, Mapping):
             raise CsvDataError("request body must be a JSON object")
         return payload
+
+    @staticmethod
+    def public_amazon_import_session(session: Mapping[str, Any]) -> dict[str, Any]:
+        response = {
+            "status": session["status"],
+            "progress": session["progress"],
+            "message": session["message"],
+            "startDate": session["startDate"],
+            "endDate": session["endDate"],
+        }
+        if "import" in session:
+            response["import"] = session["import"]
+        return response
+
+    def create_amazon_import_session(self) -> None:
+        try:
+            payload = self.read_json_body()
+            raw_start = payload.get("startDate")
+            raw_end = payload.get("endDate")
+            if not isinstance(raw_start, str) or not isinstance(raw_end, str):
+                raise CsvDataError("startDate and endDate must use YYYY-MM-DD")
+            try:
+                start_date = date.fromisoformat(raw_start)
+                end_date = date.fromisoformat(raw_end)
+            except ValueError as exc:
+                raise CsvDataError("startDate and endDate must use YYYY-MM-DD") from exc
+            if start_date > end_date:
+                raise CsvDataError("startDate cannot be after endDate")
+
+            self.prune_amazon_import_sessions()
+            token = secrets.token_urlsafe(32)
+            now = time.time()
+            session: dict[str, Any] = {
+                "status": "waiting_for_extension",
+                "progress": 0,
+                "message": "Waiting for the Amazon importer extension.",
+                "startDate": start_date.isoformat(),
+                "endDate": end_date.isoformat(),
+                "createdAt": now,
+                "updatedAt": now,
+            }
+            with self.amazon_import_lock:
+                self.amazon_import_sessions[token] = session
+            response = self.public_amazon_import_session(session)
+            response["token"] = token
+            self.send_json(HTTPStatus.CREATED, response)
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def get_amazon_import_session(self, token: str) -> None:
+        self.prune_amazon_import_sessions()
+        with self.amazon_import_lock:
+            session = self.amazon_import_sessions.get(token)
+            response = (
+                self.public_amazon_import_session(session) if session is not None else None
+            )
+        if response is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Import session not found or expired."})
+            return
+        self.send_json(HTTPStatus.OK, response)
+
+    def update_amazon_import_session(self, token: str, action: str) -> None:
+        try:
+            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
+            self.prune_amazon_import_sessions()
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token)
+                if session is None:
+                    self.send_json(
+                        HTTPStatus.NOT_FOUND, {"error": "Import session not found or expired."}
+                    )
+                    return
+                if session["status"] in TERMINAL_IMPORT_STATUSES:
+                    self.send_json(HTTPStatus.OK, self.public_amazon_import_session(session))
+                    return
+
+            if action == "complete":
+                self.complete_amazon_import_session(token, payload)
+                return
+
+            now = time.time()
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token)
+                if session is None:
+                    raise CsvDataError("Import session expired.")
+                if action == "cancel":
+                    session.update(
+                        status="cancelled",
+                        progress=session["progress"],
+                        message="Amazon import cancelled.",
+                        updatedAt=now,
+                    )
+                else:
+                    raw_progress = payload.get("progress", session["progress"])
+                    if isinstance(raw_progress, bool) or not isinstance(raw_progress, (int, float)):
+                        raise CsvDataError("progress must be a number")
+                    progress = max(0, min(99, int(raw_progress)))
+                    raw_status = payload.get("status", "scraping")
+                    allowed_statuses = {
+                        "waiting_for_amazon",
+                        "opening_amazon",
+                        "scraping",
+                        "importing",
+                        "error",
+                    }
+                    if raw_status not in allowed_statuses:
+                        raise CsvDataError("unsupported import status")
+                    raw_message = payload.get("message", "Importing Amazon orders.")
+                    if not isinstance(raw_message, str) or not raw_message.strip():
+                        raise CsvDataError("message cannot be blank")
+                    session.update(
+                        status=raw_status,
+                        progress=progress,
+                        message=raw_message.strip()[:500],
+                        updatedAt=now,
+                    )
+                response = self.public_amazon_import_session(session)
+            self.send_json(HTTPStatus.OK, response)
+        except (CsvDataError, ImportDataError) as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def complete_amazon_import_session(
+        self, token: str, payload: Mapping[str, Any]
+    ) -> None:
+        content = payload.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise CsvDataError("Amazon export content is required")
+
+        try:
+            parsed_amazon = parse_amazon(content)
+            with self.data_lock:
+                existing, _revision = read_transaction_state(self.csv_path)
+                additions, added_by_source, skipped_by_source = merge_imported_transactions(
+                    existing, {"amazon": parsed_amazon}
+                )
+                if additions:
+                    existing.extend(additions)
+                    existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
+                    write_transactions_atomic(self.csv_path, existing)
+                _saved_transactions, saved_revision = read_transaction_state(self.csv_path)
+
+            result = {
+                "added": len(additions),
+                "duplicatesSkipped": skipped_by_source["amazon"],
+                "sources": {
+                    "amazon": {
+                        "parsed": len(parsed_amazon),
+                        "added": added_by_source["amazon"],
+                        "duplicatesSkipped": skipped_by_source["amazon"],
+                    }
+                },
+                "revision": saved_revision,
+            }
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions[token]
+                session.update(
+                    status="complete",
+                    progress=100,
+                    message=f"Imported {len(additions)} new Amazon transactions.",
+                    updatedAt=time.time(),
+                    **{"import": result},
+                )
+                response = self.public_amazon_import_session(session)
+            self.send_json(HTTPStatus.OK, response)
+        except (CsvDataError, ImportDataError, OSError) as exc:
+            with self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token)
+                if session is not None:
+                    session.update(
+                        status="error",
+                        progress=session["progress"],
+                        message=str(exc)[:500],
+                        updatedAt=time.time(),
+                    )
+            if isinstance(exc, OSError):
+                self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            else:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
     def import_transactions(self) -> None:
         try:
@@ -333,21 +574,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "The transaction file changed after this page loaded. Reload and try again."
                     )
 
-                existing_counts = Counter(transaction_identity(row) for row in existing)
-                upload_occurrences: Counter[tuple[str, Decimal]] = Counter()
-                added_by_source = {source: 0 for source in parsed_by_source}
-                skipped_by_source = {source: 0 for source in parsed_by_source}
-                additions: list[dict[str, Any]] = []
-                for source, parsed_transactions in parsed_by_source.items():
-                    for parsed_transaction in parsed_transactions:
-                        normalized = normalize_transaction(parsed_transaction, f"{source} transaction")
-                        key = transaction_identity(normalized)
-                        upload_occurrences[key] += 1
-                        if upload_occurrences[key] <= existing_counts[key]:
-                            skipped_by_source[source] += 1
-                        else:
-                            additions.append(normalized)
-                            added_by_source[source] += 1
+                additions, added_by_source, skipped_by_source = merge_imported_transactions(
+                    existing, parsed_by_source
+                )
 
                 if additions:
                     existing.extend(additions)
@@ -449,7 +678,13 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, message_format: str, *args: object) -> None:
-        print(f"{self.address_string()} - {message_format % args}")
+        message = message_format % args
+        message = re.sub(
+            r"(/api/amazon-import-sessions/)[A-Za-z0-9_-]{32,}",
+            r"\1[redacted]",
+            message,
+        )
+        print(f"{self.address_string()} - {message}")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -477,6 +712,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), BudgetRequestHandler)
     server.csv_path = args.csv.resolve()  # type: ignore[attr-defined]
     server.data_lock = threading.Lock()  # type: ignore[attr-defined]
+    server.amazon_import_sessions = {}  # type: ignore[attr-defined]
+    server.amazon_import_lock = threading.Lock()  # type: ignore[attr-defined]
     print(f"Budget dashboard: http://{args.host}:{args.port}")
     print(f"Reading and writing transactions at: {server.csv_path}")
     try:

@@ -16,6 +16,11 @@ Use **Upload data** to import either a Credit Karma JSON export, an Amazon order
 history JSON export, or both. Transactions can also be added, edited, and
 deleted directly from the dashboard.
 
+For the experimental direct Amazon workflow, load `amazon_importer_extension`
+as an unpacked Chrome extension, reload the Upload data page, select a date
+range, and choose **Import Amazon orders**. The manual JSON uploader remains
+available as a fallback.
+
 Use a different CSV or port when needed:
 
 ```powershell

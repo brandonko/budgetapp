@@ -22,10 +22,77 @@
         <p class="eyebrow">Data import</p>
         <h1 id="upload-title">Bring your data together.</h1>
         <p>
-          Select either source or both. Ledger validates every file before adding new transactions
-          to the master CSV, and existing matches are left untouched.
+          Import directly from Amazon or select one or both exported files. Ledger validates data
+          before adding new transactions, and existing matches are left untouched.
         </p>
       </section>
+
+      <div class="import-note">
+        <span aria-hidden="true">i</span>
+        <p>
+          Duplicate matching uses date, amount, and occurrence count. Multiple identical
+          transactions from the same day are preserved.
+        </p>
+      </div>
+
+      <section class="import-result" id="import-result" aria-live="polite" hidden>
+        <p class="eyebrow">Import complete</p>
+        <h2 id="result-title"></h2>
+        <p id="result-summary"></p>
+        <div class="result-sources" id="result-sources"></div>
+        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
+      </section>
+
+      <section class="amazon-direct" aria-labelledby="amazon-direct-title">
+        <div class="amazon-direct-copy">
+          <h2 id="amazon-direct-title">Import directly from Amazon</h2>
+          <p>
+            Choose a date range and Ledger's companion extension will collect orders using your
+            signed-in Amazon tab. Your Amazon password and cookies never leave the browser.
+          </p>
+        </div>
+        <div class="amazon-direct-controls">
+          <div class="date-range-fields">
+            <label>
+              <span>Start date</span>
+              <input id="amazon-start-date" type="date" required />
+            </label>
+            <label>
+              <span>End date</span>
+              <input id="amazon-end-date" type="date" required />
+            </label>
+          </div>
+          <div class="extension-state">
+            <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
+            <span id="extension-status">Checking for the companion extension…</span>
+          </div>
+          <div class="amazon-direct-actions">
+            <button class="primary-button" id="amazon-import-button" type="button" disabled>
+              Import Amazon orders <span aria-hidden="true">→</span>
+            </button>
+            <button class="secondary-button" id="amazon-cancel-button" type="button" hidden>
+              Cancel import
+            </button>
+          </div>
+          <div class="amazon-progress" id="amazon-progress" aria-live="polite" hidden>
+            <div class="amazon-progress-track" aria-hidden="true">
+              <span id="amazon-progress-bar"></span>
+            </div>
+            <p id="amazon-progress-message"></p>
+          </div>
+          <p class="upload-error amazon-direct-error" id="amazon-direct-error" role="alert" hidden></p>
+          <details class="extension-help" id="extension-help">
+            <summary>Companion extension not installed?</summary>
+            <p>
+              Open <code>chrome://extensions</code>, enable Developer mode, choose
+              <strong>Load unpacked</strong>, and select this repository's
+              <code>amazon_importer_extension</code> folder. Reload this page afterward.
+            </p>
+          </details>
+        </div>
+      </section>
+
+      <div class="upload-divider"><span>or upload exported JSON files</span></div>
 
       <form id="upload-form">
         <div class="parser-grid">
@@ -64,14 +131,6 @@
           </label>
         </div>
 
-        <div class="import-note">
-          <span aria-hidden="true">i</span>
-          <p>
-            Duplicate matching uses date, amount, and occurrence count. Multiple identical
-            transactions from the same day are preserved.
-          </p>
-        </div>
-
         <div class="upload-actions">
           <p class="upload-error" id="upload-error" role="alert" hidden></p>
           <button class="primary-button upload-button" id="upload-button" type="submit" disabled>
@@ -81,13 +140,6 @@
         </div>
       </form>
 
-      <section class="import-result" id="import-result" aria-live="polite" hidden>
-        <p class="eyebrow">Import complete</p>
-        <h2 id="result-title"></h2>
-        <p id="result-summary"></p>
-        <div class="result-sources" id="result-sources"></div>
-        <a class="primary-button result-link" href="/">View dashboard <span aria-hidden="true">&rarr;</span></a>
-      </section>
     </main>
   </body>
 </html>
