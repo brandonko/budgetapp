@@ -136,6 +136,8 @@ ingestion belongs in the **Upload data** page.
   passwords or cookies.
 - The Upload data page owns date selection, progress, cancellation, results,
   and extension-install guidance.
+- Default the direct Amazon date range to a 14-day lookback ending today while
+  keeping both dates editable.
 - Use random, expiring server-side import sessions. Do not place an import token
   in an Amazon URL, persist it to the CSV, or print it in server request logs.
 - Preserve an active extension request across Manifest V3 background-worker

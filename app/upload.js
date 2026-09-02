@@ -53,8 +53,10 @@ function localIsoDate(value) {
 
 function initializeAmazonDates() {
   const today = new Date();
+  const lookbackStart = new Date(today);
+  lookbackStart.setDate(lookbackStart.getDate() - 14);
   const todayIso = localIsoDate(today);
-  elements.amazonStartDate.value = `${today.getFullYear()}-01-01`;
+  elements.amazonStartDate.value = localIsoDate(lookbackStart);
   elements.amazonEndDate.value = todayIso;
   elements.amazonStartDate.max = todayIso;
   elements.amazonEndDate.max = todayIso;
