@@ -126,11 +126,9 @@ the transaction budget-visible again.
 The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Upload data** page.
 
-- Show one file-selection card per supported parser.
-- Currently supported parsers are `Credit Karma` and `Amazon`.
-- Allow either parser to be used alone or both in the same import.
-- Validate every selected file before writing anything. A multi-file import is
-  all-or-nothing.
+- Show one import card per supported source: `Credit Karma` and `Amazon`.
+- Do not show manual JSON file pickers or an exported-files section.
+- Keep source parsing and validation on the server boundary.
 - Report parsed, added, and duplicate-skipped counts after import.
 - If the database is new and empty, the first valid import populates it.
 
@@ -155,8 +153,6 @@ ingestion belongs in the **Upload data** page.
   requiring the CSV revision from the start of a potentially long scrape.
   Imports append through the same validation, occurrence-aware deduplication,
   data lock, and atomic write path as file uploads.
-- Preserve both manual JSON uploaders as fallbacks for extension errors, source
-  page/API changes, login challenges, and unsupported browsers.
 - Keep the upstream scraper isolated and attributed. It currently derives from
   Order History Exporter for Amazon 1.3.0 under the Unlicense.
 - Direct Credit Karma import must request the BudgetLens equivalent of **All
@@ -168,8 +164,8 @@ ingestion belongs in the **Upload data** page.
 - The Credit Karma bridge is a clean implementation based on the documented
   export contract and observed API behavior. Do not copy CreditKarmaExtractor
   source unless that project adopts a compatible license.
-- Treat direct importing as Chrome-only. Keep manual fallbacks available because
-  private APIs, page markup, pagination, and sign-in behavior can change.
+- Treat browser importing as Chrome-only. Private APIs, page markup, pagination,
+  and sign-in behavior can change and should produce clear errors.
 
 ### Credit Karma parser
 

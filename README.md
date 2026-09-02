@@ -10,7 +10,7 @@ The dashboard includes:
 - Category breakdowns and latest-first transaction lists
 - Month and year selection
 - Manual transaction creation, editing, and permanent deletion
-- In-app Credit Karma and Amazon JSON imports
+- In-app Credit Karma and Amazon browser imports
 - Direct Credit Karma and Amazon imports through a companion Chrome extension
 - One-to-one reconciliation of credit-card bill-payment transfers
 - Neutral spending presentation with green surpluses and red deficits
@@ -47,30 +47,14 @@ python app\server.py --csv path\to\transactions.csv --port 8080
 The server binds to `127.0.0.1` by default so the financial data and editing
 endpoints are accessible only from the local machine.
 
-## Download source data
+## Import data
 
 Raw financial data is private and must not be committed to Git. This
 repository's `.gitignore` excludes both `raw_data_files/` and
 `processed_data_files/`.
 
-### Credit Karma transactions
-
-Ledger can collect transactions directly with its Chrome companion extension,
-as described below. For the manual workflow, download a BudgetLens JSON bundle
-using [CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor)
-with **All transactions** selected.
-
-### Amazon orders
-
-Amazon data can be collected directly with Ledger's companion extension,
-described below. For the manual workflow, export JSON from Amazon's
-orders page using
-[Order History Exporter for Amazon](https://github.com/xenolphthalein/order-history-exporter-for-amazon).
-
-## Import source files
-
 With Ledger running, open <http://127.0.0.1:8000/upload> or select **Upload
-data** from the dashboard. The page has one file card for each supported parser:
+data** from the dashboard. The page supports two sources:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
   amounts. Amazon card transactions are omitted so they can be replaced by
@@ -80,12 +64,7 @@ data** from the dashboard. The page has one file card for each supported parser:
   it supplies the Amazon payment account. Otherwise, unknown account fields
   default to `Amazon`.
 
-Either file can be imported by itself, or both can be selected together. All
-selected files are parsed and validated before the CSV is changed, preventing a
-partially completed import. Import results report how many rows were parsed,
-added, and skipped as duplicates.
-
-### Direct browser imports
+### Companion browser extension
 
 The Upload data page supports selecting a date range and importing from an
 authenticated Credit Karma or Amazon tab without first saving a JSON file. This
@@ -104,9 +83,8 @@ transactions** for the range in the BudgetLens bundle shape, and sends it to the
 normal Credit Karma parser. The Amazon action opens order history and collects
 item details. Both use the browser's existing signed-in session; Ledger never
 receives site credentials or cookies. Progress is shown on the Upload data
-page, and data is sent directly through a random, one-hour import session rather
-than being left in Downloads. The normal JSON file pickers remain available as
-fallbacks.
+page, and data is sent through a random, one-hour import session rather than
+being left in Downloads.
 
 Credit Karma can change its private GraphQL contract, and Amazon can change its
 order-history markup or present login/CAPTCHA challenges. Closing an active
@@ -117,9 +95,9 @@ for implementation and attribution details.
 ### Duplicate handling
 
 Imports identify existing transactions by normalized `date` and `amount` while
-also counting repeated occurrences. For example, if an uploaded file contains
-two transactions for the same amount on the same date and neither exists in the
-CSV, both are added. Uploading that file again skips both. If only one already
+also counting repeated occurrences. For example, if a source contains two
+transactions for the same amount on the same date and neither exists in the
+CSV, both are added. Importing that range again skips both. If only one already
 exists, one additional occurrence is added.
 
 This deliberately ignores descriptions so an edited description does not cause

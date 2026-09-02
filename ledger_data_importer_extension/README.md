@@ -31,8 +31,7 @@ removed on completion or cancellation and rejected after two hours. The server
 token itself expires after one hour without progress. The extension accepts
 requests only from an `http://127.0.0.1` or `http://localhost` Upload data page.
 
-Closing the source tab ends its import. Both manual JSON uploaders remain
-available as fallbacks.
+Closing the source tab ends its import.
 
 ## Source integrations
 
@@ -50,5 +49,4 @@ The Credit Karma integration is a clean implementation of the BudgetLens
 transaction export behavior documented by
 [CreditKarmaExtractor](https://github.com/cbangera2/CreditKarmaExtractor). No
 CreditKarmaExtractor source code is bundled because that repository does not
-currently declare a software license. Credit Karma's private API may change;
-the manual CreditKarmaExtractor BudgetLens upload remains the recovery path.
+currently declare a software license. Credit Karma's private API may change.

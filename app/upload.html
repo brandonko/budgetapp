@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Import transaction source files into Ledger." />
+    <meta name="description" content="Import Credit Karma and Amazon data into Ledger." />
     <title>Upload data — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/upload.js" defer></script>
@@ -22,9 +22,8 @@
         <p class="eyebrow">Data import</p>
         <h1 id="upload-title">Bring your data together.</h1>
         <p>
-          Import directly from Credit Karma or Amazon, or select one or both exported files.
-          Ledger validates data before adding new transactions, and existing matches are left
-          untouched.
+          Bring Credit Karma transactions and itemized Amazon orders into Ledger. Data is
+          validated before new transactions are added, and existing matches are left untouched.
         </p>
       </section>
 
@@ -49,7 +48,7 @@
           <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
           <div>
             <strong id="extension-status">Checking for the companion extension…</strong>
-            <span>Required for direct Credit Karma and Amazon imports</span>
+            <span>Required for Credit Karma and Amazon imports</span>
           </div>
         </div>
         <details class="extension-help" id="extension-help">
@@ -65,10 +64,10 @@
       <div class="direct-import-stack">
         <section class="amazon-direct" aria-labelledby="creditkarma-direct-title">
           <div class="amazon-direct-copy">
-            <h2 id="creditkarma-direct-title">Import directly from Credit Karma</h2>
+            <h2 id="creditkarma-direct-title">Credit Karma</h2>
             <p>
-              Choose a date range and Ledger's companion extension will import all transactions as a
-              BudgetLens bundle using your signed-in Credit Karma tab. Login details stay in Chrome.
+              Imports account transactions, applies expense-oriented signs, and excludes Amazon
+              charges that will be itemized by the Amazon parser.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -102,10 +101,10 @@
 
         <section class="amazon-direct" aria-labelledby="amazon-direct-title">
           <div class="amazon-direct-copy">
-            <h2 id="amazon-direct-title">Import directly from Amazon</h2>
+            <h2 id="amazon-direct-title">Amazon orders</h2>
             <p>
-              Choose a date range and Ledger's companion extension will collect orders using your
-              signed-in Amazon tab. Your Amazon password and cookies never leave the browser.
+              Creates one transaction per item and applies the configured sales-tax estimate. If
+              card metadata is unavailable, Amazon is used as the account identity.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -137,55 +136,6 @@
           </div>
         </section>
       </div>
-
-      <div class="upload-divider"><span>or upload exported JSON files</span></div>
-
-      <form id="upload-form">
-        <div class="parser-grid">
-          <label class="parser-card" for="creditkarma-file">
-            <span class="parser-card-topline">
-              <span class="parser-number">01</span>
-              <span class="file-status" id="creditkarma-status">No file selected</span>
-            </span>
-            <span class="parser-name">Credit Karma</span>
-            <span class="parser-description">
-              Imports account transactions, applies expense-oriented signs, and excludes Amazon
-              charges that will be itemized by the Amazon parser.
-            </span>
-            <span class="file-picker">
-              <span id="creditkarma-filename">Choose JSON file</span>
-              <span aria-hidden="true">Browse</span>
-            </span>
-            <input id="creditkarma-file" name="creditkarma" type="file" accept=".json,application/json" />
-          </label>
-
-          <label class="parser-card" for="amazon-file">
-            <span class="parser-card-topline">
-              <span class="parser-number">02</span>
-              <span class="file-status" id="amazon-status">No file selected</span>
-            </span>
-            <span class="parser-name">Amazon orders</span>
-            <span class="parser-description">
-              Creates one transaction per item and applies the configured sales-tax estimate. If
-              card metadata is unavailable, Amazon is used as the account identity.
-            </span>
-            <span class="file-picker">
-              <span id="amazon-filename">Choose JSON file</span>
-              <span aria-hidden="true">Browse</span>
-            </span>
-            <input id="amazon-file" name="amazon" type="file" accept=".json,application/json" />
-          </label>
-        </div>
-
-        <div class="upload-actions">
-          <p class="upload-error" id="upload-error" role="alert" hidden></p>
-          <button class="primary-button upload-button" id="upload-button" type="submit" disabled>
-            Upload selected data
-            <span aria-hidden="true">&uarr;</span>
-          </button>
-        </div>
-      </form>
-
     </main>
   </body>
 </html>
