@@ -6,6 +6,7 @@
     <meta name="description" content="Import Credit Karma and Amazon data into Ledger." />
     <title>Upload data — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/navigation.js" defer></script>
     <script src="/upload.js" defer></script>
   </head>
   <body>
@@ -14,7 +15,18 @@
         <span class="brand-mark" aria-hidden="true">L</span>
         <span>Ledger</span>
       </a>
-      <a class="header-link" href="/">Back to dashboard</a>
+      <details class="site-menu">
+        <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </summary>
+        <nav class="menu-panel" aria-label="Main navigation">
+          <a href="/">Dashboard</a>
+          <a href="/upload" aria-current="page">Upload data</a>
+          <a href="/settings">Settings</a>
+        </nav>
+      </details>
     </header>
 
     <main class="upload-main">
@@ -22,8 +34,7 @@
         <p class="eyebrow">Data import</p>
         <h1 id="upload-title">Bring your data together.</h1>
         <p>
-          Bring Credit Karma transactions and itemized Amazon orders into Ledger. Data is
-          validated before new transactions are added, and existing matches are left untouched.
+          Data is validated before new transactions are added, and existing matches are left untouched.
         </p>
       </section>
 
@@ -136,6 +147,34 @@
           </div>
         </section>
       </div>
+
+      <section class="import-roadmap" aria-labelledby="import-roadmap-title">
+        <div class="import-roadmap-heading">
+          <div>
+            <p class="eyebrow">Work in progress</p>
+            <h2 id="import-roadmap-title">More sources are on the way.</h2>
+          </div>
+          <p>These integrations are planned but are not available yet.</p>
+        </div>
+        <div class="roadmap-grid">
+          <article class="roadmap-item">
+            <span>Venmo</span>
+            <small>Planned</small>
+          </article>
+          <article class="roadmap-item">
+            <span>AliExpress items</span>
+            <small>Planned</small>
+          </article>
+          <article class="roadmap-item">
+            <span>eBay items</span>
+            <small>Planned</small>
+          </article>
+          <article class="roadmap-item">
+            <span>Apple Card</span>
+            <small>Manual import likely</small>
+          </article>
+        </div>
+      </section>
     </main>
 
     <dialog class="transaction-dialog" id="import-review-dialog">
