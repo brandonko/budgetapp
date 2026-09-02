@@ -177,25 +177,31 @@ def transaction_identity(transaction: Mapping[str, Any]) -> tuple[str, Decimal]:
 
 
 def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
-    """Reconcile one-to-one bank withdrawals with credit-account payments."""
-    bank_debits: list[tuple[int, date, Decimal]] = []
-    credit_credits: list[tuple[int, date, Decimal]] = []
+    """Reconcile one-to-one transfers between bank and credit accounts."""
+    bank_entries: list[tuple[int, date, Decimal, str]] = []
+    credit_entries: list[tuple[int, date, Decimal, str]] = []
     for index, transaction in enumerate(transactions):
-        if str(transaction["category"]).strip().casefold() != "transfer":
+        category = str(transaction["category"]).strip().casefold()
+        if category not in {"transfer", "income"}:
             continue
         account_type = str(transaction["accountType"]).strip().casefold()
         amount = Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP)
         transaction_date = date.fromisoformat(str(transaction["date"]))
-        if account_type == "bank" and amount > 0:
-            bank_debits.append((index, transaction_date, amount))
-        elif account_type == "credit" and amount < 0:
-            credit_credits.append((index, transaction_date, amount))
+        if account_type == "bank":
+            bank_entries.append((index, transaction_date, amount, category))
+        elif account_type == "credit":
+            credit_entries.append((index, transaction_date, amount, category))
 
     candidates: list[tuple[int, int, int]] = []
-    for bank_id, bank_date, bank_amount in bank_debits:
-        for credit_id, credit_date, credit_amount in credit_credits:
+    for bank_id, bank_date, bank_amount, bank_category in bank_entries:
+        for credit_id, credit_date, credit_amount, credit_category in credit_entries:
             day_distance = abs((bank_date - credit_date).days)
-            if bank_amount == -credit_amount and day_distance <= BILL_PAYMENT_WINDOW_DAYS:
+            if (
+                "transfer" in {bank_category, credit_category}
+                and bank_amount != 0
+                and bank_amount == -credit_amount
+                and day_distance <= BILL_PAYMENT_WINDOW_DAYS
+            ):
                 candidates.append((day_distance, bank_id, credit_id))
 
     matched_banks: set[int] = set()

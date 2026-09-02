@@ -128,10 +128,13 @@ and a spending deficit is red.
 ### Bill-payment reconciliation
 
 Ledger does not exclude every transaction categorized as `Transfer`. It excludes
-only matched pairs where a positive bank-account transfer and an equal negative
-credit-account transfer post within five days. Matching is one-to-one and runs
-across the complete database, including month boundaries. Unmatched transfers,
-such as Venmo or Zelle payments, remain visible and affect the budget normally.
+only matched bank/credit-account pairs with equal and opposite nonzero amounts
+that post within five days. At least one side must be categorized as `Transfer`;
+the other may be `Transfer` or `Income` because source exports sometimes label
+the receiving side as income. This also handles credit-balance refunds that flow
+from a card back to a bank account. Matching is one-to-one and runs across the
+complete database, including month boundaries. Unmatched transfers, such as
+Venmo or Zelle payments, remain visible and affect the budget normally.
 
 Matched rows remain available through **View excluded bill-payment
 transactions**, where they can still be edited or deleted.
