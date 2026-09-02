@@ -22,10 +22,13 @@ sign in if necessary, and runs the selected date-range export in that Amazon
 tab. It then sends the JSON directly to that one Ledger session. Ledger parses,
 deduplicates, and atomically merges the item transactions into the master CSV.
 
-The session token is stored in Chrome's session-only extension storage. It is
-never placed in an Amazon URL. Ledger also redacts tokens from HTTP request
-logs. The extension accepts requests only from an `http://127.0.0.1` or
-`http://localhost` Upload data page.
+The session token is never placed in an Amazon URL, and Ledger redacts it from
+HTTP request logs. Chrome's session storage is primary; while an import is
+active, the extension also keeps a recovery copy in extension-local storage so
+a suspended background worker cannot lose a long-running scrape. The copy is
+removed on completion or cancellation and rejected after two hours. The server
+token itself expires after one hour without progress. The extension accepts
+requests only from an `http://127.0.0.1` or `http://localhost` Upload data page.
 
 Closing the Amazon tab ends the import. The manual Amazon JSON uploader remains
 available as a fallback.

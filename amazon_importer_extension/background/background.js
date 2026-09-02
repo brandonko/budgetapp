@@ -1,6 +1,10 @@
 "use strict";
 
 const PENDING_KEY = "ledgerAmazonPendingImport";
+const PENDING_BACKUP_KEY = "ledgerAmazonPendingImportBackup";
+const RECENT_COMPLETION_KEY = "ledgerAmazonRecentCompletion";
+const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const RECENT_COMPLETION_MS = 5 * 60 * 1000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const AMAZON_ORDER_PATH = /\/(?:gp\/(?:your-account|css)\/order-history|your-orders(?:\/orders)?)/;
@@ -41,15 +45,32 @@ function validateRequest(payload, sender) {
 }
 
 async function getPending() {
-  return (await chrome.storage.session.get(PENDING_KEY))[PENDING_KEY] || null;
+  const sessionPending = (await chrome.storage.session.get(PENDING_KEY))[PENDING_KEY];
+  if (sessionPending) return sessionPending;
+
+  const backup = (await chrome.storage.local.get(PENDING_BACKUP_KEY))[PENDING_BACKUP_KEY];
+  if (!backup) return null;
+  if (!backup.updatedAt || Date.now() - backup.updatedAt > PENDING_MAX_AGE_MS) {
+    await chrome.storage.local.remove(PENDING_BACKUP_KEY);
+    return null;
+  }
+  await chrome.storage.session.set({ [PENDING_KEY]: backup });
+  return backup;
 }
 
 async function setPending(pending) {
-  await chrome.storage.session.set({ [PENDING_KEY]: pending });
+  const saved = { ...pending, updatedAt: Date.now() };
+  await Promise.all([
+    chrome.storage.session.set({ [PENDING_KEY]: saved }),
+    chrome.storage.local.set({ [PENDING_BACKUP_KEY]: saved }),
+  ]);
 }
 
 async function clearPending() {
-  await chrome.storage.session.remove(PENDING_KEY);
+  await Promise.all([
+    chrome.storage.session.remove(PENDING_KEY),
+    chrome.storage.local.remove(PENDING_BACKUP_KEY),
+  ]);
 }
 
 async function updateLedger(pending, data, action = "progress") {
@@ -95,6 +116,7 @@ async function startLedgerImport(payload, sender) {
   validateRequest(payload, sender);
   const existing = await getPending();
   if (existing) throw new Error("Another Amazon import is already running.");
+  await chrome.storage.local.remove(RECENT_COMPLETION_KEY);
 
   const pending = {
     token: payload.token,
@@ -146,9 +168,19 @@ async function downloadFile(data) {
   });
 }
 
-async function handleDownload(data) {
+async function handleDownload(data, sender) {
   const pending = await getPending();
   if (!pending || data.mimeType !== "application/json") {
+    const recent = (await chrome.storage.local.get(RECENT_COMPLETION_KEY))[
+      RECENT_COMPLETION_KEY
+    ];
+    if (
+      data.mimeType === "application/json" &&
+      recent?.tabId === sender.tab?.id &&
+      Date.now() - recent.completedAt < RECENT_COMPLETION_MS
+    ) {
+      return { success: true };
+    }
     await downloadFile(data);
     return { success: true };
   }
@@ -161,6 +193,9 @@ async function handleDownload(data) {
     });
     const result = await updateLedger(pending, { content: data.content }, "complete");
     await broadcast("ledgerImportComplete", result);
+    await chrome.storage.local.set({
+      [RECENT_COMPLETION_KEY]: { tabId: sender.tab?.id, completedAt: Date.now() },
+    });
     await clearPending();
     return { success: true };
   } catch (error) {
@@ -179,7 +214,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message?.action === "ledgerCancelImport") {
     operation = cancelLedgerImport(message.data);
   } else if (message?.action === "downloadFile") {
-    operation = handleDownload(message.data);
+    operation = handleDownload(message.data, sender);
   } else if (message?.action === "updateProgress") {
     operation = (async () => {
       const pending = await getPending();

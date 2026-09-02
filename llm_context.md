@@ -138,6 +138,9 @@ ingestion belongs in the **Upload data** page.
   and extension-install guidance.
 - Use random, expiring server-side import sessions. Do not place an import token
   in an Amazon URL, persist it to the CSV, or print it in server request logs.
+- Preserve an active extension request across Manifest V3 background-worker
+  suspension. A short-lived extension-local recovery copy is acceptable when
+  it is deleted on completion/cancellation and rejected when stale.
 - The extension may communicate only with loopback Ledger origins and must
   verify that start requests came from that origin's Upload data page.
 - Direct imports merge against the latest CSV state at completion rather than
