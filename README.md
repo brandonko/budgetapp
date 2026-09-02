@@ -93,7 +93,7 @@ requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode** and select **Load unpacked**.
-3. Select the repository's `amazon_importer_extension` directory.
+3. Select the repository's `ledger_data_importer_extension` directory.
 4. Reload <http://127.0.0.1:8000/upload>. The page should report **Companion
    extension connected**.
 5. Choose a start and end date, then select **Import Credit Karma data** or
@@ -111,7 +111,7 @@ fallbacks.
 Credit Karma can change its private GraphQL contract, and Amazon can change its
 order-history markup or present login/CAPTCHA challenges. Closing an active
 source tab cancels that import. See
-[`amazon_importer_extension/README.md`](amazon_importer_extension/README.md)
+[`ledger_data_importer_extension/README.md`](ledger_data_importer_extension/README.md)
 for implementation and attribution details.
 
 ### Duplicate handling
@@ -195,7 +195,7 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma and Amazon source parsers
 app/index.html      Monthly dashboard
 app/upload.html     Data import page
-amazon_importer_extension/
+ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
 tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)

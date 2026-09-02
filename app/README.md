@@ -16,7 +16,7 @@ Use **Upload data** to import either a Credit Karma JSON export, an Amazon order
 history JSON export, or both. Transactions can also be added, edited, and
 deleted directly from the dashboard.
 
-For direct Credit Karma and Amazon workflows, load `amazon_importer_extension`
+For direct Credit Karma and Amazon workflows, load `ledger_data_importer_extension`
 as an unpacked Chrome extension, reload the Upload data page, select a date
 range, and choose the matching import action. Credit Karma uses a BudgetLens
 bundle with all transactions; Amazon creates item-level rows. The manual JSON

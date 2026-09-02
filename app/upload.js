@@ -505,7 +505,7 @@ window.addEventListener("message", (event) => {
     const { progress, message, status } = event.data.payload ?? {};
     renderAmazonProgress(progress, message || "Importing Amazon orders…", status);
   } else if (event.data.action === "error") {
-    showAmazonError(event.data.payload?.message || "The Amazon importer extension reported an error.");
+    showAmazonError(event.data.payload?.message || "The companion extension reported an Amazon import error.");
     if (state.amazonSessionToken) {
       const token = state.amazonSessionToken;
       fetch(`/api/amazon-import-sessions/${encodeURIComponent(token)}/cancel`, {

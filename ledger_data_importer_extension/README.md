@@ -8,7 +8,7 @@ authenticated Credit Karma and Amazon tabs.
 1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode**.
 3. Select **Load unpacked**.
-4. Select this `amazon_importer_extension` directory.
+4. Select this `ledger_data_importer_extension` directory.
 5. Reload Ledger's Upload data page.
 
 Ledger will show **Companion extension connected** when the bridge is ready.
