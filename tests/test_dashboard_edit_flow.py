@@ -42,11 +42,12 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("function renderTransactionList", shared_javascript)
         self.assertNotIn("Remove from import", upload_html)
 
-    def test_transaction_modal_has_search_and_account_filters_without_amount_total(self) -> None:
+    def test_transaction_modal_has_search_and_field_filters_without_amount_total(self) -> None:
         html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
         css = (ROOT / "app" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('id="transaction-search" type="search"', html)
+        self.assertIn('id="transaction-category-filter"', html)
         self.assertIn('id="transaction-account-filter"', html)
         self.assertIn('id="transaction-provider-filter"', html)
         self.assertIn('id="transaction-subcategory-filter"', html)
@@ -55,11 +56,16 @@ class DashboardEditFlowTests(unittest.TestCase):
             "transaction.description.toLocaleLowerCase().includes(descriptionQuery)",
             javascript,
         )
+        self.assertIn("transaction.category === filters.category", javascript)
         self.assertIn("transaction.accountName === filters.accountName", javascript)
         self.assertIn("transaction.provider === filters.provider", javascript)
         self.assertIn("transaction.subcategory === filters.subcategory", javascript)
         self.assertIn("preserveFilters: true", javascript)
         self.assertNotIn("currency.format(total)}`", javascript)
+        filter_style = css.split(".transaction-filter-bar {", 1)[1].split("}", 1)[0]
+        self.assertIn("repeat(4, minmax(110px, 1fr))", filter_style)
+        self.assertIn("@media (max-width: 860px)", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
         subcategory_style = css.split(".subcategory-summary {", 1)[1].split("}", 1)[0]
         self.assertIn("flex: 0 0 auto", subcategory_style)
         self.assertIn("overflow-y: hidden", subcategory_style)

@@ -253,7 +253,8 @@ and a spending deficit is red.
   as a positive number even though those values remain negative in the CSV.
 - **Net total** is income minus spending. Positive values use a light-green
   background; negative values use a light-red background.
-- Transaction lists are ordered latest first.
+- Transaction lists are ordered latest first and can be filtered by description,
+  category, subcategory, account name, and provider.
 - Transactions flagged `refunded` remain visible but contribute $0 to category,
   spending, income, net, and annual-chart totals.
 - The default reporting period is the latest month containing at least one

@@ -281,9 +281,9 @@ ingestion belongs in the **Import data** page at `/import`.
 - Display every parsed transaction in the preview. Select new occurrences by
   default; leave duplicates deselected, visibly marked, and highlighted soft red.
 - Transaction-list modal subtitles show counts only and never an aggregate amount.
-  Provide case-insensitive description search plus account-name and provider
-  filters while retaining latest-first ordering and preserving active filters
-  when returning from the transaction editor.
+  Provide case-insensitive description search plus category, subcategory,
+  account-name, and provider filters while retaining latest-first ordering and
+  preserving active filters when returning from the transaction editor.
 - Allow every field to be edited locally before confirmation. A user may select
   a duplicate to force its inclusion or remove any staged row from the preview.
 - Write only checked rows after explicit confirmation. Cancel, the top-right

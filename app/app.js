@@ -16,7 +16,13 @@ const state = {
   editingTransactionId: null,
   transactionDialogContext: null,
   transactionDialogTransactions: [],
-  transactionDialogFilters: { description: "", accountName: "", provider: "", subcategory: "" },
+  transactionDialogFilters: {
+    description: "",
+    category: "",
+    accountName: "",
+    provider: "",
+    subcategory: "",
+  },
   returnToTransactionDialog: null,
   formBusy: false,
 };
@@ -120,6 +126,7 @@ const elements = {
   dialogSubtitle: document.querySelector("#dialog-subtitle"),
   transactionList: document.querySelector("#transaction-list"),
   transactionSearch: document.querySelector("#transaction-search"),
+  transactionCategoryFilter: document.querySelector("#transaction-category-filter"),
   transactionAccountFilter: document.querySelector("#transaction-account-filter"),
   transactionProviderFilter: document.querySelector("#transaction-provider-filter"),
   transactionSubcategoryFilter: document.querySelector("#transaction-subcategory-filter"),
@@ -758,6 +765,7 @@ function transactionRowOptions(transaction) {
 function currentTransactionDialogFilters() {
   return {
     description: elements.transactionSearch.value.trim(),
+    category: elements.transactionCategoryFilter.value,
     accountName: elements.transactionAccountFilter.value,
     provider: elements.transactionProviderFilter.value,
     subcategory: elements.transactionSubcategoryFilter.value,
@@ -780,12 +788,17 @@ function populateTransactionFilter(select, values, allLabel, selectedValue) {
 
 function configureTransactionFilters(transactions, filters) {
   elements.transactionSearch.value = filters.description || "";
+  const categories = [...new Set(transactions.map((transaction) => transaction.category))]
+    .sort((left, right) => left.localeCompare(right));
   const accounts = [...new Set(transactions.map((transaction) => transaction.accountName))]
     .sort((left, right) => left.localeCompare(right));
   const providers = [...new Set(transactions.map((transaction) => transaction.provider))]
     .sort((left, right) => left.localeCompare(right));
   const subcategories = [...new Set(transactions.map((transaction) => transaction.subcategory).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
+  populateTransactionFilter(
+    elements.transactionCategoryFilter, categories, "All categories", filters.category,
+  );
   populateTransactionFilter(
     elements.transactionAccountFilter, accounts, "All accounts", filters.accountName,
   );
@@ -860,6 +873,7 @@ function renderTransactionDialogTransactions() {
   const descriptionQuery = filters.description.toLocaleLowerCase();
   const visibleTransactions = state.transactionDialogTransactions.filter((transaction) => (
     (!descriptionQuery || transaction.description.toLocaleLowerCase().includes(descriptionQuery)) &&
+    (!filters.category || transaction.category === filters.category) &&
     (!filters.accountName || transaction.accountName === filters.accountName) &&
     (!filters.provider || transaction.provider === filters.provider) &&
     (!filters.subcategory || (
@@ -892,7 +906,7 @@ function renderTransactionDialogTransactions() {
 function openTransactionDialog(title, transactions, context, { preserveFilters = false } = {}) {
   const filters = preserveFilters
     ? state.transactionDialogFilters
-    : { description: "", accountName: "", provider: "", subcategory: "" };
+    : { description: "", category: "", accountName: "", provider: "", subcategory: "" };
   state.transactionDialogContext = context;
   state.transactionDialogTransactions = [...transactions].sort(compareLatestFirst);
   elements.dialogEyebrow.textContent = selectedPeriodLabel();
@@ -1163,11 +1177,13 @@ elements.viewExcludedButton.addEventListener("click", () => {
 });
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
+elements.transactionCategoryFilter.addEventListener("change", renderTransactionDialogTransactions);
 elements.transactionAccountFilter.addEventListener("change", renderTransactionDialogTransactions);
 elements.transactionProviderFilter.addEventListener("change", renderTransactionDialogTransactions);
 elements.transactionSubcategoryFilter.addEventListener("change", renderTransactionDialogTransactions);
 elements.clearTransactionFilters.addEventListener("click", () => {
   elements.transactionSearch.value = "";
+  elements.transactionCategoryFilter.value = "";
   elements.transactionAccountFilter.value = "";
   elements.transactionProviderFilter.value = "";
   elements.transactionSubcategoryFilter.value = "";
