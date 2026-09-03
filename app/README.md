@@ -16,8 +16,8 @@ Then visit <http://127.0.0.1:8000>.
 Use **Import data** to import Credit Karma and Venmo transactions, Amazon order history, or AliExpress orders
 through the companion Chrome extension, or an official Apple Card transaction
 CSV. Transactions can also be added,
-edited, annotated with optional freeform notes, flagged as refunded so they
-contribute $0 to totals, and deleted from the dashboard.
+edited, assigned an optional subcategory, annotated with optional freeform notes,
+flagged as refunded so they contribute $0 to totals, and deleted from the dashboard.
 Imported rows also retain a batch timestamp so accidental imports can be
 reviewed and removed from **Settings → Import history**.
 Editing from a monthly or annual transaction list returns to the refreshed list
@@ -25,17 +25,30 @@ after the change is saved.
 
 The dashboard defaults to the latest month with visible transaction data. Use
 the reporting controls to switch between a selected month and a full-year
-summary. Annual view includes category-filterable monthly spending bars and a
+summary. Annual view includes monthly category spending bars that drill into
+subcategory stacks, an expandable exact-dollar monthly breakdown table, and a
 monthly net chart with green surpluses and red deficits. The browser remembers
-the selected view, period, and annual category filter when navigating to Import
-data or Settings and back.
+the selected view, period, and annual category/subcategory filter when navigating
+to Import data or Settings and back.
 
 Use the top-right navigation menu to move between the dashboard, Import data,
 and Settings. The first Settings tab creates timestamped snapshots in
 `data/backups/`, lists their dates and transaction counts, and restores a chosen
 snapshot after confirmation. Ledger creates a safety backup of the current CSV
-before every restore. Individual backups can be permanently deleted after a
-separate confirmation. General settings remain a placeholder.
+before every restore. Individual backups can be renamed without overwriting an
+existing backup, or permanently deleted after a separate confirmation. The
+Classifications tab manages ordered regular-expression
+rules that assign categories and subcategories to future imports. Category and
+subcategory are available as separate match fields. These rules
+are persisted beside the transaction CSV in `classifications.json` and can be
+exported as JSON. The editor shows one classification at a time with pagination.
+Classification and rule inputs appear only in their individual edit modes, and
+each inline Save persists the complete classification document immediately.
+General settings remain a placeholder.
+
+Use **Review unclassified** to open every blank-subcategory transaction in a
+filterable modal without leaving Classification settings or disturbing the
+current draft.
 
 For direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card workflows, load `ledger_data_importer_extension`
 as an unpacked Chrome extension, reload the Import data page, select a date
@@ -45,12 +58,16 @@ statement CSV data and excludes balance transfers. Parsed imports open a preview
 modal before the CSV changes. New rows are selected by default, duplicates are
 highlighted and deselected, and every row can be edited or removed before the
 user confirms which transactions to write.
+When no classification matches, the parser category is preserved and the
+subcategory remains blank.
 Amazon, AliExpress, eBay, and Venmo expose editable account name, account type, and
 provider defaults before an import begins.
 
 For Apple Card, the extension opens `card.apple.com`, drives **Export
 Transactions** with Ledger's date range, chooses CSV, and returns the structured
 data to Ledger. A manual CSV picker remains available if Apple's page changes.
+Manual CSV imports stage every valid row in the selected file rather than
+applying the automatic import's date selectors again.
 Purchases, refunds, and payments are normalized to Ledger's expense-oriented signs.
 
 Use a different CSV or port when needed:

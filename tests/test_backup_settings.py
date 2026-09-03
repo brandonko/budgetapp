@@ -188,6 +188,18 @@ class BackupApiTests(unittest.TestCase):
             ],
         )
 
+        status, batch = self.request(
+            "GET", f"/api/import-history/{quote(first_timestamp)}"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(batch["createdAt"], first_timestamp)
+        self.assertEqual(
+            {row["description"] for row in batch["transactions"]},
+            {"First import A", "First import B"},
+        )
+        self.assertTrue(all("_id" in row for row in batch["transactions"]))
+        self.assertEqual(batch["revision"], history["revision"])
+
         status, rejected = self.request(
             "DELETE",
             f"/api/import-history/{quote(first_timestamp)}",
@@ -240,6 +252,50 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("not found", missing["error"].lower())
 
+    def test_rename_backup_accepts_a_custom_name_and_adds_csv_extension(self) -> None:
+        backup_directory = self.csv_path.parent / "backups"
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        original = backup_directory / "transactions_old.csv"
+        write_transactions_atomic(original, [transaction("Renamed", 4)])
+
+        status, payload = self.request(
+            "POST",
+            f"/api/backups/{quote(original.name)}/rename",
+            {"newName": "Before vacation"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["backup"]["name"], "Before vacation.csv")
+        self.assertEqual(payload["backup"]["transactionCount"], 1)
+        self.assertFalse(original.exists())
+        self.assertTrue((backup_directory / "Before vacation.csv").exists())
+
+    def test_rename_backup_rejects_invalid_names_and_existing_files(self) -> None:
+        backup_directory = self.csv_path.parent / "backups"
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        original = backup_directory / "Original.csv"
+        existing = backup_directory / "Existing.csv"
+        write_transactions_atomic(original, [transaction("Original", 4)])
+        write_transactions_atomic(existing, [transaction("Existing", 5)])
+
+        status, invalid = self.request(
+            "POST",
+            f"/api/backups/{quote(original.name)}/rename",
+            {"newName": "../outside.csv"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("invalid", invalid["error"].lower())
+
+        status, collision = self.request(
+            "POST",
+            f"/api/backups/{quote(original.name)}/rename",
+            {"newName": existing.name},
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("already exists", collision["error"])
+        self.assertTrue(original.exists())
+        self.assertTrue(existing.exists())
+
     def test_missing_master_file_cannot_be_backed_up(self) -> None:
         self.csv_path.unlink()
         status, payload = self.request("POST", "/api/backups", {})
@@ -252,10 +308,24 @@ class SettingsPageTests(unittest.TestCase):
         html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
         javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
         self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="general-settings-tab"'))
+        self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="classification-settings-tab"'))
         self.assertIn('aria-selected="true" aria-controls="backup-settings-panel"', html)
         self.assertIn('id="import-history-settings-tab"', html)
+        self.assertIn('tabindex="-1">Imports</button>', html)
         self.assertIn('id="import-history-settings-panel"', html)
         self.assertIn('fetch("/api/import-history"', javascript)
+        self.assertIn(
+            'selectedTab === document.querySelector("#import-history-settings-tab")',
+            javascript,
+        )
+        self.assertEqual(javascript.count("loadImportHistory();"), 1)
+        self.assertIn('view.textContent = "View transactions"', javascript)
+        self.assertIn('id="import-history-dialog"', html)
+        self.assertIn('id="import-history-edit-form"', html)
+        self.assertIn('<script src="/transaction-ui.js" defer>', html)
+        self.assertIn("transactionUi.renderTransactionList", javascript)
+        self.assertIn("transactionUi.transactionFromEditor", javascript)
+        self.assertIn('method: "PUT"', javascript)
         self.assertIn('method: "DELETE"', javascript)
         self.assertIn('id="create-backup-button"', html)
         self.assertIn('id="backup-list"', html)
@@ -264,7 +334,63 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("JSON.stringify({ confirm: true })", javascript)
         self.assertIn('method: "DELETE"', javascript)
         self.assertIn("cannot be recovered after deletion", javascript)
+        self.assertIn('rename.textContent = "Rename"', javascript)
+        self.assertIn("window.prompt", javascript)
+        self.assertIn("/rename", javascript)
         self.assertEqual(DEFAULT_CSV.parent.name, "data")
+
+    def test_classification_settings_explain_order_and_offer_export(self) -> None:
+        html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
+        javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
+        self.assertIn('id="classification-settings-panel"', html)
+        self.assertIn("first matching rule", html)
+        self.assertIn("current category, subcategory, description, account name, and provider", html)
+        self.assertIn('href="/api/classifications/export"', html)
+        self.assertIn('id="apply-classifications-button"', html)
+        self.assertIn('id="classification-preview-dialog"', html)
+        self.assertIn('id="cancel-classification-preview"', html)
+        self.assertIn('fetch("/api/classifications"', javascript)
+        self.assertIn('fetch("/api/classifications/preview"', javascript)
+        self.assertIn('fetch("/api/classifications/apply"', javascript)
+        self.assertIn("pendingClassificationPreview = null", javascript)
+        self.assertNotIn("Move up", javascript)
+        self.assertNotIn("Move down", javascript)
+        self.assertIn('category: "Category"', javascript)
+        self.assertIn('subcategory: "Subcategory"', javascript)
+        self.assertIn('classificationInput(`${label} regex`', javascript)
+        self.assertNotIn("input.placeholder", javascript)
+        self.assertIn('id="classification-pagination"', html)
+        self.assertIn('id="classification-page-indicator"', html)
+        self.assertIn("selectedClassificationIndex", javascript)
+        self.assertIn("classificationCanBeFollowedByAnother", javascript)
+        self.assertIn("Complete the last classification", javascript)
+        self.assertIn("classification.rules.length > 0 && classification.rules.every", javascript)
+        self.assertIn("if (lastClassification && !classificationCanBeFollowedByAnother", javascript)
+        self.assertIn(
+            "renderClassification(classifications[selectedClassificationIndex]",
+            javascript,
+        )
+        self.assertLess(
+            html.index('id="classification-list"'),
+            html.index('id="add-classification-button"'),
+        )
+        self.assertIn('smallAction("Add rule"', javascript)
+        self.assertIn('smallAction("Delete rule"', javascript)
+        self.assertIn("classification-add-rule", javascript)
+        self.assertIn("openUnclassifiedDialog", javascript)
+        self.assertNotIn('id="save-classifications-button"', html)
+        self.assertIn('/settings.js?v=20260902-unclassified-modal', html)
+        self.assertIn("persistClassifications", javascript)
+        self.assertIn('smallAction("Edit"', javascript)
+        self.assertIn('smallAction("Cancel"', javascript)
+        self.assertIn('smallAction("Save"', javascript)
+        self.assertIn("disabled: ruleEdit !== null", javascript)
+        self.assertIn("disabled: classificationEdit !== null", javascript)
+        self.assertIn("classifications[index].category = original.category", javascript)
+        self.assertIn("ruleEdit = null;", javascript)
+        self.assertIn("classificationEdit = null;", javascript)
+        self.assertIn("pattern.textContent = rule[field]", javascript)
+        self.assertIn('successMessage)', javascript)
 
 
 if __name__ == "__main__":

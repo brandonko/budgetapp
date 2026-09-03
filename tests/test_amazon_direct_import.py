@@ -19,6 +19,7 @@ from server import (  # noqa: E402
     COLUMNS,
     LEGACY_COLUMNS,
     NOTES_COLUMNS,
+    PRE_SUBCATEGORY_COLUMNS,
     ThreadingHTTPServer,
     initialize_csv_if_missing,
     migrate_transaction_schema,
@@ -244,13 +245,16 @@ class AmazonDirectImportTests(unittest.TestCase):
         token = self.create_session()
         _, preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
         selected = [row for row in preview["import"]["transactions"] if row["description"] == "Second"]
+        selected[0]["flags"] = "refunded"
         status, committed = self.request("POST", f"/api/amazon-import-sessions/{token}/commit", {
             "transactions": selected
         })
         self.assertEqual(status, 200)
         self.assertEqual(committed["import"]["committed"], 1)
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
-            self.assertEqual([row["description"] for row in csv.DictReader(handle)], ["Second"])
+            rows = list(csv.DictReader(handle))
+        self.assertEqual([row["description"] for row in rows], ["Second"])
+        self.assertEqual(rows[0]["flags"], "refunded")
 
         token = self.create_session()
         _, stale_preview = self.request("POST", f"/api/amazon-import-sessions/{token}/complete", {"content": export})
@@ -291,6 +295,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         transactions, _revision = read_transaction_state(legacy_path)
         self.assertEqual(len(transactions), 1)
         self.assertEqual(transactions[0]["description"], "Legacy purchase")
+        self.assertEqual(transactions[0]["subcategory"], "")
         self.assertEqual(transactions[0]["notes"], "")
         self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
@@ -317,11 +322,34 @@ class AmazonDirectImportTests(unittest.TestCase):
 
         self.assertTrue(migrate_transaction_schema(previous_path))
         transactions, _revision = read_transaction_state(previous_path)
+        self.assertEqual(transactions[0]["subcategory"], "")
         self.assertEqual(transactions[0]["notes"], "Keep this note")
         self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
         with previous_path.open(encoding="utf-8", newline="") as handle:
             self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
+
+    def test_migrates_prior_notes_schema_with_blank_subcategory(self) -> None:
+        prior_path = Path(self.temporary_directory.name) / "prior.csv"
+        prior_row = {
+            "date": "2026-08-20",
+            "description": "Prior purchase",
+            "amount": "12.34",
+            "category": "Shopping",
+            "accountName": "Card",
+            "accountType": "CREDIT",
+            "provider": "Bank",
+            "notes": "Keep this note",
+        }
+        with prior_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=PRE_SUBCATEGORY_COLUMNS)
+            writer.writeheader()
+            writer.writerow(prior_row)
+
+        self.assertTrue(migrate_transaction_schema(prior_path))
+        transactions, _revision = read_transaction_state(prior_path)
+        self.assertEqual(transactions[0]["subcategory"], "")
+        self.assertEqual(transactions[0]["notes"], "Keep this note")
 
     def test_progress_cancel_and_terminal_updates_are_idempotent(self) -> None:
         token = self.create_session()

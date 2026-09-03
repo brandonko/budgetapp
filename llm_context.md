@@ -29,10 +29,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The ten persisted columns, in order, are:
+- The eleven persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,accountName,accountType,provider,notes,flags,createdAt
+  date,description,amount,category,subcategory,accountName,accountType,provider,notes,flags,createdAt
   ```
 
 - `flags` contains normalized, comma-separated identifiers. `refunded` is the
@@ -49,7 +49,7 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - List every regular CSV placed directly in `data/backups/`, regardless of its
   filename. Order backups newest first by last-modified date and show their
   validated transaction count. Accept the current schema and compatible older
-  seven-, eight-, or nine-column Ledger schemas without modifying the backup file. Never follow symlinks or
+  seven- through ten-column Ledger schemas without modifying the backup file. Never follow symlinks or
   allow nested paths.
 - Restoring a backup completely replaces the canonical CSV only after explicit
   user confirmation. Create a safety backup of the current file immediately
@@ -57,6 +57,9 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Allow permanent deletion of an individual backup only after explicit user
   confirmation. Never let backup deletion affect the active CSV, other backups,
   symlinks, or nested paths.
+- Allow backups to be renamed to any safe local CSV filename. Never overwrite
+  another backup during a rename, and keep renamed files discoverable by their
+  last-modified date.
 - Keep backups private and ignored by Git together with the rest of `data/`.
 
 ## Import history
@@ -70,6 +73,53 @@ third-party Python dependency unless a future requirement clearly justifies it.
   deletes only rows with that exact timestamp, and creates a safety backup
   before changing the master CSV.
 - Once every row in a batch is removed, that batch no longer appears in history.
+
+## Categories and classifications
+
+- Keep exactly two category levels for now: required `category` and optional
+  `subcategory`. Do not introduce arbitrary-depth category trees without a new
+  product decision.
+- Dashboard cards and annual charts group by the top-level category. Opening a
+  category surfaces subcategory dollar totals and permits filtering; blank
+  subcategories are labeled **Unclassified** in the UI.
+- Store ordered import classifications in `data/classifications.json`, beside
+  the canonical CSV. Keep the file private through the existing `data/` ignore
+  rule and expose an explicit JSON export action in Settings.
+- Each classification maps to one required category and one optional
+  subcategory and contains one or more rules.
+- Each rule has separate optional case-insensitive regular expressions for the
+  current category, subcategory, description, account name, and provider. Ignore
+  blank matchers. All populated matchers in
+  one rule must match; multiple rules within a classification are alternatives.
+- Evaluate classifications and their rules in displayed order and stop at the
+  first match. Present one classification at a time with a clear current/total
+  pagination indicator. Append new classifications to the end and navigate to
+  them immediately; do not expose manual reordering controls. Disable adding
+  another classification until the last one has a category and every rule has
+  at least one populated matcher, preventing repeated empty entries.
+- Show classification destinations and only populated rule regexes in compact
+  read-only mode. Each classification and rule has its own Edit, Cancel, and Save
+  flow. Cancel restores the prior in-memory values; Save validates and atomically
+  persists the entire classifications JSON. Allow classification details and one
+  rule to be edited concurrently. Cancelling one restores only that section;
+  saving either commits all visible drafts and closes both editors. Do not show
+  a global Save button.
+- Apply classifications before import preview and duplicate detection. Do not
+  automatically reclassify existing CSV rows when rules are changed.
+- Provide a confirmed **Apply to existing transactions** bulk action. Save the
+  currently displayed rules as part of confirmation, preserve unmatched rows,
+  and create a safety backup before atomically writing any category or
+  subcategory changes. Before confirmation, show a modal containing every
+  affected transaction and its before/after category path. All modal dismissal
+  paths must write nothing. Bind the preview to the CSV revision and reject a
+  stale confirmation. Do not create a backup or rewrite the CSV when no rows
+  changed.
+- If nothing matches, preserve the category supplied by the parser and populate
+  a blank subcategory.
+- From Classification settings, provide an all-dates modal of every transaction
+  with a blank subcategory. Include description search plus category, account,
+  and provider filters. Keep the user on Classification settings and preserve
+  any draft when the modal closes.
 
 ## Privacy
 
@@ -110,17 +160,24 @@ on it. Translate it for people in the interface:
   selector and summarizes the full selected year.
 - Changing the period updates summaries, category cards, charts, and dialogs
   together.
-- Persist the selected view mode, year, month, and annual category filter in the
-  browser so dashboard context survives navigation to Import data or Settings.
+- Persist the selected view mode, year, month, and annual category/subcategory
+  filter in the browser so dashboard context survives navigation to Import data or Settings.
   Validate restored values against the current transaction data and fall back
   safely when a saved selection is no longer available.
 - Render one card for every visible category, including unmatched `Transfer`
   transactions.
 - A category card shows its transaction count and net category total.
+- Opening a category shows dollar totals for its subcategories. Transactions
+  without a subcategory are presented as **Unclassified**.
 - Clicking a category opens its transactions in a modal.
-- Annual view includes a monthly spending chart stacked by category. Its
-  category legend is interactive: selecting a category filters the chart to
-  that category, and selecting it again or using **Show all** clears the filter.
+- Annual view includes a monthly spending chart stacked by category. Its legend
+  shows annual dollar totals. Selecting a category redraws the same monthly
+  chart as subcategory stacks; selecting a subcategory isolates it. Use a
+  breadcrumb and **Back to categories** action for upward navigation.
+- Include an expandable exact-dollar annual table below the spending chart.
+  Category rows show January through December plus annual totals; expanding a
+  row reveals its subcategories, including **Unclassified**. Keep the first
+  column sticky and allow horizontal scrolling on narrow screens.
 - Annual view includes a zero-centered monthly net chart. Months with positive
   net totals are green; months with negative net totals are red.
 - Provide a **View all transactions** action for the selected period.
@@ -171,13 +228,13 @@ the transaction budget-visible again.
   parsed rows and must never replace an existing database.
 
 - User-editable CSV fields are date, description, amount, category,
-  accountName, accountType, provider, notes, and supported flags. Notes are
+  subcategory, accountName, accountType, provider, notes, and supported flags. Notes are
   optional freeform text and may safely contain commas or line breaks.
 - Users can toggle the `refunded` flag in the transaction editor. A refunded
   transaction remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
 - `createdAt` is system-managed and must survive edits unchanged.
-- Migrate compatible older CSVs to the ten-column schema
+- Migrate compatible older CSVs to the eleven-column schema
   atomically by adding missing optional fields; never require users to recreate
   an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
@@ -214,9 +271,19 @@ ingestion belongs in the **Import data** page at `/import`.
   `Apple Card`, `CREDIT CARD`, `Goldman Sachs`.
 - Prefill eBay with `eBay`, `CREDIT CARD`, `eBay` and create item-level rows whose
   allocated amounts reconcile to each final order total.
+- In the Credit Karma importer, remind users that disconnected linked accounts
+  cause missing transactions and link to Credit Karma's Manage Accounts page so
+  they can reconnect a bank or service before importing.
+- Present Credit Karma transaction filters as one vertical checkbox list. Each
+  label must state the exact case-insensitive description substring or substrings
+  used by that filter.
 - Report parsed, new, and duplicate counts in a pre-commit review modal.
 - Display every parsed transaction in the preview. Select new occurrences by
   default; leave duplicates deselected, visibly marked, and highlighted soft red.
+- Transaction-list modal subtitles show counts only and never an aggregate amount.
+  Provide case-insensitive description search plus account-name and provider
+  filters while retaining latest-first ordering and preserving active filters
+  when returning from the transaction editor.
 - Allow every field to be edited locally before confirmation. A user may select
   a duplicate to force its inclusion or remove any staged row from the preview.
 - Write only checked rows after explicit confirmation. Cancel, the top-right
@@ -246,6 +313,11 @@ ingestion belongs in the **Import data** page at `/import`.
   Export Transactions form with the selected range and CSV format, and captures
   the structured response. Keep manual CSV selection as a fallback because the
   site's markup and private export implementation can change.
+- Apply the selected date range to automatic Apple Card imports. Manual Apple
+  Card CSV imports must stage every valid row in the selected file because the
+  export itself already defines its range.
+- Keep the manual Apple Card **Import selected CSV** action disabled until the
+  user has selected a file.
 - Use random, expiring, source-scoped server-side import sessions. Do not place
   an import token in a source URL, persist it to the CSV, or print it in server
   request logs.

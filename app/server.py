@@ -47,6 +47,7 @@ COLUMNS = (
     "description",
     "amount",
     "category",
+    "subcategory",
     "accountName",
     "accountType",
     "provider",
@@ -55,15 +56,30 @@ COLUMNS = (
     "createdAt",
 )
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
-LEGACY_COLUMNS = COLUMNS[:7]
-NOTES_COLUMNS = COLUMNS[:8]
-FLAGS_COLUMNS = COLUMNS[:9]
-CREATED_AT_COLUMNS = COLUMNS[:8] + ("createdAt",)
-COMPATIBLE_COLUMNS = (COLUMNS, FLAGS_COLUMNS, CREATED_AT_COLUMNS, NOTES_COLUMNS, LEGACY_COLUMNS)
+LEGACY_COLUMNS = (
+    "date", "description", "amount", "category", "accountName", "accountType", "provider"
+)
+NOTES_COLUMNS = LEGACY_COLUMNS + ("notes",)
+SUBCATEGORY_NOTES_COLUMNS = (
+    "date", "description", "amount", "category", "subcategory",
+    "accountName", "accountType", "provider", "notes",
+)
+FLAGS_COLUMNS = NOTES_COLUMNS + ("flags",)
+CREATED_AT_COLUMNS = NOTES_COLUMNS + ("createdAt",)
+PRE_SUBCATEGORY_COLUMNS = NOTES_COLUMNS + ("flags", "createdAt")
+COMPATIBLE_COLUMNS = (
+    COLUMNS,
+    PRE_SUBCATEGORY_COLUMNS,
+    SUBCATEGORY_NOTES_COLUMNS,
+    FLAGS_COLUMNS,
+    CREATED_AT_COLUMNS,
+    NOTES_COLUMNS,
+    LEGACY_COLUMNS,
+)
 REQUIRED_TEXT_COLUMNS = tuple(
     column
     for column in COLUMNS
-    if column not in {"date", "amount", "notes", "flags", "createdAt"}
+    if column not in {"date", "amount", "subcategory", "notes", "flags", "createdAt"}
 )
 FLAG_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 CENT = Decimal("0.01")
@@ -74,8 +90,9 @@ TRANSACTION_PATH = re.compile(r"^/api/transactions/(\d+)$")
 BACKUP_RESTORE_PATH = re.compile(
     r"^/api/backups/([^/]+)/restore$"
 )
+BACKUP_RENAME_PATH = re.compile(r"^/api/backups/([^/]+)/rename$")
 BACKUP_DELETE_PATH = re.compile(r"^/api/backups/([^/]+)$")
-IMPORT_HISTORY_DELETE_PATH = re.compile(r"^/api/import-history/([^/]+)$")
+IMPORT_HISTORY_PATH = re.compile(r"^/api/import-history/([^/]+)$")
 GENERATED_BACKUP_FILENAME = re.compile(r"^transactions_\d{8}_\d{6}_\d{6}\.csv$")
 AMAZON_IMPORT_SESSION_PATH = re.compile(
     r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})$"
@@ -137,6 +154,7 @@ STATIC_FILES = {
     "/styles.css": APP_DIR / "styles.css",
     "/app.js": APP_DIR / "app.js",
     "/navigation.js": APP_DIR / "navigation.js",
+    "/transaction-ui.js": APP_DIR / "transaction-ui.js",
     "/import": APP_DIR / "upload.html",
     "/import.html": APP_DIR / "upload.html",
     "/upload.js": APP_DIR / "upload.js",
@@ -209,6 +227,10 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip():
             raise CsvDataError(f"{location}.{column} cannot be blank")
         transaction[column] = value.strip()
+    subcategory = raw.get("subcategory", "")
+    if not isinstance(subcategory, str):
+        raise CsvDataError(f"{location}.subcategory must be text")
+    transaction["subcategory"] = subcategory.strip()
     notes = raw.get("notes", "")
     if not isinstance(notes, str):
         raise CsvDataError(f"{location}.notes must be text")
@@ -311,6 +333,155 @@ def backup_directory(csv_path: Path) -> Path:
     return csv_path.parent / "backups"
 
 
+def classifications_path(csv_path: Path) -> Path:
+    return csv_path.parent / "classifications.json"
+
+
+def normalize_classifications(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise CsvDataError("classifications must be a JSON object")
+    raw_items = raw.get("classifications")
+    if not isinstance(raw_items, list):
+        raise CsvDataError("classifications must be a list")
+    if len(raw_items) > 200:
+        raise CsvDataError("classifications cannot contain more than 200 entries")
+
+    classifications: list[dict[str, Any]] = []
+    for classification_index, raw_classification in enumerate(raw_items):
+        location = f"classifications[{classification_index}]"
+        if not isinstance(raw_classification, Mapping):
+            raise CsvDataError(f"{location} must be an object")
+        category = raw_classification.get("category")
+        subcategory = raw_classification.get("subcategory", "")
+        if not isinstance(category, str) or not category.strip():
+            raise CsvDataError(f"{location}.category cannot be blank")
+        if not isinstance(subcategory, str):
+            raise CsvDataError(f"{location}.subcategory must be text")
+        if len(category.strip()) > 200 or len(subcategory.strip()) > 200:
+            raise CsvDataError(f"{location} category values cannot exceed 200 characters")
+        raw_rules = raw_classification.get("rules")
+        if not isinstance(raw_rules, list) or not raw_rules:
+            raise CsvDataError(f"{location}.rules must contain at least one rule")
+        if len(raw_rules) > 100:
+            raise CsvDataError(f"{location}.rules cannot contain more than 100 entries")
+
+        rules: list[dict[str, str]] = []
+        for rule_index, raw_rule in enumerate(raw_rules):
+            rule_location = f"{location}.rules[{rule_index}]"
+            if not isinstance(raw_rule, Mapping):
+                raise CsvDataError(f"{rule_location} must be an object")
+            rule: dict[str, str] = {}
+            for field in ("category", "subcategory", "description", "accountName", "provider"):
+                pattern = raw_rule.get(field, "")
+                if not isinstance(pattern, str):
+                    raise CsvDataError(f"{rule_location}.{field} must be text")
+                pattern = pattern.strip()
+                if len(pattern) > 300:
+                    raise CsvDataError(f"{rule_location}.{field} cannot exceed 300 characters")
+                if pattern:
+                    try:
+                        re.compile(pattern, re.IGNORECASE)
+                    except re.error as exc:
+                        raise CsvDataError(
+                            f"{rule_location}.{field} is not a valid regular expression: {exc}"
+                        ) from exc
+                rule[field] = pattern
+            if not any(rule.values()):
+                raise CsvDataError(f"{rule_location} must include at least one matcher")
+            rules.append(rule)
+        classifications.append(
+            {"category": category.strip(), "subcategory": subcategory.strip(), "rules": rules}
+        )
+    return {"version": 1, "classifications": classifications}
+
+
+def load_classifications(csv_path: Path) -> dict[str, Any]:
+    path = classifications_path(csv_path)
+    try:
+        content = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {"version": 1, "classifications": []}
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CsvDataError(f"could not read {path}: {exc}") from exc
+    try:
+        raw = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise CsvDataError(f"classifications file contains invalid JSON: {exc}") from exc
+    return normalize_classifications(raw)
+
+
+def write_classifications_atomic(csv_path: Path, document: Mapping[str, Any]) -> None:
+    normalized = normalize_classifications(document)
+    destination = classifications_path(csv_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=destination.parent,
+            prefix=".classifications.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(normalized, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    except BaseException:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+        raise
+
+
+def classify_transactions(
+    transactions: list[dict[str, Any]], document: Mapping[str, Any]
+) -> tuple[list[dict[str, Any]], list[bool]]:
+    compiled = [
+        (
+            classification["category"],
+            classification["subcategory"],
+            [
+                {
+                    field: re.compile(pattern, re.IGNORECASE) if pattern else None
+                    for field, pattern in rule.items()
+                }
+                for rule in classification["rules"]
+            ],
+        )
+        for classification in document.get("classifications", [])
+    ]
+    classified: list[dict[str, Any]] = []
+    match_status: list[bool] = []
+    for transaction in transactions:
+        result = dict(transaction)
+        result.setdefault("subcategory", "")
+        matched = False
+        for category, subcategory, rules in compiled:
+            for rule in rules:
+                if all(
+                    pattern is None or pattern.search(str(result.get(field, ""))) is not None
+                    for field, pattern in rule.items()
+                ):
+                    result["category"] = category
+                    result["subcategory"] = subcategory
+                    matched = True
+                    break
+            if matched:
+                break
+        classified.append(result)
+        match_status.append(matched)
+    return classified, match_status
+
+
+def apply_classifications(
+    transactions: list[dict[str, Any]], document: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    classified, _match_status = classify_transactions(transactions, document)
+    return classified
+
+
 def valid_backup_filename(filename: str) -> bool:
     return (
         bool(filename)
@@ -336,6 +507,7 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
             normalize_transaction(
                 dict(
                     row,
+                    subcategory=row.get("subcategory", ""),
                     notes=row.get("notes", ""),
                     flags=row.get("flags", ""),
                     createdAt=row.get("createdAt", ""),
@@ -439,6 +611,7 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
         normalize_transaction(
             dict(
                 row,
+                subcategory=row.get("subcategory", ""),
                 notes=row.get("notes", ""),
                 flags=row.get("flags", ""),
                 createdAt=row.get("createdAt", ""),
@@ -447,6 +620,9 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
         )
         for line_number, row in enumerate(reader, start=2)
     ]
+    # Preserve the exact pre-migration bytes so adding schema columns is
+    # recoverable even if the process or disk fails during replacement.
+    create_backup_copy(csv_path, require_valid=False)
     write_transactions_atomic(csv_path, transactions)
     return True
 
@@ -603,6 +779,7 @@ def imported_transaction_state(
             str(transaction["description"]),
             Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP),
             str(transaction["category"]),
+            str(transaction["subcategory"]),
             str(transaction["accountName"]),
             str(transaction["accountType"]),
             str(transaction["provider"]),
@@ -696,6 +873,16 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/import-history":
             self.get_import_history()
             return
+        import_history_match = IMPORT_HISTORY_PATH.fullmatch(path)
+        if import_history_match is not None:
+            self.get_import_batch(unquote(import_history_match.group(1)))
+            return
+        if path == "/api/classifications":
+            self.get_classifications()
+            return
+        if path == "/api/classifications/export":
+            self.get_classifications(export=True)
+            return
         session_match = AMAZON_IMPORT_SESSION_PATH.fullmatch(path)
         if session_match is not None:
             self.get_amazon_import_session(session_match.group(1))
@@ -735,6 +922,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/transactions/initialize":
             self.initialize_transaction_file()
+        elif path == "/api/classifications/preview":
+            self.preview_existing_transaction_classifications()
+        elif path == "/api/classifications/apply":
+            self.apply_classifications_to_existing_transactions()
         elif path == "/api/backups":
             self.create_backup()
         elif path == "/api/transactions":
@@ -754,6 +945,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/ebay-import-sessions":
             self.create_amazon_import_session(source="ebay")
         else:
+            backup_rename_match = BACKUP_RENAME_PATH.fullmatch(path)
+            if backup_rename_match is not None:
+                self.rename_backup(unquote(backup_rename_match.group(1)))
+                return
             backup_restore_match = BACKUP_RESTORE_PATH.fullmatch(path)
             if backup_restore_match is not None:
                 self.restore_backup(unquote(backup_restore_match.group(1)))
@@ -819,7 +1014,11 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             )
 
     def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        match = TRANSACTION_PATH.fullmatch(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        if path == "/api/classifications":
+            self.put_classifications()
+            return
+        match = TRANSACTION_PATH.fullmatch(path)
         if match is None:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -835,7 +1034,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if backup_delete_match is not None:
             self.delete_backup(unquote(backup_delete_match.group(1)))
             return
-        import_history_delete_match = IMPORT_HISTORY_DELETE_PATH.fullmatch(path)
+        import_history_delete_match = IMPORT_HISTORY_PATH.fullmatch(path)
         if import_history_delete_match is not None:
             self.delete_import_batch(unquote(import_history_delete_match.group(1)))
             return
@@ -908,6 +1107,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 or not isinstance(ignore_ebay, bool)
             ):
                 raise CsvDataError("Credit Karma ignore options must be true or false")
+            filter_date_range = payload.get("filterDateRange", True)
+            if source == "applecard" and not isinstance(filter_date_range, bool):
+                raise CsvDataError("Apple Card filterDateRange must be true or false")
 
             account_identity: tuple[str, str, str] | None = None
             if source in IMPORT_ACCOUNT_DEFAULTS:
@@ -962,6 +1164,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     accountType=account_identity[1],
                     provider=account_identity[2],
                 )
+                if source == "applecard":
+                    session["filterDateRange"] = filter_date_range
             with self.amazon_import_lock:
                 self.amazon_import_sessions[token] = session
             response = self.public_amazon_import_session(session)
@@ -996,6 +1200,40 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not load import history: {exc}"},
+            )
+
+    def get_import_batch(self, created_at: str) -> None:
+        try:
+            normalized_created_at = normalize_created_at(created_at, "import batch timestamp")
+            if not normalized_created_at:
+                raise CsvDataError("import batch timestamp is required")
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                state = public_state(transactions, revision)
+            imported_transactions = [
+                transaction
+                for transaction in state["transactions"]
+                if transaction["createdAt"] == normalized_created_at
+            ]
+            if not imported_transactions:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "import batch no longer exists"})
+                return
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "createdAt": normalized_created_at,
+                    "transactions": imported_transactions,
+                    "revision": revision,
+                },
+            )
+        except CsvFileMissingError as exc:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not load imported transactions: {exc}"},
             )
 
     def delete_import_batch(self, created_at: str) -> None:
@@ -1048,6 +1286,162 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not remove imported transactions: {exc}"},
+            )
+
+    def get_classifications(self, *, export: bool = False) -> None:
+        try:
+            with self.data_lock:
+                document = load_classifications(self.csv_path)
+            if not export:
+                self.send_json(HTTPStatus.OK, document)
+                return
+            body = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header(
+                "Content-Disposition", 'attachment; filename="ledger-classifications.json"'
+            )
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (CsvDataError, OSError) as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not load classifications: {exc}"},
+            )
+
+    def put_classifications(self) -> None:
+        try:
+            payload = self.read_json_body()
+            normalized = normalize_classifications(payload)
+            with self.data_lock:
+                write_classifications_atomic(self.csv_path, normalized)
+            self.send_json(HTTPStatus.OK, normalized)
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not save classifications: {exc}"},
+            )
+
+    def apply_classifications_to_existing_transactions(self) -> None:
+        try:
+            payload = self.read_json_body()
+            if payload.get("confirm") is not True:
+                raise CsvDataError("classification confirmation is required")
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("revision is required")
+            document = normalize_classifications(payload.get("document"))
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                if revision != expected_revision:
+                    raise RevisionConflict(
+                        "The transaction file changed after this preview was created. Review the changes again."
+                    )
+                classified = apply_classifications(transactions, document)
+                changed = sum(
+                    1
+                    for before, after in zip(transactions, classified)
+                    if before["category"] != after["category"]
+                    or before["subcategory"] != after["subcategory"]
+                )
+                backup = None
+                if changed:
+                    backup = create_backup_copy(self.csv_path)
+                write_classifications_atomic(self.csv_path, document)
+                if changed:
+                    write_transactions_atomic(self.csv_path, classified)
+                    _saved, revision = read_transaction_state(self.csv_path)
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "total": len(transactions),
+                    "changed": changed,
+                    "revision": revision,
+                    "backup": backup,
+                    "classifications": document["classifications"],
+                },
+            )
+        except CsvFileMissingError:
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {
+                    "code": "transaction_file_missing",
+                    "error": "There is no transaction file to classify.",
+                },
+            )
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not classify existing transactions: {exc}"},
+            )
+
+    def preview_existing_transaction_classifications(self) -> None:
+        try:
+            document = normalize_classifications(self.read_json_body())
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                classified, match_status = classify_transactions(transactions, document)
+            changes = [
+                {
+                    "_id": index,
+                    "date": before["date"],
+                    "description": before["description"],
+                    "amount": before["amount"],
+                    "accountName": before["accountName"],
+                    "provider": before["provider"],
+                    "before": {
+                        "category": before["category"],
+                        "subcategory": before["subcategory"],
+                    },
+                    "after": {
+                        "category": after["category"],
+                        "subcategory": after["subcategory"],
+                    },
+                }
+                for index, (before, after) in enumerate(zip(transactions, classified))
+                if before["category"] != after["category"]
+                or before["subcategory"] != after["subcategory"]
+            ]
+            changes.sort(
+                key=lambda transaction: (
+                    transaction["date"],
+                    transaction["description"].casefold(),
+                    transaction["_id"],
+                ),
+                reverse=True,
+            )
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "total": len(transactions),
+                    "matched": sum(match_status),
+                    "changed": len(changes),
+                    "changes": changes,
+                    "revision": revision,
+                },
+            )
+        except CsvFileMissingError:
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {
+                    "code": "transaction_file_missing",
+                    "error": "There is no transaction file to classify.",
+                },
+            )
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not preview classifications: {exc}"},
             )
 
     def create_backup(self) -> None:
@@ -1109,6 +1503,60 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not restore backup: {exc}"},
+            )
+
+    def rename_backup(self, filename: str) -> None:
+        try:
+            payload = self.read_json_body()
+            requested_name = payload.get("newName")
+            if not isinstance(requested_name, str):
+                raise CsvDataError("newName must be a string")
+            new_name = requested_name.strip()
+            if new_name and not new_name.casefold().endswith(".csv"):
+                new_name += ".csv"
+            if not valid_backup_filename(filename) or not valid_backup_filename(new_name):
+                raise CsvDataError("invalid backup name")
+
+            directory = backup_directory(self.csv_path)
+            selected_path = directory / filename
+            renamed_path = directory / new_name
+            if (
+                selected_path.parent.resolve() != directory.resolve()
+                or renamed_path.parent.resolve() != directory.resolve()
+            ):
+                raise CsvDataError("invalid backup path")
+            if selected_path.is_symlink():
+                raise CsvDataError("backup links cannot be renamed")
+
+            with self.data_lock:
+                if not selected_path.is_file():
+                    raise CsvFileMissingError(f"backup does not exist: {selected_path}")
+                if selected_path.name == renamed_path.name:
+                    renamed = backup_metadata(selected_path)
+                else:
+                    destination_is_source = False
+                    if renamed_path.exists():
+                        try:
+                            destination_is_source = selected_path.samefile(renamed_path)
+                        except OSError:
+                            destination_is_source = False
+                        if not destination_is_source:
+                            self.send_json(
+                                HTTPStatus.CONFLICT,
+                                {"error": f'A backup named "{new_name}" already exists.'},
+                            )
+                            return
+                    selected_path.rename(renamed_path)
+                    renamed = backup_metadata(renamed_path)
+            self.send_json(HTTPStatus.OK, {"backup": renamed})
+        except CsvFileMissingError:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Backup not found."})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not rename backup: {exc}"},
             )
 
     def delete_backup(self, filename: str) -> None:
@@ -1284,11 +1732,13 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     session = self.amazon_import_sessions.get(token, {})
                     start_date = session.get("startDate", "")
                     end_date = session.get("endDate", "")
-                parsed_transactions = [
-                    transaction
-                    for transaction in parsed_transactions
-                    if start_date <= transaction["date"] <= end_date
-                ]
+                    filter_date_range = session.get("filterDateRange", True)
+                if filter_date_range:
+                    parsed_transactions = [
+                        transaction
+                        for transaction in parsed_transactions
+                        if start_date <= transaction["date"] <= end_date
+                    ]
             elif source == "ebay":
                 credit_karma = None
                 parsed_transactions = parse_ebay(content, account_identity)
@@ -1305,6 +1755,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 credit_karma = None
                 parsed_transactions = parse_amazon(content, amazon_account=account_identity)
             with self.data_lock:
+                parsed_transactions = apply_classifications(
+                    parsed_transactions, load_classifications(self.csv_path)
+                )
                 if self.csv_path.exists():
                     existing, baseline_revision = read_transaction_state(self.csv_path)
                 else:
@@ -1496,6 +1949,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "The transaction file changed after this page loaded. Reload and try again."
                     )
 
+                classification_document = load_classifications(self.csv_path)
+                parsed_by_source = {
+                    source: apply_classifications(transactions, classification_document)
+                    for source, transactions in parsed_by_source.items()
+                }
+
                 additions, added_by_source, skipped_by_source = merge_imported_transactions(
                     existing, parsed_by_source
                 )
@@ -1600,6 +2059,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure Ledger preferences." />
     <title>Settings — Ledger</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260902-unclassified-modal" />
     <script src="/navigation.js" defer></script>
-    <script src="/settings.js" defer></script>
+    <script src="/transaction-ui.js" defer></script>
+    <script src="/settings.js?v=20260902-unclassified-modal" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -40,7 +41,9 @@
         <button class="settings-tab" id="backup-settings-tab" role="tab" type="button"
           aria-selected="true" aria-controls="backup-settings-panel">Backup</button>
         <button class="settings-tab" id="import-history-settings-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="import-history-settings-panel" tabindex="-1">Import history</button>
+          aria-selected="false" aria-controls="import-history-settings-panel" tabindex="-1">Imports</button>
+        <button class="settings-tab" id="classification-settings-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="classification-settings-panel" tabindex="-1">Classifications</button>
         <button class="settings-tab" id="general-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="general-settings-panel" tabindex="-1">General</button>
       </div>
@@ -84,6 +87,48 @@
         </article>
       </section>
 
+      <section class="settings-panel" id="classification-settings-panel" role="tabpanel"
+        aria-labelledby="classification-settings-tab" hidden>
+        <article class="settings-card classification-settings-card">
+          <div class="settings-card-heading">
+            <div>
+              <p class="eyebrow">Import automation</p>
+              <h2>Classifications</h2>
+              <p>Automatically assign a category and optional subcategory when imported transaction details match a rule.</p>
+            </div>
+            <div class="classification-heading-actions">
+              <a class="secondary-button" id="export-classifications-link"
+                href="/api/classifications/export" download>Export JSON</a>
+            </div>
+          </div>
+          <div class="classification-guidance">
+            <strong>How matching works</strong>
+            <p>Ledger checks classifications from top to bottom and uses the first matching rule. Rules have separate matchers for the current category, subcategory, description, account name, and provider. Within a rule, every non-empty regular expression must match. Matching is case-insensitive.</p>
+          </div>
+          <p class="settings-status" id="classification-status" role="status" hidden></p>
+          <nav class="classification-pagination" id="classification-pagination"
+            aria-label="Classification pages" hidden>
+            <button class="secondary-button" id="previous-classification-button"
+              type="button" aria-label="Previous classification">Previous</button>
+            <span id="classification-page-indicator" aria-live="polite"></span>
+            <button class="secondary-button" id="next-classification-button"
+              type="button" aria-label="Next classification">Next</button>
+          </nav>
+          <div class="classification-list" id="classification-list" aria-live="polite"></div>
+          <div class="classification-list-actions">
+            <button class="primary-button" id="add-classification-button" type="button">Add classification</button>
+          </div>
+          <div class="classification-footer">
+            <span>Rules are stored in <code>data/classifications.json</code>.</span>
+            <div class="classification-footer-actions">
+              <button class="secondary-button" id="review-unclassified-button"
+                type="button">Review unclassified</button>
+              <button class="secondary-button" id="apply-classifications-button" type="button">Apply to existing transactions</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
       <section class="settings-panel" id="general-settings-panel" role="tabpanel"
         aria-labelledby="general-settings-tab" hidden>
         <article class="settings-placeholder" aria-labelledby="general-settings-title">
@@ -91,10 +136,171 @@
           <div>
             <p class="eyebrow">Coming soon</p>
             <h2 id="general-settings-title">General preferences</h2>
-            <p>Future controls can include category rules, account aliases, and display preferences.</p>
+            <p>Future controls can include account aliases and display preferences.</p>
           </div>
         </article>
       </section>
     </main>
+
+    <dialog class="transaction-dialog" id="import-history-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Import history</p>
+            <h2>Imported transactions</h2>
+            <p class="dialog-subtitle" id="import-history-dialog-subtitle"></p>
+          </div>
+          <button class="icon-button" id="close-import-history-dialog" type="button"
+            aria-label="Close imported transactions">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
+          role="alert" hidden></p>
+        <div class="transaction-list" id="import-history-transactions"></div>
+      </div>
+    </dialog>
+
+    <dialog class="transaction-form-dialog" id="import-history-edit-dialog">
+      <form class="transaction-form" id="import-history-edit-form">
+        <header class="form-header">
+          <div>
+            <p class="eyebrow">Import history</p>
+            <h2>Edit transaction</h2>
+            <p class="dialog-subtitle">Changes are saved directly to the master CSV.</p>
+          </div>
+          <button class="icon-button" id="close-import-history-edit" type="button"
+            aria-label="Close transaction editor">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="form-body">
+          <div class="form-grid">
+            <label class="form-field">
+              <span>Date</span>
+              <input name="date" type="date" required />
+            </label>
+            <label class="form-field">
+              <span>Amount</span>
+              <span class="amount-input-wrap">
+                <span aria-hidden="true">$</span>
+                <input name="amount" type="number" step="0.01" required />
+              </span>
+              <small>Expenses are positive; credits and income are negative.</small>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Description</span>
+              <input name="description" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Category</span>
+              <input name="category" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Subcategory</span>
+              <input name="subcategory" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>Account name</span>
+              <input name="accountName" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Account type</span>
+              <input name="accountType" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Provider</span>
+              <input name="provider" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Notes</span>
+              <textarea name="notes" rows="4"></textarea>
+            </label>
+            <label class="refund-toggle form-field--wide">
+              <input name="refunded" type="checkbox" value="refunded" />
+              <span>
+                <strong>Refunded</strong>
+                <small>Keep this transaction in the ledger but count it as $0 in spending totals.</small>
+              </span>
+            </label>
+          </div>
+          <p class="form-error" id="import-history-edit-error" role="alert" hidden></p>
+        </div>
+        <footer class="form-footer">
+          <span class="form-footer-spacer"></span>
+          <button class="secondary-button" id="cancel-import-history-edit" type="button">Cancel</button>
+          <button class="primary-button" id="save-import-history-edit" type="submit">Save transaction</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="transaction-dialog classification-preview-dialog" id="classification-preview-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Apply classifications</p>
+            <h2>Review transaction changes</h2>
+            <p class="dialog-subtitle" id="classification-preview-summary"></p>
+          </div>
+          <button class="icon-button" id="close-classification-preview" type="button"
+            aria-label="Cancel and close classification preview">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <p class="form-error classification-preview-error" id="classification-preview-error" role="alert" hidden></p>
+        <div class="classification-preview-list" id="classification-preview-list"></div>
+        <footer class="form-footer">
+          <p>A safety backup will be created before these changes are written.</p>
+          <div class="form-footer-spacer"></div>
+          <button class="secondary-button" id="cancel-classification-preview" type="button">Cancel</button>
+          <button class="primary-button" id="confirm-classification-preview" type="button">Apply changes</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog class="transaction-dialog" id="unclassified-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Classification coverage</p>
+            <h2>Unclassified transactions</h2>
+            <p class="dialog-subtitle" id="unclassified-summary"></p>
+          </div>
+          <button class="icon-button" id="close-unclassified-dialog" type="button"
+            aria-label="Close unclassified transactions">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="transaction-filter-bar unclassified-filter-bar" aria-label="Filter unclassified transactions">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="unclassified-search" type="search" autocomplete="off" />
+          </label>
+          <label>
+            <span>Category</span>
+            <select id="unclassified-category-filter"><option value="">All categories</option></select>
+          </label>
+          <label>
+            <span>Account name</span>
+            <select id="unclassified-account-filter"><option value="">All accounts</option></select>
+          </label>
+          <label>
+            <span>Provider</span>
+            <select id="unclassified-provider-filter"><option value="">All providers</option></select>
+          </label>
+          <button class="text-button" id="clear-unclassified-filters" type="button">Clear filters</button>
+        </div>
+        <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
+        <div class="transaction-list" id="unclassified-list"></div>
+      </div>
+    </dialog>
   </body>
 </html>

@@ -7,6 +7,7 @@
     <title>Ledger — Spending overview</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/navigation.js" defer></script>
+    <script src="/transaction-ui.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -120,12 +121,27 @@
           <div class="chart-card-heading">
             <div>
               <h3 id="spending-chart-title">Monthly spending by category</h3>
-              <p id="spending-chart-subtitle">All spending categories</p>
+              <div class="chart-breadcrumb" id="spending-chart-subtitle">All spending categories</div>
             </div>
-            <button class="text-button" id="clear-category-filter" type="button" hidden>Show all</button>
+            <button class="text-button" id="clear-category-filter" type="button" hidden>Back to categories</button>
           </div>
           <div class="chart-legend" id="annual-category-legend" aria-label="Filter spending chart by category"></div>
           <div class="stacked-chart" id="annual-spending-chart" aria-label="Monthly spending bar chart"></div>
+        </article>
+
+        <article class="chart-card annual-breakdown-card" aria-labelledby="annual-breakdown-title">
+          <div class="chart-card-heading">
+            <div>
+              <h3 id="annual-breakdown-title">Annual spending breakdown</h3>
+              <p>Expand a category to compare exact subcategory totals across months.</p>
+            </div>
+          </div>
+          <div class="annual-breakdown-scroll">
+            <table class="annual-breakdown-table">
+              <thead id="annual-breakdown-head"></thead>
+              <tbody id="annual-breakdown-body"></tbody>
+            </table>
+          </div>
         </article>
 
         <article class="chart-card" aria-labelledby="net-chart-title">
@@ -178,6 +194,33 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-filter-bar" aria-label="Filter transactions">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="transaction-search" type="search" autocomplete="off"
+              placeholder="Search descriptions" />
+          </label>
+          <label>
+            <span>Account name</span>
+            <select id="transaction-account-filter">
+              <option value="">All accounts</option>
+            </select>
+          </label>
+          <label>
+            <span>Provider</span>
+            <select id="transaction-provider-filter">
+              <option value="">All providers</option>
+            </select>
+          </label>
+          <label>
+            <span>Subcategory</span>
+            <select id="transaction-subcategory-filter">
+              <option value="">All subcategories</option>
+            </select>
+          </label>
+          <button class="text-button" id="clear-transaction-filters" type="button">Clear filters</button>
+        </div>
+        <div class="subcategory-summary" id="subcategory-summary" hidden></div>
         <div class="transaction-list" id="transaction-list"></div>
       </div>
     </dialog>
@@ -220,6 +263,10 @@
               <input id="field-category" name="category" type="text" list="category-options" autocomplete="off" required />
             </label>
             <label class="form-field">
+              <span>Subcategory</span>
+              <input id="field-subcategory" name="subcategory" type="text" list="subcategory-options" autocomplete="off" />
+            </label>
+            <label class="form-field">
               <span>Account name</span>
               <input id="field-account-name" name="accountName" type="text" list="account-name-options" autocomplete="off" required />
             </label>
@@ -257,6 +304,7 @@
     </dialog>
 
     <datalist id="category-options"></datalist>
+    <datalist id="subcategory-options"></datalist>
     <datalist id="account-name-options"></datalist>
     <datalist id="account-type-options"></datalist>
     <datalist id="provider-options"></datalist>
