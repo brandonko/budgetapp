@@ -39,8 +39,9 @@ before every restore. Individual backups can be renamed without overwriting an
 existing backup, or permanently deleted after a separate confirmation. The
 Classifications tab manages ordered regular-expression
 rules that assign categories and subcategories to future imports. Category and
-subcategory are available as separate match fields. These rules
-are persisted beside the transaction CSV in `classifications.json` and can be
+subcategory are available as separate match fields. Each rule also supports
+optional freeform notes that explain its rationale without affecting matching.
+These rules are persisted beside the transaction CSV in `classifications.json` and can be
 exported as JSON. The editor shows one classification at a time with pagination.
 Classification and rule inputs appear only in their individual edit modes, and
 each inline Save persists the complete classification document immediately.

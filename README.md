@@ -193,8 +193,10 @@ classification assigns one required category and one optional subcategory, and
 may contain multiple rules. A rule has separate matchers for the transaction's
 current category, subcategory, description, account name, and provider using case-insensitive regular expressions. Empty
 matchers are ignored; when a rule has several populated matchers, all must
-match. Ledger evaluates classifications from top to bottom and uses the first
-matching rule. The editor presents one classification at a time with Previous
+match. Each rule can also include optional freeform notes explaining its
+rationale; notes are displayed with the rule but never participate in matching.
+Ledger evaluates classifications from top to bottom and uses the first matching
+rule. The editor presents one classification at a time with Previous
 and Next navigation, while newly added classifications are appended at the end.
 Classification details and rules use compact read-only summaries by default.
 Use their individual **Edit** actions to reveal inputs; **Cancel** discards that

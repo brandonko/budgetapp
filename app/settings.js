@@ -668,7 +668,7 @@ function closeUnclassifiedDialog() {
 }
 
 function blankRule() {
-  return { category: "", subcategory: "", description: "", accountName: "", provider: "" };
+  return { category: "", subcategory: "", description: "", accountName: "", provider: "", notes: "" };
 }
 
 function classificationInput(label, value, onInput, { required = false } = {}) {
@@ -687,6 +687,22 @@ function classificationInput(label, value, onInput, { required = false } = {}) {
     updateAddClassificationAvailability();
   });
   field.append(caption, input);
+  return field;
+}
+
+function classificationNotes(value, onInput) {
+  const field = document.createElement("label");
+  field.className = "classification-field classification-rule-notes";
+  const caption = document.createElement("span");
+  caption.textContent = "Notes";
+  const textarea = document.createElement("textarea");
+  textarea.value = value || "";
+  textarea.rows = 3;
+  textarea.maxLength = 2000;
+  textarea.placeholder = "Why does this rule exist?";
+  textarea.disabled = classificationsBusy;
+  textarea.addEventListener("input", () => onInput(textarea.value));
+  field.append(caption, textarea);
   return field;
 }
 
@@ -777,6 +793,9 @@ function renderRule(rule, classificationIndex, ruleIndex) {
         classifications[classificationIndex].rules[ruleIndex][field] = value;
       }));
     }
+    fields.append(classificationNotes(rule.notes, (value) => {
+      classifications[classificationIndex].rules[ruleIndex].notes = value;
+    }));
     row.classList.add("is-editing");
     row.append(header, fields);
     if (!partOfNewClassification) {
@@ -817,6 +836,16 @@ function renderRule(rule, classificationIndex, ruleIndex) {
     pattern.textContent = rule[field];
     line.append(name, arrow, pattern);
     summary.append(line);
+  }
+  if (rule.notes) {
+    const notes = document.createElement("p");
+    notes.className = "classification-rule-notes-summary";
+    const label = document.createElement("span");
+    label.textContent = "Notes";
+    const value = document.createElement("span");
+    value.textContent = rule.notes;
+    notes.append(label, value);
+    summary.append(notes);
   }
   row.append(header, summary);
   return row;

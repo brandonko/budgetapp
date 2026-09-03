@@ -56,6 +56,7 @@ class ClassificationEngineTests(unittest.TestCase):
                                 "description": "whole foods",
                                 "accountName": "prime visa",
                                 "provider": "chase",
+                                "notes": "Most shared grocery purchases are paid with this card.",
                             }
                         ],
                     },
@@ -76,6 +77,33 @@ class ClassificationEngineTests(unittest.TestCase):
         )
         self.assertEqual(account_did_not_match["category"], "Miscellaneous")
         self.assertEqual(account_did_not_match["subcategory"], "Leisure")
+
+    def test_rule_notes_are_normalized_but_do_not_participate_in_matching(self) -> None:
+        document = normalize_classifications(
+            {
+                "classifications": [
+                    {
+                        "category": "Food",
+                        "subcategory": "Restaurants",
+                        "rules": [
+                            {
+                                "description": "venmo",
+                                "notes": "  Usually reimbursements for meals.\nConfirm exceptions manually.  ",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        rule = document["classifications"][0]["rules"][0]
+        self.assertEqual(
+            rule["notes"],
+            "Usually reimbursements for meals.\nConfirm exceptions manually.",
+        )
+        [matched] = apply_classifications([transaction(description="VENMO PAYMENT")], document)
+        [unmatched] = apply_classifications([transaction(description="BOOK STORE")], document)
+        self.assertEqual((matched["category"], matched["subcategory"]), ("Food", "Restaurants"))
+        self.assertEqual((unmatched["category"], unmatched["subcategory"]), ("Shopping", ""))
 
     def test_no_match_preserves_source_category_and_adds_blank_subcategory(self) -> None:
         document = normalize_classifications(
@@ -163,6 +191,28 @@ class ClassificationEngineTests(unittest.TestCase):
                     ]
                 }
             )
+        with self.assertRaisesRegex(CsvDataError, "notes must be text"):
+            normalize_classifications(
+                {
+                    "classifications": [
+                        {
+                            "category": "Food",
+                            "rules": [{"description": "venmo", "notes": 42}],
+                        }
+                    ]
+                }
+            )
+        with self.assertRaisesRegex(CsvDataError, "notes cannot exceed 2000 characters"):
+            normalize_classifications(
+                {
+                    "classifications": [
+                        {
+                            "category": "Food",
+                            "rules": [{"description": "venmo", "notes": "x" * 2001}],
+                        }
+                    ]
+                }
+            )
 
 
 class ClassificationApiTests(unittest.TestCase):
@@ -219,6 +269,7 @@ class ClassificationApiTests(unittest.TestCase):
                             "description": "market",
                             "accountName": "",
                             "provider": "",
+                            "notes": "This market is where we buy groceries.\nKeep separate from dining.",
                         }
                     ],
                 }

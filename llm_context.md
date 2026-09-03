@@ -91,6 +91,8 @@ third-party Python dependency unless a future requirement clearly justifies it.
   current category, subcategory, description, account name, and provider. Ignore
   blank matchers. All populated matchers in
   one rule must match; multiple rules within a classification are alternatives.
+- Each rule may include optional freeform notes documenting its rationale. Preserve
+  line breaks when storing and displaying notes, and never treat notes as matchers.
 - Evaluate classifications and their rules in displayed order and stop at the
   first match. Present one classification at a time with a clear current/total
   pagination indicator. Append new classifications to the end and navigate to

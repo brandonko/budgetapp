@@ -1105,10 +1105,11 @@ h1 {
   text-transform: uppercase;
 }
 
-.classification-field input {
+.classification-field input,
+.classification-field textarea {
   width: 100%;
   min-height: 40px;
-  padding: 0 11px;
+  padding: 9px 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink);
@@ -1117,7 +1118,16 @@ h1 {
   font-size: 13px;
 }
 
-.classification-field input:focus {
+.classification-field input {
+  padding-block: 0;
+}
+
+.classification-field textarea {
+  resize: vertical;
+}
+
+.classification-field input:focus,
+.classification-field textarea:focus {
   outline: 2px solid rgb(46 106 80 / 18%);
   border-color: var(--accent);
 }
@@ -1153,6 +1163,10 @@ h1 {
   margin-top: 14px;
 }
 
+.classification-rule-notes {
+  grid-column: 1 / -1;
+}
+
 .classification-inline-actions {
   margin-top: 14px;
 }
@@ -1176,6 +1190,17 @@ h1 {
 .classification-rule-summary code {
   overflow-wrap: anywhere;
   color: var(--ink);
+}
+
+.classification-rule-summary .classification-rule-notes-summary {
+  align-items: start;
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+
+.classification-rule-notes-summary > span:last-child {
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .classification-empty {

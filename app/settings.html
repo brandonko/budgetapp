@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Configure Ledger preferences." />
     <title>Settings — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260902-unclassified-modal" />
+    <link rel="stylesheet" href="/styles.css?v=20260902-rule-notes" />
     <script src="/navigation.js" defer></script>
     <script src="/transaction-ui.js" defer></script>
-    <script src="/settings.js?v=20260902-unclassified-modal" defer></script>
+    <script src="/settings.js?v=20260902-rule-notes" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -103,7 +103,7 @@
           </div>
           <div class="classification-guidance">
             <strong>How matching works</strong>
-            <p>Ledger checks classifications from top to bottom and uses the first matching rule. Rules have separate matchers for the current category, subcategory, description, account name, and provider. Within a rule, every non-empty regular expression must match. Matching is case-insensitive.</p>
+            <p>Ledger checks classifications from top to bottom and uses the first matching rule. Rules have separate matchers for the current category, subcategory, description, account name, and provider. Within a rule, every non-empty regular expression must match. Matching is case-insensitive. Optional notes can explain why a rule exists and do not affect matching.</p>
           </div>
           <p class="settings-status" id="classification-status" role="status" hidden></p>
           <nav class="classification-pagination" id="classification-pagination"

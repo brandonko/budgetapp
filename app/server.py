@@ -337,6 +337,12 @@ def classifications_path(csv_path: Path) -> Path:
     return csv_path.parent / "classifications.json"
 
 
+CLASSIFICATION_MATCHER_FIELDS = (
+    "category", "subcategory", "description", "accountName", "provider"
+)
+CLASSIFICATION_RULE_NOTES_MAX_LENGTH = 2_000
+
+
 def normalize_classifications(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise CsvDataError("classifications must be a JSON object")
@@ -371,7 +377,7 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
             if not isinstance(raw_rule, Mapping):
                 raise CsvDataError(f"{rule_location} must be an object")
             rule: dict[str, str] = {}
-            for field in ("category", "subcategory", "description", "accountName", "provider"):
+            for field in CLASSIFICATION_MATCHER_FIELDS:
                 pattern = raw_rule.get(field, "")
                 if not isinstance(pattern, str):
                     raise CsvDataError(f"{rule_location}.{field} must be text")
@@ -386,8 +392,18 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
                             f"{rule_location}.{field} is not a valid regular expression: {exc}"
                         ) from exc
                 rule[field] = pattern
-            if not any(rule.values()):
+            if not any(rule[field] for field in CLASSIFICATION_MATCHER_FIELDS):
                 raise CsvDataError(f"{rule_location} must include at least one matcher")
+            notes = raw_rule.get("notes", "")
+            if not isinstance(notes, str):
+                raise CsvDataError(f"{rule_location}.notes must be text")
+            notes = notes.strip()
+            if len(notes) > CLASSIFICATION_RULE_NOTES_MAX_LENGTH:
+                raise CsvDataError(
+                    f"{rule_location}.notes cannot exceed "
+                    f"{CLASSIFICATION_RULE_NOTES_MAX_LENGTH} characters"
+                )
+            rule["notes"] = notes
             rules.append(rule)
         classifications.append(
             {"category": category.strip(), "subcategory": subcategory.strip(), "rules": rules}
@@ -444,8 +460,8 @@ def classify_transactions(
             classification["subcategory"],
             [
                 {
-                    field: re.compile(pattern, re.IGNORECASE) if pattern else None
-                    for field, pattern in rule.items()
+                    field: re.compile(rule[field], re.IGNORECASE) if rule[field] else None
+                    for field in CLASSIFICATION_MATCHER_FIELDS
                 }
                 for rule in classification["rules"]
             ],
