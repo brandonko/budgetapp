@@ -62,6 +62,10 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("transaction.subcategory === filters.subcategory", javascript)
         self.assertIn("preserveFilters: true", javascript)
         self.assertNotIn("currency.format(total)}`", javascript)
+        filter_style = css.split(".transaction-filter-bar {", 1)[1].split("}", 1)[0]
+        self.assertIn("repeat(4, minmax(110px, 1fr))", filter_style)
+        self.assertIn("@media (max-width: 860px)", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
         subcategory_style = css.split(".subcategory-summary {", 1)[1].split("}", 1)[0]
         self.assertIn("flex: 0 0 auto", subcategory_style)
         self.assertIn("overflow-y: hidden", subcategory_style)
