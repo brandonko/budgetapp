@@ -164,6 +164,7 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(restored["transactionCount"], 1)
         restored_rows, _revision = read_transaction_state(self.csv_path)
         self.assertEqual(restored_rows[0]["notes"], "")
+        self.assertEqual(restored_rows[0]["flags"], "")
 
     def test_delete_backup_requires_confirmation_and_removes_only_selected_file(self) -> None:
         backup_directory = self.csv_path.parent / "backups"

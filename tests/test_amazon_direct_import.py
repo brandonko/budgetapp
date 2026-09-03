@@ -18,6 +18,7 @@ from server import (  # noqa: E402
     BudgetRequestHandler,
     COLUMNS,
     LEGACY_COLUMNS,
+    NOTES_COLUMNS,
     ThreadingHTTPServer,
     initialize_csv_if_missing,
     migrate_transaction_schema,
@@ -142,6 +143,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         edited["description"] = "Reviewed imported item"
         edited["category"] = "Household"
         edited["notes"] = "Gift, keep the receipt\nReturn window ends September 15."
+        edited["flags"] = "Refunded,refunded"
         status, updated = self.request(
             "PUT",
             f"/api/transactions/{created['_id']}",
@@ -153,9 +155,18 @@ class AmazonDirectImportTests(unittest.TestCase):
                 transaction["description"] == "Reviewed imported item"
                 and transaction["category"] == "Household"
                 and transaction["notes"] == edited["notes"]
+                and transaction["flags"] == "refunded"
                 for transaction in updated["transactions"]
             )
         )
+
+        third_token = self.create_session()
+        status, third = self.request(
+            "POST", f"/api/amazon-import-sessions/{third_token}/complete", {"content": export}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(third["import"]["new"], 0)
+        self.assertEqual(third["import"]["duplicates"], 2)
 
     def test_direct_import_creates_missing_transaction_file(self) -> None:
         self.csv_path.unlink()
@@ -272,9 +283,34 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(len(transactions), 1)
         self.assertEqual(transactions[0]["description"], "Legacy purchase")
         self.assertEqual(transactions[0]["notes"], "")
+        self.assertEqual(transactions[0]["flags"], "")
         with legacy_path.open(encoding="utf-8", newline="") as handle:
             self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
         self.assertFalse(migrate_transaction_schema(legacy_path))
+
+    def test_migrates_notes_schema_with_blank_flags_without_losing_rows(self) -> None:
+        previous_path = Path(self.temporary_directory.name) / "with-notes.csv"
+        previous_row = {
+            "date": "2026-08-20",
+            "description": "Purchase with a note",
+            "amount": "12.34",
+            "category": "Shopping",
+            "accountName": "Card",
+            "accountType": "CREDIT",
+            "provider": "Bank",
+            "notes": "Keep this note",
+        }
+        with previous_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=NOTES_COLUMNS)
+            writer.writeheader()
+            writer.writerow(previous_row)
+
+        self.assertTrue(migrate_transaction_schema(previous_path))
+        transactions, _revision = read_transaction_state(previous_path)
+        self.assertEqual(transactions[0]["notes"], "Keep this note")
+        self.assertEqual(transactions[0]["flags"], "")
+        with previous_path.open(encoding="utf-8", newline="") as handle:
+            self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
 
     def test_progress_cancel_and_terminal_updates_are_idempotent(self) -> None:
         token = self.create_session()

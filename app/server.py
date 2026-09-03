@@ -51,12 +51,15 @@ COLUMNS = (
     "accountType",
     "provider",
     "notes",
+    "flags",
 )
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
-LEGACY_COLUMNS = COLUMNS[:-1]
+LEGACY_COLUMNS = COLUMNS[:-2]
+NOTES_COLUMNS = COLUMNS[:-1]
 REQUIRED_TEXT_COLUMNS = tuple(
-    column for column in COLUMNS if column not in {"date", "amount", "notes"}
+    column for column in COLUMNS if column not in {"date", "amount", "notes", "flags"}
 )
+FLAG_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_IMPORT_REQUEST_BYTES = 50_000_000
@@ -184,6 +187,21 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(notes, str):
         raise CsvDataError(f"{location}.notes must be text")
     transaction["notes"] = notes.strip()
+    raw_flags = raw.get("flags", "")
+    if not isinstance(raw_flags, str):
+        raise CsvDataError(f"{location}.flags must be comma-separated text")
+    flags: list[str] = []
+    for raw_flag in raw_flags.split(","):
+        flag = raw_flag.strip().casefold()
+        if not flag:
+            continue
+        if not FLAG_PATTERN.fullmatch(flag):
+            raise CsvDataError(
+                f"{location}.flags entries must use letters, numbers, hyphens, or underscores"
+            )
+        if flag not in flags:
+            flags.append(flag)
+    transaction["flags"] = ",".join(flags)
     return transaction
 
 
@@ -289,9 +307,14 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
             normalize_transaction(row, f"line {line_number}")
             for line_number, row in enumerate(reader, start=2)
         ]
+    if set(fieldnames) == set(NOTES_COLUMNS):
+        return [
+            normalize_transaction(dict(row, flags=""), f"line {line_number}")
+            for line_number, row in enumerate(reader, start=2)
+        ]
     if set(fieldnames) == set(LEGACY_COLUMNS):
         return [
-            normalize_transaction(dict(row, notes=""), f"line {line_number}")
+            normalize_transaction(dict(row, notes="", flags=""), f"line {line_number}")
             for line_number, row in enumerate(reader, start=2)
         ]
     raise CsvDataError("backup CSV must use Ledger's current or legacy transaction columns")
@@ -380,12 +403,16 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     fieldnames = tuple(reader.fieldnames or ())
-    if "notes" in fieldnames:
+    fieldname_set = set(fieldnames)
+    if fieldname_set == set(COLUMNS):
         return False
-    if set(fieldnames) != set(LEGACY_COLUMNS):
+    if fieldname_set != set(LEGACY_COLUMNS) and fieldname_set != set(NOTES_COLUMNS):
         return False
     transactions = [
-        normalize_transaction(dict(row, notes=""), f"line {line_number}")
+        normalize_transaction(
+            dict(row, notes=row.get("notes", ""), flags=""),
+            f"line {line_number}",
+        )
         for line_number, row in enumerate(reader, start=2)
     ]
     write_transactions_atomic(csv_path, transactions)
@@ -522,6 +549,7 @@ def imported_transaction_state(
             str(transaction["accountType"]),
             str(transaction["provider"]),
             str(transaction["notes"]),
+            str(transaction["flags"]),
         )
 
     remaining = Counter(content_identity(transaction) for transaction in additions)

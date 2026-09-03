@@ -1326,6 +1326,40 @@ h2 {
   line-height: 1.35;
 }
 
+.refund-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  background: #fafbfa;
+}
+
+.refund-toggle input {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.refund-toggle > span {
+  display: grid;
+  gap: 4px;
+}
+
+.refund-toggle strong {
+  font-size: 13px;
+}
+
+.refund-toggle small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 480;
+  line-height: 1.4;
+}
+
 .amount-input-wrap {
   position: relative;
   display: block;
@@ -1421,6 +1455,27 @@ h2 {
   font-size: 11px;
   font-style: italic;
   white-space: pre-wrap;
+}
+
+.transaction-description .transaction-flag {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 750;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transaction-description .transaction-flag--refunded {
+  color: #466052;
+  background: #e5eee8;
+}
+
+.transaction-row--refunded .transaction-amount {
+  color: var(--muted);
 }
 
 .companion-extension {

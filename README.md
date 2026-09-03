@@ -13,7 +13,7 @@ The dashboard includes:
 - Monthly/annual view selection with independent year and month controls
 - Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, and settings
-- Manual transaction creation, editing, permanent deletion, and freeform notes
+- Manual transaction creation, editing, refund flags, permanent deletion, and freeform notes
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
 - One-to-one reconciliation of credit-card bill-payment transfers
@@ -137,8 +137,9 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. All eight CSV fields can be changed, including optional freeform
-notes. After editing from a transaction list, Ledger returns to the refreshed
+transaction. All nine CSV fields can be changed, including optional freeform
+notes and flags. Marking a transaction as **Refunded** keeps its original amount
+for duplicate detection while treating it as $0 in dashboard totals. After editing from a transaction list, Ledger returns to the refreshed
 list instead of closing the workflow. The same form supports
 permanent deletion after an explicit confirmation. Use **Add transaction** on
 the dashboard to create a row manually.
@@ -153,8 +154,9 @@ Open **Settings → Backup** to create and manage transaction database snapshots
 Ledger stores generated backups under `data/backups/` using timestamped names
 such as `transactions_20260902_114500_123456.csv`. Any regular CSV placed directly
 in that folder also appears. The list is ordered by last-modified date, newest
-first, and shows the transaction count in each valid backup. Legacy seven-column
-Ledger CSVs are supported and receive blank notes when restored.
+first, and shows the transaction count in each valid backup. Legacy seven- and
+eight-column Ledger CSVs are supported and receive any missing optional fields
+when restored.
 
 Individual backups can be permanently deleted after an explicit confirmation.
 Deleting a backup does not modify the active transaction file or other backups.
@@ -172,11 +174,13 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,accountName,accountType,provider,notes
+date,description,amount,category,accountName,accountType,provider,notes,flags
 ```
 
-Ledger automatically and atomically adds a blank `notes` column when it opens a
-legacy seven-column database. Notes may contain commas or multiple lines.
+Ledger automatically and atomically adds missing optional `notes` and `flags`
+columns when it opens an older database. Notes may contain commas or multiple
+lines. Flags are normalized, comma-separated identifiers; the first supported
+flag is `refunded`.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
@@ -192,6 +196,8 @@ and a spending deficit is red.
 - **Net total** is income minus spending. Positive values use a light-green
   background; negative values use a light-red background.
 - Transaction lists are ordered latest first.
+- Transactions flagged `refunded` remain visible but contribute $0 to category,
+  spending, income, net, and annual-chart totals.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
 - **Monthly** view filters the dashboard by a selected month and year.
