@@ -2,6 +2,7 @@
 
 const DASHBOARD_VIEW_STORAGE_KEY = "ledger.dashboardView.v1";
 const UNCLASSIFIED_SUBCATEGORY = "__ledger_unclassified_subcategory__";
+const UNTAGGED = "__ledger_untagged__";
 const transactionUi = window.LedgerTransactionUI;
 
 const state = {
@@ -10,6 +11,7 @@ const state = {
   viewMode: "monthly",
   selectedYear: "",
   selectedMonth: "",
+  breakdownDimension: "category",
   annualCategoryFilter: "",
   annualSubcategoryFilter: "",
   annualExpandedCategories: new Set(),
@@ -19,6 +21,7 @@ const state = {
   transactionDialogFilters: {
     description: "",
     category: "",
+    tag: "",
     accountName: "",
     provider: "",
     subcategory: "",
@@ -35,6 +38,7 @@ function saveDashboardView() {
         viewMode: state.viewMode,
         selectedYear: state.selectedYear,
         selectedMonth: state.selectedMonth,
+        breakdownDimension: state.breakdownDimension,
         annualCategoryFilter: state.annualCategoryFilter,
         annualSubcategoryFilter: state.annualSubcategoryFilter,
       }),
@@ -52,6 +56,9 @@ function restoreDashboardView() {
     if (/^\d{4}$/.test(saved.selectedYear || "")) state.selectedYear = saved.selectedYear;
     if (/^(0[1-9]|1[0-2])$/.test(saved.selectedMonth || "")) {
       state.selectedMonth = saved.selectedMonth;
+    }
+    if (["category", "tag"].includes(saved.breakdownDimension)) {
+      state.breakdownDimension = saved.breakdownDimension;
     }
     if (typeof saved.annualCategoryFilter === "string") {
       state.annualCategoryFilter = saved.annualCategoryFilter.slice(0, 200);
@@ -106,6 +113,9 @@ const elements = {
   netTotalCard: document.querySelector("#net-total-card"),
   netTotalNote: document.querySelector("#net-total-note"),
   categoryGrid: document.querySelector("#category-grid"),
+  categoriesHeading: document.querySelector("#categories-heading"),
+  breakdownDimensionButtons: [...document.querySelectorAll("[data-breakdown-dimension]")],
+  monthlyBreakdownTabs: document.querySelector("#monthly-breakdown-tabs"),
   categoryTemplate: document.querySelector("#category-template"),
   annualInsights: document.querySelector("#annual-insights"),
   annualCategoryLegend: document.querySelector("#annual-category-legend"),
@@ -115,6 +125,7 @@ const elements = {
   spendingChartTitle: document.querySelector("#spending-chart-title"),
   annualBreakdownHead: document.querySelector("#annual-breakdown-head"),
   annualBreakdownBody: document.querySelector("#annual-breakdown-body"),
+  annualBreakdownDescription: document.querySelector("#annual-breakdown-description"),
   annualNetChart: document.querySelector("#annual-net-chart"),
   viewExcludedButton: document.querySelector("#view-excluded-button"),
   excludedButtonLabel: document.querySelector("#excluded-button-label"),
@@ -133,6 +144,15 @@ const elements = {
   transactionAccountFilter: document.querySelector("#transaction-account-filter"),
   transactionProviderFilter: document.querySelector("#transaction-provider-filter"),
   transactionSubcategoryFilter: document.querySelector("#transaction-subcategory-filter"),
+  transactionTagFilter: document.querySelector("#transaction-tag-filter"),
+  transactionFilterButton: document.querySelector("#transaction-filter-button"),
+  transactionFilterPopover: document.querySelector("#transaction-filter-popover"),
+  transactionFilterCount: document.querySelector("#transaction-filter-count"),
+  resetTransactionFilters: document.querySelector("#reset-transaction-filters"),
+  applyTransactionFilters: document.querySelector("#apply-transaction-filters"),
+  transactionActiveFilters: document.querySelector("#transaction-active-filters"),
+  transactionFilterChips: document.querySelector("#transaction-filter-chips"),
+  transactionDialogSort: document.querySelector("#transaction-dialog-sort"),
   subcategorySummary: document.querySelector("#subcategory-summary"),
   clearTransactionFilters: document.querySelector("#clear-transaction-filters"),
   closeDialog: document.querySelector("#close-dialog"),
@@ -160,6 +180,11 @@ const elements = {
     provider: document.querySelector("#provider-options"),
   },
 };
+
+const transactionDialogSort = transactionUi.createTransactionSortControls(
+  elements.transactionDialogSort,
+  { onChange: () => renderTransactionDialogTransactions() },
+);
 
 function parseLocalDate(isoDate) {
   const [year, month, day] = isoDate.split("-").map(Number);
@@ -326,8 +351,59 @@ function groupByCategory(transactions) {
     .sort((left, right) => Math.abs(right.total) - Math.abs(left.total));
 }
 
+function transactionTags(transaction) {
+  const tags = [];
+  const seen = new Set();
+  for (const rawTag of String(transaction.tags || "").split(",")) {
+    const tag = rawTag.trim();
+    const normalized = tag.toLocaleLowerCase();
+    if (!tag || seen.has(normalized)) continue;
+    tags.push(tag);
+    seen.add(normalized);
+  }
+  return tags;
+}
+
+function breakdownLabel(key) {
+  return key === UNTAGGED ? "Untagged" : key;
+}
+
+function transactionMatchesBreakdown(transaction, key) {
+  if (state.breakdownDimension === "category") return transaction.category === key;
+  const tags = transactionTags(transaction);
+  const normalizedKey = key.toLocaleLowerCase();
+  return key === UNTAGGED
+    ? tags.length === 0
+    : tags.some((tag) => tag.toLocaleLowerCase() === normalizedKey);
+}
+
+function groupByBreakdownDimension(transactions) {
+  if (state.breakdownDimension === "category") {
+    return groupByCategory(transactions).map((group) => ({ ...group, key: group.category }));
+  }
+  const groups = new Map();
+  for (const transaction of transactions) {
+    const tags = transactionTags(transaction);
+    for (const key of tags.length > 0 ? tags : [UNTAGGED]) {
+      const normalizedKey = key.toLocaleLowerCase();
+      if (!groups.has(normalizedKey)) {
+        groups.set(normalizedKey, { key, transactions: [] });
+      }
+      groups.get(normalizedKey).transactions.push(transaction);
+    }
+  }
+  return [...groups.values()]
+    .map(({ key, transactions: tagTransactions }) => ({
+      key,
+      category: breakdownLabel(key),
+      transactions: tagTransactions,
+      total: displaySum(tagTransactions),
+    }))
+    .sort((left, right) => Math.abs(right.total) - Math.abs(left.total));
+}
+
 function renderCategories(transactions) {
-  const groups = groupByCategory(transactions);
+  const groups = groupByBreakdownDimension(transactions);
   elements.categoryGrid.replaceChildren();
   if (groups.length === 0) {
     const empty = document.createElement("p");
@@ -351,14 +427,17 @@ function renderCategories(transactions) {
     totalElement.textContent = currency.format(group.total);
     totalElement.classList.toggle(
       "is-credit",
-      group.total < 0 || group.category.trim().toLocaleLowerCase() === "income",
+      group.total < 0 || (
+        state.breakdownDimension === "category" &&
+        group.category.trim().toLocaleLowerCase() === "income"
+      ),
     );
     card.setAttribute("aria-label", `View ${group.category} transactions`);
     card.addEventListener("click", () =>
       openTransactionDialog(group.category, group.transactions, {
-        type: "category",
+        type: state.breakdownDimension,
         title: group.category,
-        category: group.category,
+        key: group.key,
       }),
     );
     elements.categoryGrid.append(card);
@@ -398,15 +477,17 @@ function colorForSubcategory(subcategory, subcategories, categoryColor) {
   return mixHexColor(categoryColor, Math.min(0.08 + (index % 6) * 0.12, 0.68));
 }
 
-function annualSpendingCategories(transactions) {
-  return groupByCategory(transactions.filter((transaction) => !isIncome(transaction)))
-    .map((group) => group.category);
+function annualSpendingKeys(transactions) {
+  return groupByBreakdownDimension(transactions.filter((transaction) => !isIncome(transaction)))
+    .map((group) => group.key);
 }
 
-function selectAnnualCategory(category) {
-  state.annualCategoryFilter = category;
+function selectAnnualGroup(key) {
+  state.annualCategoryFilter = key;
   state.annualSubcategoryFilter = "";
-  state.annualExpandedCategories.add(category);
+  if (state.breakdownDimension === "category" && key) {
+    state.annualExpandedCategories.add(key);
+  }
   saveDashboardView();
   renderAnnualSpendingChart(transactionsForSelectedPeriod());
   renderAnnualBreakdown(transactionsForSelectedPeriod());
@@ -420,21 +501,22 @@ function selectAnnualSubcategory(subcategory) {
 }
 
 function renderSpendingBreadcrumb() {
+  const pluralLabel = state.breakdownDimension === "category" ? "categories" : "tags";
   if (!state.annualCategoryFilter) {
-    elements.spendingChartSubtitle.textContent = "All spending categories";
+    elements.spendingChartSubtitle.textContent = `All spending ${pluralLabel}`;
     return;
   }
   const all = document.createElement("button");
   all.type = "button";
   all.className = "chart-breadcrumb-button";
-  all.textContent = "All spending";
+  all.textContent = `All ${pluralLabel}`;
   all.addEventListener("click", clearAnnualSpendingFilter);
   const categorySeparator = document.createElement("span");
   categorySeparator.textContent = "›";
   const category = document.createElement(
     state.annualSubcategoryFilter ? "button" : "span",
   );
-  category.textContent = state.annualCategoryFilter;
+  category.textContent = breakdownLabel(state.annualCategoryFilter);
   if (state.annualSubcategoryFilter) {
     category.type = "button";
     category.className = "chart-breadcrumb-button";
@@ -464,8 +546,9 @@ function clearAnnualSpendingFilter() {
 
 function renderAnnualSpendingChart(transactions) {
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
-  const categories = annualSpendingCategories(spendingTransactions);
-  if (state.annualCategoryFilter && !categories.includes(state.annualCategoryFilter)) {
+  const categoryMode = state.breakdownDimension === "category";
+  const groups = annualSpendingKeys(spendingTransactions);
+  if (state.annualCategoryFilter && !groups.includes(state.annualCategoryFilter)) {
     state.annualCategoryFilter = "";
     state.annualSubcategoryFilter = "";
     saveDashboardView();
@@ -473,10 +556,10 @@ function renderAnnualSpendingChart(transactions) {
 
   const categoryTransactions = state.annualCategoryFilter
     ? spendingTransactions.filter(
-        (transaction) => transaction.category === state.annualCategoryFilter,
+        (transaction) => transactionMatchesBreakdown(transaction, state.annualCategoryFilter),
       )
     : spendingTransactions;
-  const subcategories = state.annualCategoryFilter
+  const subcategories = categoryMode && state.annualCategoryFilter
     ? [...new Set(categoryTransactions.map(subcategoryKey))].sort((left, right) => {
         const totalDifference = Math.abs(displaySum(categoryTransactions.filter(
           (transaction) => subcategoryKey(transaction) === right,
@@ -494,27 +577,33 @@ function renderAnnualSpendingChart(transactions) {
     saveDashboardView();
   }
 
-  const series = state.annualCategoryFilter ? subcategories : categories;
+  const series = categoryMode && state.annualCategoryFilter ? subcategories : groups;
   const visibleSeries = state.annualSubcategoryFilter
     ? [state.annualSubcategoryFilter]
-    : series;
-  const parentColor = state.annualCategoryFilter
-    ? colorForCategory(state.annualCategoryFilter, categories)
+    : !categoryMode && state.annualCategoryFilter
+      ? [state.annualCategoryFilter]
+      : series;
+  const parentColor = categoryMode && state.annualCategoryFilter
+    ? colorForCategory(state.annualCategoryFilter, groups)
     : "";
-  const seriesLabel = (key) => state.annualCategoryFilter ? subcategoryLabel(key) : key;
-  const seriesColor = (key) => state.annualCategoryFilter
+  const seriesLabel = (key) => categoryMode && state.annualCategoryFilter
+    ? subcategoryLabel(key)
+    : breakdownLabel(key);
+  const seriesColor = (key) => categoryMode && state.annualCategoryFilter
     ? colorForSubcategory(key, subcategories, parentColor)
-    : colorForCategory(key, categories);
+    : colorForCategory(key, groups);
   const seriesTransactions = (key, candidates) => candidates.filter((transaction) => (
-    state.annualCategoryFilter
+    categoryMode && state.annualCategoryFilter
       ? transaction.category === state.annualCategoryFilter && subcategoryKey(transaction) === key
-      : transaction.category === key
+      : transactionMatchesBreakdown(transaction, key)
   ));
 
   elements.annualCategoryLegend.replaceChildren();
   elements.annualCategoryLegend.setAttribute(
     "aria-label",
-    state.annualCategoryFilter ? "Filter spending chart by subcategory" : "Filter spending chart by category",
+    categoryMode && state.annualCategoryFilter
+      ? "Filter spending chart by subcategory"
+      : `Filter spending chart by ${state.breakdownDimension}`,
   );
   for (const key of series) {
     const button = document.createElement("button");
@@ -523,24 +612,26 @@ function renderAnnualSpendingChart(transactions) {
     button.style.setProperty("--legend-color", seriesColor(key));
     button.setAttribute(
       "aria-pressed",
-      String(state.annualCategoryFilter
+      String(categoryMode && state.annualCategoryFilter
         ? state.annualSubcategoryFilter === key
-        : false),
+        : state.annualCategoryFilter === key),
     );
     const annualTotal = displaySum(seriesTransactions(key, spendingTransactions));
     button.textContent = `${seriesLabel(key)} · ${currency.format(annualTotal)}`;
     button.addEventListener("click", () => {
-      if (state.annualCategoryFilter) selectAnnualSubcategory(key);
-      else selectAnnualCategory(key);
+      if (categoryMode && state.annualCategoryFilter) selectAnnualSubcategory(key);
+      else selectAnnualGroup(state.annualCategoryFilter === key ? "" : key);
     });
     elements.annualCategoryLegend.append(button);
   }
 
-  elements.spendingChartTitle.textContent = state.annualCategoryFilter
+  elements.spendingChartTitle.textContent = categoryMode && state.annualCategoryFilter
     ? `Monthly ${state.annualCategoryFilter} spending by subcategory`
-    : "Monthly spending by category";
+    : `Monthly spending by ${state.breakdownDimension}`;
   renderSpendingBreadcrumb();
   elements.clearCategoryFilter.hidden = !state.annualCategoryFilter;
+  elements.clearCategoryFilter.textContent =
+    `Back to ${state.breakdownDimension === "category" ? "categories" : "tags"}`;
 
   const byMonth = annualTransactionsByMonth(spendingTransactions);
   const monthSeries = [...byMonth.entries()].map(([month, monthTransactions]) => {
@@ -627,11 +718,12 @@ function appendAnnualAmounts(row, transactions) {
 
 function renderAnnualBreakdown(transactions) {
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
-  const groups = groupByCategory(spendingTransactions);
+  const categoryMode = state.breakdownDimension === "category";
+  const groups = groupByBreakdownDimension(spendingTransactions);
   const headerRow = document.createElement("tr");
   const categoryHeader = document.createElement("th");
   categoryHeader.scope = "col";
-  categoryHeader.textContent = "Category";
+  categoryHeader.textContent = categoryMode ? "Category" : "Tag";
   headerRow.append(categoryHeader);
   for (let monthNumber = 1; monthNumber <= 12; monthNumber += 1) {
     const month = String(monthNumber).padStart(2, "0");
@@ -659,11 +751,18 @@ function renderAnnualBreakdown(transactions) {
     rows.push(emptyRow);
   }
   for (const group of groups) {
-    const expanded = state.annualExpandedCategories.has(group.category);
+    const expanded = categoryMode && state.annualExpandedCategories.has(group.key);
     const categoryRow = document.createElement("tr");
     categoryRow.className = "annual-category-row";
     const categoryCell = document.createElement("th");
     categoryCell.scope = "row";
+    if (!categoryMode) {
+      categoryCell.textContent = breakdownLabel(group.key);
+      categoryRow.append(categoryCell);
+      appendAnnualAmounts(categoryRow, group.transactions);
+      rows.push(categoryRow);
+      continue;
+    }
     const expandButton = document.createElement("button");
     expandButton.type = "button";
     expandButton.className = "annual-category-expand";
@@ -676,8 +775,8 @@ function renderAnnualBreakdown(transactions) {
     label.textContent = group.category;
     expandButton.append(arrow, label);
     expandButton.addEventListener("click", () => {
-      if (expanded) state.annualExpandedCategories.delete(group.category);
-      else state.annualExpandedCategories.add(group.category);
+      if (expanded) state.annualExpandedCategories.delete(group.key);
+      else state.annualExpandedCategories.add(group.key);
       renderAnnualBreakdown(transactionsForSelectedPeriod());
     });
     categoryCell.append(expandButton);
@@ -747,7 +846,7 @@ function renderAnnualNetChart(transactions) {
 
 function renderAnnualCharts(transactions) {
   renderAnnualSpendingChart(transactions);
-  if (state.annualCategoryFilter) {
+  if (state.breakdownDimension === "category" && state.annualCategoryFilter) {
     state.annualExpandedCategories.add(state.annualCategoryFilter);
   }
   renderAnnualBreakdown(transactions);
@@ -766,10 +865,21 @@ function transactionRowOptions(transaction) {
 function currentTransactionDialogFilters() {
   return {
     description: elements.transactionSearch.value.trim(),
+    category: state.transactionDialogFilters.category || "",
+    tag: state.transactionDialogFilters.tag || "",
+    accountName: state.transactionDialogFilters.accountName || "",
+    provider: state.transactionDialogFilters.provider || "",
+    subcategory: state.transactionDialogFilters.subcategory || "",
+  };
+}
+
+function transactionFilterDraft() {
+  return {
     category: elements.transactionCategoryFilter.value,
+    subcategory: elements.transactionSubcategoryFilter.value,
+    tag: elements.transactionTagFilter.value,
     accountName: elements.transactionAccountFilter.value,
     provider: elements.transactionProviderFilter.value,
-    subcategory: elements.transactionSubcategoryFilter.value,
   };
 }
 
@@ -795,8 +905,17 @@ function configureTransactionFilters(transactions, filters) {
     .sort((left, right) => left.localeCompare(right));
   const providers = [...new Set(transactions.map((transaction) => transaction.provider))]
     .sort((left, right) => left.localeCompare(right));
-  const subcategories = [...new Set(transactions.map((transaction) => transaction.subcategory).filter(Boolean))]
-    .sort((left, right) => left.localeCompare(right));
+  const tagsByName = new Map();
+  for (const transaction of transactions) {
+    for (const tag of transactionTags(transaction)) {
+      const normalized = tag.toLocaleLowerCase();
+      if (!tagsByName.has(normalized)) tagsByName.set(normalized, tag);
+    }
+  }
+  const tags = [...tagsByName.values()].sort((left, right) => left.localeCompare(right));
+  const selectedTag = tags.find(
+    (tag) => tag.toLocaleLowerCase() === String(filters.tag || "").toLocaleLowerCase(),
+  ) || "";
   populateTransactionFilter(
     elements.transactionCategoryFilter, categories, "All categories", filters.category,
   );
@@ -807,21 +926,102 @@ function configureTransactionFilters(transactions, filters) {
     elements.transactionProviderFilter, providers, "All providers", filters.provider,
   );
   populateTransactionFilter(
+    elements.transactionTagFilter, tags, "All tags", selectedTag,
+  );
+  populateTransactionSubcategoryFilter(filters.category, filters.subcategory);
+  state.transactionDialogFilters = {
+    description: filters.description || "",
+    category: elements.transactionCategoryFilter.value,
+    subcategory: elements.transactionSubcategoryFilter.value,
+    tag: elements.transactionTagFilter.value,
+    accountName: elements.transactionAccountFilter.value,
+    provider: elements.transactionProviderFilter.value,
+  };
+  renderActiveTransactionFilters();
+}
+
+function populateTransactionSubcategoryFilter(category, selectedValue = "") {
+  const candidates = category
+    ? state.transactionDialogTransactions.filter((transaction) => transaction.category === category)
+    : state.transactionDialogTransactions;
+  const subcategories = [...new Set(candidates.map((transaction) => transaction.subcategory).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+  populateTransactionFilter(
     elements.transactionSubcategoryFilter,
     subcategories,
     "All subcategories",
-    filters.subcategory,
+    selectedValue,
   );
-  if (transactions.some((transaction) => !transaction.subcategory)) {
+  if (candidates.some((transaction) => !transaction.subcategory)) {
     const option = document.createElement("option");
     option.value = UNCLASSIFIED_SUBCATEGORY;
     option.textContent = "Unclassified";
     elements.transactionSubcategoryFilter.append(option);
-    if (filters.subcategory === UNCLASSIFIED_SUBCATEGORY) {
+    if (selectedValue === UNCLASSIFIED_SUBCATEGORY) {
       elements.transactionSubcategoryFilter.value = UNCLASSIFIED_SUBCATEGORY;
     }
   }
-  state.transactionDialogFilters = currentTransactionDialogFilters();
+}
+
+function transactionFilterLabel(field, value) {
+  if (field === "subcategory" && value === UNCLASSIFIED_SUBCATEGORY) return "Unclassified";
+  return value;
+}
+
+function renderActiveTransactionFilters() {
+  const definitions = [
+    ["category", "Category"],
+    ["subcategory", "Subcategory"],
+    ["tag", "Tag"],
+    ["accountName", "Account"],
+    ["provider", "Provider"],
+  ];
+  const active = definitions.filter(([field]) => state.transactionDialogFilters[field]);
+  elements.transactionFilterCount.textContent = String(active.length);
+  elements.transactionFilterCount.hidden = active.length === 0;
+  elements.transactionFilterButton.classList.toggle("has-active-filters", active.length > 0);
+  elements.transactionActiveFilters.hidden = active.length === 0;
+  const chips = active.map(([field, label]) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "transaction-filter-chip";
+    const value = transactionFilterLabel(field, state.transactionDialogFilters[field]);
+    chip.textContent = `${label}: ${value} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
+    chip.addEventListener("click", () => {
+      state.transactionDialogFilters[field] = "";
+      if (field === "category") {
+        elements.transactionCategoryFilter.value = "";
+        populateTransactionSubcategoryFilter("", state.transactionDialogFilters.subcategory);
+      } else {
+        const select = {
+          subcategory: elements.transactionSubcategoryFilter,
+          tag: elements.transactionTagFilter,
+          accountName: elements.transactionAccountFilter,
+          provider: elements.transactionProviderFilter,
+        }[field];
+        if (select) select.value = "";
+      }
+      renderTransactionDialogTransactions();
+    });
+    return chip;
+  });
+  elements.transactionFilterChips.replaceChildren(...chips);
+}
+
+function syncTransactionFilterDraft() {
+  const filters = state.transactionDialogFilters;
+  elements.transactionCategoryFilter.value = filters.category || "";
+  populateTransactionSubcategoryFilter(filters.category || "", filters.subcategory || "");
+  elements.transactionTagFilter.value = filters.tag || "";
+  elements.transactionAccountFilter.value = filters.accountName || "";
+  elements.transactionProviderFilter.value = filters.provider || "";
+}
+
+function setTransactionFilterPopover(open, { restoreDraft = true } = {}) {
+  if (!open && restoreDraft) syncTransactionFilterDraft();
+  elements.transactionFilterPopover.hidden = !open;
+  elements.transactionFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function renderSubcategorySummary() {
@@ -849,7 +1049,7 @@ function renderSubcategorySummary() {
       button.type = "button";
       button.className = "subcategory-summary-button";
       button.classList.toggle(
-        "is-active", elements.transactionSubcategoryFilter.value === group.subcategory,
+        "is-active", state.transactionDialogFilters.subcategory === group.subcategory,
       );
       const label = document.createElement("span");
       label.textContent = group.subcategory === UNCLASSIFIED_SUBCATEGORY
@@ -859,8 +1059,9 @@ function renderSubcategorySummary() {
       amount.textContent = currency.format(group.total);
       button.append(label, amount);
       button.addEventListener("click", () => {
-        elements.transactionSubcategoryFilter.value =
-          elements.transactionSubcategoryFilter.value === group.subcategory ? "" : group.subcategory;
+        state.transactionDialogFilters.subcategory =
+          state.transactionDialogFilters.subcategory === group.subcategory ? "" : group.subcategory;
+        syncTransactionFilterDraft();
         renderTransactionDialogTransactions();
       });
       return button;
@@ -872,23 +1073,29 @@ function renderTransactionDialogTransactions() {
   const filters = currentTransactionDialogFilters();
   state.transactionDialogFilters = filters;
   const descriptionQuery = filters.description.toLocaleLowerCase();
-  const visibleTransactions = state.transactionDialogTransactions.filter((transaction) => (
-    (!descriptionQuery || transaction.description.toLocaleLowerCase().includes(descriptionQuery)) &&
-    (!filters.category || transaction.category === filters.category) &&
-    (!filters.accountName || transaction.accountName === filters.accountName) &&
-    (!filters.provider || transaction.provider === filters.provider) &&
-    (!filters.subcategory || (
-      filters.subcategory === UNCLASSIFIED_SUBCATEGORY
-        ? !transaction.subcategory
-        : transaction.subcategory === filters.subcategory
-    ))
-  ));
+  const visibleTransactions = transactionUi.sortTransactions(
+    state.transactionDialogTransactions.filter((transaction) => (
+      (!descriptionQuery || transaction.description.toLocaleLowerCase().includes(descriptionQuery)) &&
+      (!filters.category || transaction.category === filters.category) &&
+      (!filters.tag || transactionTags(transaction).some(
+        (tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase(),
+      )) &&
+      (!filters.accountName || transaction.accountName === filters.accountName) &&
+      (!filters.provider || transaction.provider === filters.provider) &&
+      (!filters.subcategory || (
+        filters.subcategory === UNCLASSIFIED_SUBCATEGORY
+          ? !transaction.subcategory
+          : transaction.subcategory === filters.subcategory
+      ))
+    )),
+    transactionDialogSort.value(),
+  );
   const total = state.transactionDialogTransactions.length;
   const filtered = Object.values(filters).some(Boolean);
   elements.dialogSubtitle.textContent = filtered
     ? `${visibleTransactions.length} of ${total} transactions`
     : `${total} ${total === 1 ? "transaction" : "transactions"}`;
-  elements.clearTransactionFilters.disabled = !filtered;
+  renderActiveTransactionFilters();
   renderSubcategorySummary();
   if (visibleTransactions.length === 0) {
     const empty = document.createElement("p");
@@ -907,13 +1114,14 @@ function renderTransactionDialogTransactions() {
 function openTransactionDialog(title, transactions, context, { preserveFilters = false } = {}) {
   const filters = preserveFilters
     ? state.transactionDialogFilters
-    : { description: "", category: "", accountName: "", provider: "", subcategory: "" };
+    : { description: "", category: "", tag: "", accountName: "", provider: "", subcategory: "" };
   state.transactionDialogContext = context;
   state.transactionDialogTransactions = [...transactions].sort(compareLatestFirst);
   elements.dialogEyebrow.textContent = selectedPeriodLabel();
   elements.dialogTitle.textContent = title;
   elements.internalTransferInfo.hidden = context.type !== "excluded";
   configureTransactionFilters(state.transactionDialogTransactions, filters);
+  setTransactionFilterPopover(false);
   renderTransactionDialogTransactions();
   elements.dialog.showModal();
 }
@@ -921,9 +1129,13 @@ function openTransactionDialog(title, transactions, context, { preserveFilters =
 function reopenTransactionDialog(context) {
   if (!context) return;
   let transactions;
-  if (context.type === "category") {
+  if (context.type === "category" || context.type === "tag") {
     transactions = transactionsForSelectedPeriod().filter(
-      (transaction) => transaction.category === context.category,
+      (transaction) => {
+        if (context.type === "category") return transaction.category === context.key;
+        const tags = transactionTags(transaction);
+        return context.key === UNTAGGED ? tags.length === 0 : tags.includes(context.key);
+      },
     );
   } else if (context.type === "excluded") {
     transactions = excludedInternalTransfersForSelectedPeriod();
@@ -1083,6 +1295,17 @@ function renderDashboard() {
   const excludedInternalTransfers = excludedInternalTransfersForSelectedPeriod();
   const annual = state.viewMode === "annual";
   elements.monthControl.hidden = annual;
+  elements.monthlyBreakdownTabs.hidden = annual;
+  elements.breakdownDimensionButtons.forEach((button) => {
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.breakdownDimension === state.breakdownDimension),
+    );
+  });
+  elements.categoriesHeading.textContent = `Spending by ${state.breakdownDimension}`;
+  elements.annualBreakdownDescription.textContent = state.breakdownDimension === "category"
+    ? "Expand a category to compare exact subcategory totals across months."
+    : "Compare exact tag totals across months. Transactions with multiple tags appear in each tag total.";
   elements.overviewEyebrow.textContent = annual ? "Annual overview" : "Monthly overview";
   elements.summaryGrid.setAttribute("aria-label", annual ? "Annual summary" : "Monthly summary");
   elements.incomeSummaryNote.textContent = annual ? "Income received this year" : "Income received this month";
@@ -1154,6 +1377,17 @@ elements.viewModeSelect.addEventListener("change", (event) => {
   saveDashboardView();
   renderDashboard();
 });
+elements.breakdownDimensionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const dimension = button.dataset.breakdownDimension;
+    if (!["category", "tag"].includes(dimension) || dimension === state.breakdownDimension) return;
+    state.breakdownDimension = dimension;
+    state.annualCategoryFilter = "";
+    state.annualSubcategoryFilter = "";
+    saveDashboardView();
+    renderDashboard();
+  });
+});
 elements.yearSelect.addEventListener("change", (event) => {
   state.selectedYear = event.target.value;
   saveDashboardView();
@@ -1185,18 +1419,60 @@ elements.viewExcludedButton.addEventListener("click", openExcludedInternalTransf
 elements.viewAnnualExcludedButton.addEventListener("click", openExcludedInternalTransfers);
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
-elements.transactionCategoryFilter.addEventListener("change", renderTransactionDialogTransactions);
-elements.transactionAccountFilter.addEventListener("change", renderTransactionDialogTransactions);
-elements.transactionProviderFilter.addEventListener("change", renderTransactionDialogTransactions);
-elements.transactionSubcategoryFilter.addEventListener("change", renderTransactionDialogTransactions);
-elements.clearTransactionFilters.addEventListener("click", () => {
-  elements.transactionSearch.value = "";
+elements.transactionFilterButton.addEventListener("click", () => {
+  const open = elements.transactionFilterButton.getAttribute("aria-expanded") !== "true";
+  setTransactionFilterPopover(open);
+  if (open) elements.transactionCategoryFilter.focus();
+});
+elements.transactionCategoryFilter.addEventListener("change", () => {
+  populateTransactionSubcategoryFilter(
+    elements.transactionCategoryFilter.value,
+    elements.transactionSubcategoryFilter.value,
+  );
+});
+elements.resetTransactionFilters.addEventListener("click", () => {
   elements.transactionCategoryFilter.value = "";
+  populateTransactionSubcategoryFilter("");
   elements.transactionAccountFilter.value = "";
   elements.transactionProviderFilter.value = "";
-  elements.transactionSubcategoryFilter.value = "";
+  elements.transactionTagFilter.value = "";
+  elements.transactionCategoryFilter.focus();
+});
+elements.applyTransactionFilters.addEventListener("click", () => {
+  state.transactionDialogFilters = {
+    ...state.transactionDialogFilters,
+    ...transactionFilterDraft(),
+  };
+  setTransactionFilterPopover(false, { restoreDraft: false });
   renderTransactionDialogTransactions();
-  elements.transactionSearch.focus();
+  elements.transactionFilterButton.focus();
+});
+elements.clearTransactionFilters.addEventListener("click", () => {
+  state.transactionDialogFilters = {
+    ...state.transactionDialogFilters,
+    category: "",
+    subcategory: "",
+    tag: "",
+    accountName: "",
+    provider: "",
+  };
+  syncTransactionFilterDraft();
+  renderTransactionDialogTransactions();
+  elements.transactionFilterButton.focus();
+});
+document.addEventListener("click", (event) => {
+  const open = elements.transactionFilterButton.getAttribute("aria-expanded") === "true";
+  if (open && !event.target.closest(".transaction-filter-menu")) {
+    setTransactionFilterPopover(false);
+  }
+});
+elements.dialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.transactionFilterButton.getAttribute("aria-expanded") === "true") {
+    event.preventDefault();
+    event.stopPropagation();
+    setTransactionFilterPopover(false);
+    elements.transactionFilterButton.focus();
+  }
 });
 elements.dialog.addEventListener("click", (event) => {
   if (event.target === elements.dialog) {

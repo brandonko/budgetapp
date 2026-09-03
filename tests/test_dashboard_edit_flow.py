@@ -8,9 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DashboardEditFlowTests(unittest.TestCase):
-    def test_dashboard_and_import_review_forms_include_subcategory_and_notes(self) -> None:
+    def test_transaction_forms_include_subcategory_notes_and_tags(self) -> None:
         index_html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         upload_html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
+        settings_html = (ROOT / "app" / "settings.html").read_text(encoding="utf-8")
+        shared_javascript = (ROOT / "app" / "transaction-ui.js").read_text(encoding="utf-8")
         self.assertIn('textarea id="field-notes" name="notes"', index_html)
         self.assertIn('textarea name="notes"', upload_html)
         self.assertIn('input id="field-refunded" name="refunded"', index_html)
@@ -19,6 +21,25 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('select name="internalTransferTreatment"', upload_html)
         self.assertIn('name="subcategory"', index_html)
         self.assertIn('name="subcategory"', upload_html)
+        self.assertIn('input id="field-tags" name="tags"', index_html)
+        self.assertIn('input name="tags"', upload_html)
+        self.assertIn('input name="tags"', settings_html)
+        self.assertIn('"tags",', shared_javascript)
+        self.assertIn('badge.className = "transaction-tag"', shared_javascript)
+
+    def test_dashboard_supports_category_and_tag_breakdowns(self) -> None:
+        html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
+        css = (ROOT / "app" / "styles.css").read_text(encoding="utf-8")
+        self.assertEqual(html.count('data-breakdown-dimension="category"'), 2)
+        self.assertEqual(html.count('data-breakdown-dimension="tag"'), 2)
+        self.assertIn('breakdownDimension: "category"', javascript)
+        self.assertIn('function transactionTags(transaction)', javascript)
+        self.assertIn('function groupByBreakdownDimension(transactions)', javascript)
+        self.assertIn('tag.toLocaleLowerCase() === normalizedKey', javascript)
+        self.assertIn('`Monthly spending by ${state.breakdownDimension}`', javascript)
+        self.assertIn('categoryHeader.textContent = categoryMode ? "Category" : "Tag"', javascript)
+        self.assertIn('.breakdown-tabs button[aria-pressed="true"]', css)
 
     def test_dashboard_editor_reopens_its_originating_transaction_list(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
@@ -37,6 +58,8 @@ class DashboardEditFlowTests(unittest.TestCase):
     def test_dashboard_and_import_use_the_shared_transaction_list_component(self) -> None:
         index_html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         upload_html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
+        settings_html = (ROOT / "app" / "settings.html").read_text(encoding="utf-8")
+        classifications_html = (ROOT / "app" / "classifications.html").read_text(encoding="utf-8")
         dashboard_javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
         import_javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
         shared_javascript = (ROOT / "app" / "transaction-ui.js").read_text(encoding="utf-8")
@@ -45,6 +68,13 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("transactionUi.renderTransactionList", dashboard_javascript)
         self.assertIn("transactionUi.renderTransactionList", import_javascript)
         self.assertIn("function renderTransactionList", shared_javascript)
+        self.assertIn("function sortTransactions", shared_javascript)
+        self.assertIn("function createTransactionSortControls", shared_javascript)
+        self.assertIn('id="transaction-dialog-sort"', index_html)
+        self.assertIn('id="import-review-sort"', upload_html)
+        self.assertIn('id="import-history-sort"', settings_html)
+        self.assertIn('id="unclassified-sort"', classifications_html)
+        self.assertIn('id="classification-preview-sort"', classifications_html)
         self.assertNotIn("Remove from import", upload_html)
 
     def test_transaction_modal_has_search_and_field_filters_without_amount_total(self) -> None:
@@ -56,6 +86,12 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('id="transaction-account-filter"', html)
         self.assertIn('id="transaction-provider-filter"', html)
         self.assertIn('id="transaction-subcategory-filter"', html)
+        self.assertIn('id="transaction-tag-filter"', html)
+        self.assertIn('id="transaction-filter-button"', html)
+        self.assertIn('id="transaction-filter-popover"', html)
+        self.assertIn('id="transaction-filter-chips"', html)
+        self.assertIn('id="reset-transaction-filters"', html)
+        self.assertIn('id="apply-transaction-filters"', html)
         self.assertIn('id="subcategory-summary"', html)
         self.assertIn(
             "transaction.description.toLocaleLowerCase().includes(descriptionQuery)",
@@ -65,12 +101,17 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("transaction.accountName === filters.accountName", javascript)
         self.assertIn("transaction.provider === filters.provider", javascript)
         self.assertIn("transaction.subcategory === filters.subcategory", javascript)
+        self.assertIn("tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()", javascript)
         self.assertIn("preserveFilters: true", javascript)
+        self.assertIn("function renderActiveTransactionFilters()", javascript)
+        self.assertIn("function setTransactionFilterPopover", javascript)
+        self.assertIn("populateTransactionSubcategoryFilter", javascript)
         self.assertNotIn("currency.format(total)}`", javascript)
-        filter_style = css.split(".transaction-filter-bar {", 1)[1].split("}", 1)[0]
-        self.assertIn("repeat(4, minmax(110px, 1fr))", filter_style)
+        toolbar_style = css.split(".transaction-toolbar {", 1)[1].split("}", 1)[0]
+        self.assertIn("minmax(220px, 1fr) auto auto", toolbar_style)
+        filter_pair_style = css.split(".transaction-filter-pair {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: 1fr 1fr", filter_pair_style)
         self.assertIn("@media (max-width: 860px)", css)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
         subcategory_style = css.split(".subcategory-summary {", 1)[1].split("}", 1)[0]
         self.assertIn("flex: 0 0 auto", subcategory_style)
         self.assertIn("overflow-y: hidden", subcategory_style)
@@ -138,8 +179,11 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('id="unclassified-dialog"', html)
         self.assertIn('id="unclassified-search"', html)
         self.assertIn('id="unclassified-category-filter"', html)
+        self.assertIn('id="unclassified-subcategory-filter"', html)
+        self.assertIn('id="unclassified-tag-filter"', html)
         self.assertIn('id="unclassified-account-filter"', html)
         self.assertIn('id="unclassified-provider-filter"', html)
+        self.assertIn('id="unclassified-filter-popover"', html)
         self.assertIn("openUnclassifiedDialog", javascript)
         self.assertIn('fetch("/api/transactions"', javascript)
         self.assertIn(
@@ -148,6 +192,9 @@ class DashboardEditFlowTests(unittest.TestCase):
         )
         self.assertIn("closeUnclassifiedDialog", javascript)
         self.assertIn("event.target === elements.unclassifiedDialog", javascript)
+        self.assertIn("transactionUi.renderTransactionList", javascript)
+        self.assertIn("needsClassification: !transactionUi.isInternalTransfer(transaction)", javascript)
+        self.assertIn("showEdit: false", javascript)
 
     def test_annual_view_drills_into_subcategories_and_has_exact_dollar_table(self) -> None:
         html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")

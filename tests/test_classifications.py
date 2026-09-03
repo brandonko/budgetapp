@@ -22,6 +22,7 @@ from server import (  # noqa: E402
     classifications_path,
     initialize_csv_if_missing,
     normalize_classifications,
+    normalize_transaction,
     read_transaction_state,
     write_transactions_atomic,
 )
@@ -43,6 +44,25 @@ def transaction(**overrides):
 
 
 class ClassificationEngineTests(unittest.TestCase):
+    def test_transaction_tags_are_trimmed_and_deduplicated_case_insensitively(self) -> None:
+        normalized = normalize_transaction(
+            transaction(tags=" Travel, travel,  Work   Trip ,"), "transaction"
+        )
+
+        self.assertEqual(normalized["tags"], "Travel, Work Trip")
+
+    def test_transaction_tags_round_trip_through_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path = Path(directory) / "transactions.csv"
+            normalized = normalize_transaction(
+                transaction(tags="Travel, Work Trip"), "transaction"
+            )
+
+            write_transactions_atomic(csv_path, [normalized])
+            [saved], _revision = read_transaction_state(csv_path)
+
+        self.assertEqual(saved["tags"], "Travel, Work Trip")
+
     def test_matchers_treat_repeated_source_whitespace_as_one_space(self) -> None:
         document = normalize_classifications(
             {

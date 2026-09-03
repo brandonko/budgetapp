@@ -55,9 +55,9 @@
               written to <code>data/transactions.csv</code> until you select transactions and confirm.
             </p>
             <p>
-              Potential duplicates appear unchecked in the review. Duplicate matching uses date,
-              amount, and occurrence count, so multiple identical transactions from the same day
-              are still preserved when they represent separate occurrences.
+              Potential duplicates and $0 transactions appear unchecked in the review. Duplicate
+              matching uses date, amount, and occurrence count, so multiple identical transactions
+              from the same day are still preserved when they represent separate occurrences.
             </p>
             <p>
               Transactions that match no saved classification rule are highlighted with a
@@ -494,6 +494,59 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-toolbar">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="import-review-search" type="search" autocomplete="off"
+              placeholder="Search descriptions" />
+          </label>
+          <div class="transaction-filter-menu">
+            <button class="transaction-filter-button" id="import-review-filter-button" type="button"
+              aria-expanded="false" aria-haspopup="true" aria-controls="import-review-filter-popover">
+              Filters <span id="import-review-filter-count" hidden></span>
+            </button>
+            <div class="transaction-filter-popover" id="import-review-filter-popover"
+              role="group" aria-label="Imported transaction filters" hidden>
+              <div class="transaction-filter-popover-heading">
+                <strong>Filter transactions</strong>
+                <span>Choose one or more filters.</span>
+              </div>
+              <fieldset>
+                <legend>Classification</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Category</span><select id="import-review-category-filter"><option value="">All categories</option></select></label>
+                  <label><span>Subcategory</span><select id="import-review-subcategory-filter"><option value="">All subcategories</option></select></label>
+                </div>
+                <label class="transaction-filter-wide"><span>Tag</span><select id="import-review-tag-filter"><option value="">All tags</option></select></label>
+              </fieldset>
+              <fieldset>
+                <legend>Account</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Account name</span><select id="import-review-account-filter"><option value="">All accounts</option></select></label>
+                  <label><span>Provider</span><select id="import-review-provider-filter"><option value="">All providers</option></select></label>
+                </div>
+              </fieldset>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-import-review-filters" type="button">Reset</button>
+                <button class="primary-button" id="apply-import-review-filters" type="button">Apply</button>
+              </div>
+            </div>
+          </div>
+          <div id="import-review-sort"></div>
+        </div>
+        <div class="transaction-active-filters" id="import-review-active-filters" hidden>
+          <div class="transaction-filter-chips" id="import-review-filter-chips"></div>
+          <button class="text-button" id="clear-import-review-field-filters" type="button">Clear all</button>
+        </div>
+        <div class="import-review-filters" role="group" aria-label="Visible transaction types">
+          <span>Show</span>
+          <button class="import-review-filter" type="button" data-review-filter="duplicate"
+            aria-pressed="false">Duplicate</button>
+          <button class="import-review-filter" type="button" data-review-filter="unmatched"
+            aria-pressed="true">No rule matched</button>
+          <button class="import-review-filter" type="button" data-review-filter="new"
+            aria-pressed="true">New</button>
+        </div>
         <p class="upload-error import-review-error" id="import-review-error" hidden></p>
         <div class="transaction-list" id="import-review-list"></div>
         <footer class="import-review-actions">
@@ -558,6 +611,11 @@
             <label class="form-field">
               <span>Provider</span>
               <input name="provider" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Tags</span>
+              <input name="tags" type="text" autocomplete="off" />
+              <small>Separate multiple tags with commas.</small>
             </label>
             <label class="form-field form-field--wide">
               <span>Notes</span>

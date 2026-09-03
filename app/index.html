@@ -115,10 +115,16 @@
             <p class="eyebrow">Annual trends</p>
             <h2 id="annual-insights-heading">A year at a glance</h2>
           </div>
-          <button class="excluded-note excluded-button" id="view-annual-excluded-button" type="button" hidden>
-            <span aria-hidden="true">✓</span>
-            <span id="annual-excluded-button-label">View 0 excluded internal transfer transactions</span>
-          </button>
+          <div class="annual-heading-actions">
+            <div class="breakdown-tabs" role="group" aria-label="Annual spending breakdown">
+              <button type="button" data-breakdown-dimension="category" aria-pressed="true">By category</button>
+              <button type="button" data-breakdown-dimension="tag" aria-pressed="false">By tag</button>
+            </div>
+            <button class="excluded-note excluded-button" id="view-annual-excluded-button" type="button" hidden>
+              <span aria-hidden="true">✓</span>
+              <span id="annual-excluded-button-label">View 0 excluded internal transfer transactions</span>
+            </button>
+          </div>
         </div>
 
         <article class="chart-card" aria-labelledby="spending-chart-title">
@@ -137,7 +143,7 @@
           <div class="chart-card-heading">
             <div>
               <h3 id="annual-breakdown-title">Annual spending breakdown</h3>
-              <p>Expand a category to compare exact subcategory totals across months.</p>
+              <p id="annual-breakdown-description">Expand a category to compare exact subcategory totals across months.</p>
             </div>
           </div>
           <div class="annual-breakdown-scroll">
@@ -165,10 +171,16 @@
             <p class="eyebrow">Breakdown</p>
             <h2 id="categories-heading">Spending by category</h2>
           </div>
-          <button class="excluded-note excluded-button" id="view-excluded-button" type="button" hidden>
-            <span aria-hidden="true">✓</span>
-            <span id="excluded-button-label">View excluded internal transfer transactions</span>
-          </button>
+          <div class="breakdown-heading-actions">
+            <div class="breakdown-tabs" id="monthly-breakdown-tabs" role="group" aria-label="Monthly spending breakdown">
+              <button type="button" data-breakdown-dimension="category" aria-pressed="true">By category</button>
+              <button type="button" data-breakdown-dimension="tag" aria-pressed="false">By tag</button>
+            </div>
+            <button class="excluded-note excluded-button" id="view-excluded-button" type="button" hidden>
+              <span aria-hidden="true">✓</span>
+              <span id="excluded-button-label">View excluded internal transfer transactions</span>
+            </button>
+          </div>
         </div>
         <div class="category-grid" id="category-grid" aria-live="polite"></div>
       </section>
@@ -204,43 +216,81 @@
             <strong>How automatic matching works</strong>
             <p>
               Ledger pairs transactions from different accounts when at least one is categorized
-              as Transfer, the other is Transfer or Income, their nonzero amounts are exact
-              opposites, and their dates are within five days. Closest matches are paired once.
+              as Transfer or its description looks like a transfer or account payment, their
+              nonzero amounts are exact opposites, and their dates are within five days. Closest
+              matches are paired once.
               A transaction’s Budget treatment can always exclude it manually or force it to count normally.
             </p>
           </div>
         </aside>
-        <div class="transaction-filter-bar" aria-label="Filter transactions">
+        <div class="transaction-toolbar">
           <label class="transaction-search-field">
             <span>Description</span>
             <input id="transaction-search" type="search" autocomplete="off"
               placeholder="Search descriptions" />
           </label>
-          <label>
-            <span>Category</span>
-            <select id="transaction-category-filter">
-              <option value="">All categories</option>
-            </select>
-          </label>
-          <label>
-            <span>Account name</span>
-            <select id="transaction-account-filter">
-              <option value="">All accounts</option>
-            </select>
-          </label>
-          <label>
-            <span>Provider</span>
-            <select id="transaction-provider-filter">
-              <option value="">All providers</option>
-            </select>
-          </label>
-          <label>
-            <span>Subcategory</span>
-            <select id="transaction-subcategory-filter">
-              <option value="">All subcategories</option>
-            </select>
-          </label>
-          <button class="text-button" id="clear-transaction-filters" type="button">Clear filters</button>
+          <div class="transaction-filter-menu">
+            <button class="transaction-filter-button" id="transaction-filter-button" type="button"
+              aria-expanded="false" aria-haspopup="true" aria-controls="transaction-filter-popover">
+              Filters <span id="transaction-filter-count" hidden></span>
+            </button>
+            <div class="transaction-filter-popover" id="transaction-filter-popover"
+              role="group" aria-label="Transaction filters" hidden>
+              <div class="transaction-filter-popover-heading">
+                <strong>Filter transactions</strong>
+                <span>Choose one or more filters.</span>
+              </div>
+              <fieldset>
+                <legend>Classification</legend>
+                <div class="transaction-filter-pair">
+                  <label>
+                    <span>Category</span>
+                    <select id="transaction-category-filter">
+                      <option value="">All categories</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Subcategory</span>
+                    <select id="transaction-subcategory-filter">
+                      <option value="">All subcategories</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="transaction-filter-wide">
+                  <span>Tag</span>
+                  <select id="transaction-tag-filter">
+                    <option value="">All tags</option>
+                  </select>
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Account</legend>
+                <div class="transaction-filter-pair">
+                  <label>
+                    <span>Account name</span>
+                    <select id="transaction-account-filter">
+                      <option value="">All accounts</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Provider</span>
+                    <select id="transaction-provider-filter">
+                      <option value="">All providers</option>
+                    </select>
+                  </label>
+                </div>
+              </fieldset>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-transaction-filters" type="button">Reset</button>
+                <button class="primary-button" id="apply-transaction-filters" type="button">Apply</button>
+              </div>
+            </div>
+          </div>
+          <div id="transaction-dialog-sort"></div>
+        </div>
+        <div class="transaction-active-filters" id="transaction-active-filters" hidden>
+          <div class="transaction-filter-chips" id="transaction-filter-chips"></div>
+          <button class="text-button" id="clear-transaction-filters" type="button">Clear all</button>
         </div>
         <div class="subcategory-summary" id="subcategory-summary" hidden></div>
         <div class="transaction-list" id="transaction-list"></div>
@@ -299,6 +349,11 @@
             <label class="form-field">
               <span>Provider</span>
               <input id="field-provider" name="provider" type="text" list="provider-options" autocomplete="off" required />
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Tags</span>
+              <input id="field-tags" name="tags" type="text" autocomplete="off" />
+              <small>Separate multiple tags with commas.</small>
             </label>
             <label class="form-field form-field--wide">
               <span>Notes</span>

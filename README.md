@@ -8,12 +8,13 @@ details.
 The dashboard includes:
 
 - Monthly and annual spending, income, and net summaries
+- Monthly and annual spending breakdowns switchable between categories and custom tags
 - Annual category-stacked spending with subcategory drill-down and monthly net charts
-- Top-level category breakdowns with dollar-based subcategory summaries and latest-first transaction lists
+- Top-level category breakdowns with dollar-based subcategory summaries and sortable transaction lists
 - Monthly/annual view selection with independent year and month controls
 - Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, classifications, and settings
-- Manual transaction creation, editing, refund flags, permanent deletion, and freeform notes
+- Manual transaction creation, editing, multi-tag labeling, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
@@ -121,6 +122,9 @@ before classification matching and storage. New rows are selected by default; du
 highlighted, and deselected. Rows that match no classification rule use a soft
 warning highlight and a **No rule matched** badge. Every field can be corrected,
 and duplicates can be deliberately selected before confirming the import.
+The review modal uses the same searchable, filterable, and sortable transaction
+toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
+toggles sit immediately below that toolbar.
 
 Before duplicate detection and review, Ledger applies classifications saved
 on the dedicated **Classifications** page. If no rule matches, the importer-provided
@@ -146,8 +150,10 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. Its ten user-editable fields can be changed, including the optional
-subcategory, freeform notes, and flags. Marking a transaction as **Refunded** keeps its original amount
+transaction. Transaction-list dialogs can be sorted by date, description, or
+absolute cost in either direction. Every user-editable field can be changed, including the optional
+subcategory, comma-separated tags, freeform notes, and flags. A transaction can
+have multiple tags. Marking a transaction as **Refunded** keeps its original amount
 for duplicate detection while treating it as $0 in dashboard totals. The import
 timestamp is system-managed. After editing from a transaction list, Ledger returns to the refreshed
 list instead of closing the workflow. The same form supports
@@ -165,7 +171,7 @@ Ledger stores generated backups under `data/backups/` using timestamped names
 such as `transactions_20260902_114500_123456.csv`. Any regular CSV placed directly
 in that folder also appears. The list is ordered by last-modified date, newest
 first, and shows the transaction count in each valid backup. Compatible older
-seven- through ten-column Ledger CSVs are supported and receive any
+seven- through eleven-column Ledger CSVs are supported and receive any
 missing optional fields when restored.
 
 Individual backups can be renamed to any local CSV filename or permanently
@@ -236,9 +242,11 @@ button, or clicking the backdrop writes nothing. Rows that match no rule keep
 their existing category and subcategory.
 
 Use **Review unclassified** to open an all-dates modal containing every row with
-a blank subcategory. Search descriptions or filter by category, account, and
-provider to identify patterns for new rules. Closing the modal preserves the
-current Classification page and any draft being edited.
+a blank subcategory. Shared transaction rows identify excluded internal
+transfers and mark other rows **No rule matched**, while retaining refund and
+custom-tag badges. Search, filter, and sort with the same compact toolbar used
+by dashboard transaction lists. Closing the modal preserves the current
+Classification page and any draft being edited.
 
 ## Master CSV schema
 
@@ -249,12 +257,14 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,subcategory,accountName,accountType,provider,notes,flags,createdAt
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,flags,createdAt
 ```
 
-Ledger automatically and atomically adds missing optional `subcategory`, `notes`, `flags`, and
+Ledger automatically and atomically adds missing optional `subcategory`, `notes`, `tags`, `flags`, and
 `createdAt` columns when it opens an older database. Notes may contain commas or multiple
-lines. Flags are normalized, comma-separated identifiers; the first supported
+lines. Tags are optional comma-separated labels; surrounding whitespace is
+trimmed and repeated labels are removed case-insensitively. Flags are normalized,
+comma-separated identifiers; the first supported
 flag is `refunded`. `createdAt` is an immutable UTC ISO 8601 timestamp assigned
 to imported rows; it remains blank for manual and legacy rows.
 A snapshot of the original CSV is placed in `data/backups/` before schema migration.
@@ -272,21 +282,32 @@ and a spending deficit is red.
   as a positive number even though those values remain negative in the CSV.
 - **Net total** is income minus spending. Positive values use a light-green
   background; negative values use a light-red background.
-- Transaction lists are ordered latest first and can be filtered by description,
-  category, subcategory, account name, and provider.
+- Transaction lists default to latest-first, can be filtered by description,
+  category, subcategory, tag, account name, and provider, and can be sorted by date,
+  description, or absolute cost in ascending or descending order.
+- Transaction dialogs keep description search and sorting visible. Less-frequent
+  filters live in a compact popover, with category beside its dependent
+  subcategory and account name beside provider. Active filters appear as
+  individually removable chips. The tag filter lists tags present in the
+  transactions available to the current dialog.
 - Transactions flagged `refunded` remain visible but contribute $0 to category,
   spending, income, net, and annual-chart totals.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
-- **Monthly** view filters the dashboard by a selected month and year.
-- **Annual** view summarizes the selected year. Its spending chart stacks each
-  month's spending by category and shows annual dollar totals in the legend.
+- **Monthly** view filters the dashboard by a selected month and year. Its
+  breakdown can group spending by top-level category or by tag.
+- **Annual** view summarizes the selected year. Its spending chart and exact-dollar
+  table can group each month's spending by category or by tag and show annual
+  dollar totals in the legend.
   Selecting a category redraws the monthly stacks by subcategory; selecting a
   subcategory isolates it, and the breadcrumb returns to higher levels. An
   expandable dollar table compares every category and subcategory across all
   twelve months plus an annual total. Its net chart shows monthly surpluses in
   green and monthly deficits in red.
-- Ledger remembers the selected view, year, month, and annual category filter in
+- Transactions without tags appear as **Untagged**. A transaction carrying
+  multiple tags contributes its full amount to each tag, so tag totals may overlap
+  and should not be added together as a grand total.
+- Ledger remembers the selected view, year, month, breakdown dimension, and annual category filter in
   the current browser, including annual subcategory drill-down. Returning from
   Import data or Settings restores that reporting context when it is still
   available in the transaction data.
@@ -296,10 +317,11 @@ and a spending deficit is red.
 Ledger does not exclude every transaction categorized as `Transfer`. In the
 default **Automatic** treatment, it excludes only matched transactions from
 different accounts with equal and opposite nonzero amounts
-that post within five days. At least one side must be categorized as `Transfer`;
-the other may be `Transfer` or `Income` because source exports sometimes label
-the receiving side as income. This also handles credit-balance refunds that flow
-from a card back to a bank account. Matching is one-to-one and runs across the
+that post within five days. At least one side must be categorized as `Transfer`
+or have a description that looks like a transfer or account payment. The other
+side may retain any source category, because exports sometimes label bill
+payments as income or business services. This also handles credit-balance refunds
+that flow from a card back to a bank account. Matching is one-to-one and runs across the
 complete database, including month boundaries. Unmatched transfers, such as
 Venmo or Zelle payments, remain visible and affect the budget normally. Every
 transaction editor can instead mark a row as an internal transfer or force it

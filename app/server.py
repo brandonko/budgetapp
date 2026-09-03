@@ -52,9 +52,11 @@ COLUMNS = (
     "accountType",
     "provider",
     "notes",
+    "tags",
     "flags",
     "createdAt",
 )
+PRE_TAG_COLUMNS = tuple(column for column in COLUMNS if column != "tags")
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
 LEGACY_COLUMNS = (
     "date", "description", "amount", "category", "accountName", "accountType", "provider"
@@ -69,6 +71,7 @@ CREATED_AT_COLUMNS = NOTES_COLUMNS + ("createdAt",)
 PRE_SUBCATEGORY_COLUMNS = NOTES_COLUMNS + ("flags", "createdAt")
 COMPATIBLE_COLUMNS = (
     COLUMNS,
+    PRE_TAG_COLUMNS,
     PRE_SUBCATEGORY_COLUMNS,
     SUBCATEGORY_NOTES_COLUMNS,
     FLAGS_COLUMNS,
@@ -79,7 +82,7 @@ COMPATIBLE_COLUMNS = (
 REQUIRED_TEXT_COLUMNS = tuple(
     column
     for column in COLUMNS
-    if column not in {"date", "amount", "subcategory", "notes", "flags", "createdAt"}
+    if column not in {"date", "amount", "subcategory", "notes", "tags", "flags", "createdAt"}
 )
 IMPORT_TEXT_COLUMNS = (
     "description", "category", "subcategory", "accountName", "accountType", "provider"
@@ -89,6 +92,12 @@ CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_IMPORT_REQUEST_BYTES = 50_000_000
 BILL_PAYMENT_WINDOW_DAYS = 5
+INTERNAL_TRANSFER_DESCRIPTION_PATTERN = re.compile(
+    r"\b(?:transfer|payment|paymt|pmt|autopay)\b|"
+    r"\b(?:to|from)\s+(?:chk|checking|sav|savings|acct|account)\b|"
+    r"\bcredit\s+bal(?:ance)?\b",
+    re.IGNORECASE,
+)
 TRANSACTION_PATH = re.compile(r"^/api/transactions/(\d+)$")
 BACKUP_RESTORE_PATH = re.compile(
     r"^/api/backups/([^/]+)/restore$"
@@ -240,6 +249,25 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(notes, str):
         raise CsvDataError(f"{location}.notes must be text")
     transaction["notes"] = notes.strip()
+    raw_tags = raw.get("tags", "")
+    if not isinstance(raw_tags, str):
+        raise CsvDataError(f"{location}.tags must be comma-separated text")
+    tags: list[str] = []
+    seen_tags: set[str] = set()
+    for raw_tag in raw_tags.split(","):
+        tag = collapse_whitespace(raw_tag)
+        if not tag:
+            continue
+        if len(tag) > 100:
+            raise CsvDataError(f"{location}.tags entries cannot exceed 100 characters")
+        normalized_tag = tag.casefold()
+        if normalized_tag in seen_tags:
+            continue
+        tags.append(tag)
+        seen_tags.add(normalized_tag)
+    if len(tags) > 50:
+        raise CsvDataError(f"{location}.tags cannot contain more than 50 entries")
+    transaction["tags"] = ", ".join(tags)
     raw_flags = raw.get("flags", "")
     if not isinstance(raw_flags, str):
         raise CsvDataError(f"{location}.flags must be comma-separated text")
@@ -680,6 +708,7 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
                     row,
                     subcategory=row.get("subcategory", ""),
                     notes=row.get("notes", ""),
+                    tags=row.get("tags", ""),
                     flags=row.get("flags", ""),
                     createdAt=row.get("createdAt", ""),
                 ),
@@ -784,6 +813,7 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
                 row,
                 subcategory=row.get("subcategory", ""),
                 notes=row.get("notes", ""),
+                tags=row.get("tags", ""),
                 flags=row.get("flags", ""),
                 createdAt=row.get("createdAt", ""),
             ),
@@ -892,6 +922,30 @@ def preview_imported_transactions(
                 ),
             )
         )
+    candidate_transactions = list(existing)
+    candidate_indexes: dict[int, int] = {}
+    for transaction in preview:
+        if transaction["_isDuplicate"]:
+            continue
+        candidate_indexes[transaction["_stagedId"]] = len(candidate_transactions)
+        candidate_transactions.append(transaction)
+    automatic_transfer_ids = find_internal_transfer_ids(candidate_transactions)
+    for transaction in preview:
+        flags = {
+            flag.strip().casefold()
+            for flag in str(transaction.get("flags", "")).split(",")
+            if flag.strip()
+        }
+        manually_excluded = "internal-transfer" in flags
+        candidate_index = candidate_indexes.get(transaction["_stagedId"])
+        automatically_excluded = (
+            candidate_index is not None and candidate_index in automatic_transfer_ids
+        )
+        transaction["_isBillPayment"] = automatically_excluded
+        transaction["_isInternalTransfer"] = manually_excluded or automatically_excluded
+        transaction["_internalTransferSource"] = (
+            "manual" if manually_excluded else "automatic" if automatically_excluded else ""
+        )
     preview.sort(
         key=lambda transaction: (
             transaction["date"],
@@ -905,7 +959,7 @@ def preview_imported_transactions(
 
 def find_internal_transfer_ids(transactions: list[dict[str, Any]]) -> set[int]:
     """Reconcile one-to-one movements between distinct owned accounts."""
-    entries: list[tuple[int, date, Decimal, str, tuple[str, str, str]]] = []
+    entries: list[tuple[int, date, Decimal, bool, tuple[str, str, str]]] = []
     for index, transaction in enumerate(transactions):
         flags = {
             flag.strip().casefold()
@@ -915,8 +969,11 @@ def find_internal_transfer_ids(transactions: list[dict[str, Any]]) -> set[int]:
         if "include-in-budget" in flags:
             continue
         category = str(transaction["category"]).strip().casefold()
-        if category not in {"transfer", "income"}:
-            continue
+        description = collapse_whitespace(str(transaction["description"]))
+        looks_like_transfer = (
+            category == "transfer"
+            or INTERNAL_TRANSFER_DESCRIPTION_PATTERN.search(description) is not None
+        )
         amount = Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP)
         transaction_date = date.fromisoformat(str(transaction["date"]))
         account_identity = (
@@ -924,17 +981,17 @@ def find_internal_transfer_ids(transactions: list[dict[str, Any]]) -> set[int]:
             str(transaction["accountType"]).strip().casefold(),
             str(transaction["provider"]).strip().casefold(),
         )
-        entries.append((index, transaction_date, amount, category, account_identity))
+        entries.append((index, transaction_date, amount, looks_like_transfer, account_identity))
 
     candidates: list[tuple[int, int, int]] = []
     for left_position, left in enumerate(entries):
-        left_id, left_date, left_amount, left_category, left_account = left
+        left_id, left_date, left_amount, left_looks_like_transfer, left_account = left
         for right in entries[left_position + 1:]:
-            right_id, right_date, right_amount, right_category, right_account = right
+            right_id, right_date, right_amount, right_looks_like_transfer, right_account = right
             day_distance = abs((left_date - right_date).days)
             if (
                 left_account != right_account
-                and "transfer" in {left_category, right_category}
+                and (left_looks_like_transfer or right_looks_like_transfer)
                 and left_amount != 0
                 and left_amount == -right_amount
                 and day_distance <= BILL_PAYMENT_WINDOW_DAYS

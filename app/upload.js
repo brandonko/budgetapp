@@ -29,6 +29,14 @@ const state = {
   importedTransactions: [],
   reviewSession: null,
   reviewCommitted: false,
+  reviewFilters: {
+    duplicate: false,
+    unmatched: true,
+    new: true,
+  },
+  reviewFieldFilters: {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  },
   editingImportedIndex: null,
   editBusy: false,
 };
@@ -125,6 +133,22 @@ const elements = {
   reviewSubtitle: document.querySelector("#import-review-subtitle"),
   reviewError: document.querySelector("#import-review-error"),
   reviewList: document.querySelector("#import-review-list"),
+  reviewSort: document.querySelector("#import-review-sort"),
+  reviewSearch: document.querySelector("#import-review-search"),
+  reviewFilterButton: document.querySelector("#import-review-filter-button"),
+  reviewFilterPopover: document.querySelector("#import-review-filter-popover"),
+  reviewFilterCount: document.querySelector("#import-review-filter-count"),
+  reviewCategoryFilter: document.querySelector("#import-review-category-filter"),
+  reviewSubcategoryFilter: document.querySelector("#import-review-subcategory-filter"),
+  reviewTagFilter: document.querySelector("#import-review-tag-filter"),
+  reviewAccountFilter: document.querySelector("#import-review-account-filter"),
+  reviewProviderFilter: document.querySelector("#import-review-provider-filter"),
+  resetReviewFieldFilters: document.querySelector("#reset-import-review-filters"),
+  applyReviewFieldFilters: document.querySelector("#apply-import-review-filters"),
+  clearReviewFieldFilters: document.querySelector("#clear-import-review-field-filters"),
+  reviewActiveFilters: document.querySelector("#import-review-active-filters"),
+  reviewFilterChips: document.querySelector("#import-review-filter-chips"),
+  reviewFilters: [...document.querySelectorAll("[data-review-filter]")],
   closeReview: document.querySelector("#close-import-review"),
   cancelReview: document.querySelector("#cancel-import-review"),
   confirmReview: document.querySelector("#confirm-import-review"),
@@ -136,6 +160,117 @@ const elements = {
   cancelEdit: document.querySelector("#cancel-import-edit"),
   saveEdit: document.querySelector("#save-import-edit"),
 };
+
+const importReviewSort = transactionUi.createTransactionSortControls(
+  elements.reviewSort,
+  { onChange: () => renderImportedTransactions() },
+);
+
+function importedTags(transaction) {
+  return String(transaction.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function populateReviewFilter(select, values, label, selected = "") {
+  const options = [""];
+  select.replaceChildren(...options.concat(values).map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value || label;
+    return option;
+  }));
+  select.value = values.includes(selected) ? selected : "";
+}
+
+function populateReviewSubcategories(category, selected = "") {
+  const candidates = category
+    ? state.importedTransactions.filter((transaction) => transaction.category === category)
+    : state.importedTransactions;
+  const values = [...new Set(candidates.map((transaction) => transaction.subcategory).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+  populateReviewFilter(elements.reviewSubcategoryFilter, values, "All subcategories", selected);
+}
+
+function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
+  const unique = (field) => [...new Set(state.importedTransactions.map((transaction) => transaction[field]).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+  const tags = new Map();
+  state.importedTransactions.forEach((transaction) => importedTags(transaction).forEach((tag) => {
+    if (!tags.has(tag.toLocaleLowerCase())) tags.set(tag.toLocaleLowerCase(), tag);
+  }));
+  const tagValues = [...tags.values()].sort((left, right) => left.localeCompare(right));
+  const selectedTag = tagValues.find(
+    (tag) => tag.toLocaleLowerCase() === String(filters.tag || "").toLocaleLowerCase(),
+  ) || "";
+  elements.reviewSearch.value = filters.description || "";
+  populateReviewFilter(elements.reviewCategoryFilter, unique("category"), "All categories", filters.category);
+  populateReviewSubcategories(elements.reviewCategoryFilter.value, filters.subcategory);
+  populateReviewFilter(
+    elements.reviewTagFilter,
+    tagValues,
+    "All tags",
+    selectedTag,
+  );
+  populateReviewFilter(elements.reviewAccountFilter, unique("accountName"), "All accounts", filters.accountName);
+  populateReviewFilter(elements.reviewProviderFilter, unique("provider"), "All providers", filters.provider);
+  state.reviewFieldFilters = {
+    description: elements.reviewSearch.value.trim(),
+    category: elements.reviewCategoryFilter.value,
+    subcategory: elements.reviewSubcategoryFilter.value,
+    tag: elements.reviewTagFilter.value,
+    accountName: elements.reviewAccountFilter.value,
+    provider: elements.reviewProviderFilter.value,
+  };
+  renderReviewFieldFilterChips();
+}
+
+function reviewFilterDraft() {
+  return {
+    category: elements.reviewCategoryFilter.value,
+    subcategory: elements.reviewSubcategoryFilter.value,
+    tag: elements.reviewTagFilter.value,
+    accountName: elements.reviewAccountFilter.value,
+    provider: elements.reviewProviderFilter.value,
+  };
+}
+
+function renderReviewFieldFilterChips() {
+  const definitions = [["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"], ["accountName", "Account"], ["provider", "Provider"]];
+  const active = definitions.filter(([field]) => state.reviewFieldFilters[field]);
+  elements.reviewFilterCount.textContent = String(active.length);
+  elements.reviewFilterCount.hidden = active.length === 0;
+  elements.reviewFilterButton.classList.toggle("has-active-filters", active.length > 0);
+  elements.reviewActiveFilters.hidden = active.length === 0;
+  elements.reviewFilterChips.replaceChildren(...active.map(([field, label]) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "transaction-filter-chip";
+    chip.textContent = `${label}: ${state.reviewFieldFilters[field]} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${state.reviewFieldFilters[field]}`);
+    chip.addEventListener("click", () => {
+      state.reviewFieldFilters[field] = "";
+      configureReviewFieldFilters(state.reviewFieldFilters);
+      renderImportedTransactions();
+    });
+    return chip;
+  }));
+}
+
+function setReviewFilterPopover(open, restore = true) {
+  if (!open && restore) configureReviewFieldFilters(state.reviewFieldFilters);
+  elements.reviewFilterPopover.hidden = !open;
+  elements.reviewFilterButton.setAttribute("aria-expanded", String(open));
+}
+
+function importedTransactionMatchesFieldFilters(transaction) {
+  const filters = state.reviewFieldFilters;
+  const description = filters.description.toLocaleLowerCase();
+  return (!description || transaction.description.toLocaleLowerCase().includes(description))
+    && (!filters.category || transaction.category === filters.category)
+    && (!filters.subcategory || transaction.subcategory === filters.subcategory)
+    && (!filters.tag || importedTags(transaction).some((tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()))
+    && (!filters.accountName || transaction.accountName === filters.accountName)
+    && (!filters.provider || transaction.provider === filters.provider);
+}
 
 function importAccountIdentity(source) {
   const prefix = source === "aliexpress" ? "aliExpress" : source;
@@ -1146,7 +1281,8 @@ function importedTransactionRowOptions(transaction, index) {
     shortMonthFormatter,
     leadingControl: selection,
     duplicate: transaction._isDuplicate,
-    needsClassification: transaction._classificationMatched === false,
+    needsClassification:
+      !transactionUi.isInternalTransfer(transaction) && transaction._classificationMatched === false,
     disabled: state.reviewCommitted,
     onEdit: () => openImportedTransactionEditor(index),
   };
@@ -1158,9 +1294,31 @@ function updateReviewSelection() {
   elements.confirmReview.disabled = state.reviewCommitted || selected === 0;
 }
 
+function importReviewType(transaction) {
+  if (transaction._isDuplicate) return "duplicate";
+  if (transactionUi.isInternalTransfer(transaction)) return "new";
+  if (transaction._classificationMatched === false) return "unmatched";
+  return "new";
+}
+
+function updateImportReviewFilters() {
+  for (const button of elements.reviewFilters) {
+    const enabled = state.reviewFilters[button.dataset.reviewFilter] === true;
+    button.setAttribute("aria-pressed", String(enabled));
+  }
+}
+
+function toggleImportReviewFilter(event) {
+  const filter = event.currentTarget.dataset.reviewFilter;
+  if (!(filter in state.reviewFilters)) return;
+  state.reviewFilters[filter] = !state.reviewFilters[filter];
+  renderImportedTransactions();
+}
+
 function renderImportedTransactions() {
   const count = state.importedTransactions.length;
   updateReviewSelection();
+  updateImportReviewFilters();
   if (count === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
@@ -1168,10 +1326,30 @@ function renderImportedTransactions() {
     elements.reviewList.replaceChildren(empty);
     return;
   }
+  const visibleIndexes = state.importedTransactions
+    .map((_transaction, index) => index)
+    .filter((index) => (
+      state.reviewFilters[importReviewType(state.importedTransactions[index])]
+      && importedTransactionMatchesFieldFilters(state.importedTransactions[index])
+    ));
+  if (visibleIndexes.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-import-review";
+    empty.textContent = "No transactions match the enabled filters.";
+    elements.reviewList.replaceChildren(empty);
+    return;
+  }
+  const visibleTransactions = transactionUi.sortTransactions(
+    visibleIndexes.map((index) => state.importedTransactions[index]),
+    importReviewSort.value(),
+  );
   transactionUi.renderTransactionList(
     elements.reviewList,
-    state.importedTransactions,
-    importedTransactionRowOptions,
+    visibleTransactions,
+    (transaction) => importedTransactionRowOptions(
+      transaction,
+      state.importedTransactions.indexOf(transaction),
+    ),
   );
 }
 
@@ -1234,6 +1412,7 @@ async function saveImportedTransaction(event) {
     amount: Number(transaction.amount),
     _selected: true,
   };
+  configureReviewFieldFilters(state.reviewFieldFilters);
   renderImportedTransactions();
   elements.editDialog.close();
   elements.reviewDialog.showModal();
@@ -1251,19 +1430,36 @@ function renderResult(result, source, token) {
   }
   elements.reviewEyebrow.textContent = `${sourceLabels[source] ?? source} import`;
   elements.reviewTitle.textContent = "Review transactions";
-  elements.reviewSubtitle.textContent = `${result.parsed} parsed · ${result.new} new · ${result.duplicates} duplicates`;
+  const unmatched = result.transactions.filter(
+    (transaction) => !transaction._isDuplicate &&
+      !transactionUi.isInternalTransfer(transaction) &&
+      transaction._classificationMatched === false,
+  ).length;
+  const internalTransfers = result.transactions.filter(
+    (transaction) => !transaction._isDuplicate && transactionUi.isInternalTransfer(transaction),
+  ).length;
+  elements.reviewSubtitle.textContent =
+    `${result.parsed} parsed · ${result.new} new (` +
+    `${unmatched} no rule matched, ${internalTransfers} internal transfers) · ` +
+    `${result.duplicates} duplicates`;
   elements.reviewError.hidden = true;
   elements.reviewError.textContent = "";
   state.revision = result.revision;
   state.reviewSession = { source, token };
   state.reviewCommitted = false;
+  state.reviewFilters = { duplicate: false, unmatched: true, new: true };
   state.importedTransactions = Array.isArray(result.transactions)
     ? result.transactions.map((transaction) => ({
         ...transaction,
-        _selected: !transaction._isDuplicate,
+        _selected: !transaction._isDuplicate && Number(transaction.amount) !== 0,
       }))
     : [];
   state.editingImportedIndex = null;
+  state.reviewFieldFilters = {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
+  configureReviewFieldFilters(state.reviewFieldFilters);
+  setReviewFilterPopover(false);
   elements.cancelReview.hidden = false;
   elements.cancelReview.disabled = false;
   elements.confirmReview.hidden = false;
@@ -1284,6 +1480,9 @@ function clearReviewState() {
   state.reviewCommitted = false;
   state.importedTransactions = [];
   state.editingImportedIndex = null;
+  state.reviewFieldFilters = {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
 }
 
 async function cancelImportReview() {
@@ -1365,6 +1564,61 @@ elements.appleCardFile.addEventListener("change", updateAppleCardFileButton);
 elements.closeReview.addEventListener("click", cancelImportReview);
 elements.cancelReview.addEventListener("click", cancelImportReview);
 elements.confirmReview.addEventListener("click", confirmImportReview);
+elements.reviewFilters.forEach((button) => {
+  button.addEventListener("click", toggleImportReviewFilter);
+});
+elements.reviewSearch.addEventListener("input", () => {
+  state.reviewFieldFilters.description = elements.reviewSearch.value.trim();
+  renderImportedTransactions();
+});
+elements.reviewFilterButton.addEventListener("click", () => {
+  const open = elements.reviewFilterButton.getAttribute("aria-expanded") !== "true";
+  setReviewFilterPopover(open);
+  if (open) elements.reviewCategoryFilter.focus();
+});
+elements.reviewCategoryFilter.addEventListener("change", () => {
+  populateReviewSubcategories(
+    elements.reviewCategoryFilter.value,
+    elements.reviewSubcategoryFilter.value,
+  );
+});
+elements.resetReviewFieldFilters.addEventListener("click", () => {
+  elements.reviewCategoryFilter.value = "";
+  populateReviewSubcategories("");
+  elements.reviewTagFilter.value = "";
+  elements.reviewAccountFilter.value = "";
+  elements.reviewProviderFilter.value = "";
+  elements.reviewCategoryFilter.focus();
+});
+elements.applyReviewFieldFilters.addEventListener("click", () => {
+  state.reviewFieldFilters = { ...state.reviewFieldFilters, ...reviewFilterDraft() };
+  setReviewFilterPopover(false, false);
+  renderImportedTransactions();
+  elements.reviewFilterButton.focus();
+});
+elements.clearReviewFieldFilters.addEventListener("click", () => {
+  state.reviewFieldFilters = {
+    ...state.reviewFieldFilters,
+    category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
+  configureReviewFieldFilters(state.reviewFieldFilters);
+  renderImportedTransactions();
+  elements.reviewFilterButton.focus();
+});
+document.addEventListener("click", (event) => {
+  if (
+    elements.reviewFilterButton.getAttribute("aria-expanded") === "true"
+    && !event.target.closest(".transaction-filter-menu")
+  ) setReviewFilterPopover(false);
+});
+elements.reviewDialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.reviewFilterButton.getAttribute("aria-expanded") === "true") {
+    event.preventDefault();
+    event.stopPropagation();
+    setReviewFilterPopover(false);
+    elements.reviewFilterButton.focus();
+  }
+});
 elements.reviewDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   cancelImportReview();

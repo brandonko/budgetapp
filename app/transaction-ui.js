@@ -1,6 +1,10 @@
 "use strict";
 
 (function initializeTransactionUi(globalObject) {
+  const transactionDescriptionCollator = new Intl.Collator(undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
   const editableFields = [
     "date",
     "description",
@@ -11,6 +15,7 @@
     "accountType",
     "provider",
     "notes",
+    "tags",
   ];
 
   function transactionFlags(transaction) {
@@ -80,6 +85,72 @@
     return transaction;
   }
 
+  function normalizeTransactionSort(sort = {}) {
+    return {
+      field: ["date", "description", "cost"].includes(sort.field) ? sort.field : "date",
+      direction: sort.direction === "asc" ? "asc" : "desc",
+    };
+  }
+
+  function compareTransactions(left, right, sort = {}) {
+    const normalized = normalizeTransactionSort(sort);
+    let comparison = 0;
+    if (normalized.field === "description") {
+      comparison = transactionDescriptionCollator.compare(
+        String(left.description || ""),
+        String(right.description || ""),
+      );
+    } else if (normalized.field === "cost") {
+      comparison = Math.abs(Number(left.amount) || 0) - Math.abs(Number(right.amount) || 0);
+    } else {
+      comparison = String(left.date || "").localeCompare(String(right.date || ""));
+    }
+    if (comparison !== 0) return normalized.direction === "asc" ? comparison : -comparison;
+    const dateFallback = String(right.date || "").localeCompare(String(left.date || ""));
+    if (dateFallback !== 0) return dateFallback;
+    return Number(right._id ?? -1) - Number(left._id ?? -1);
+  }
+
+  function sortTransactions(transactions, sort = {}) {
+    return [...transactions].sort((left, right) => compareTransactions(left, right, sort));
+  }
+
+  function createTransactionSortControls(container, options = {}) {
+    const current = normalizeTransactionSort(options.initial);
+    const fieldLabel = document.createElement("label");
+    const fieldText = document.createElement("span");
+    fieldText.textContent = "Sort";
+    const field = document.createElement("select");
+    field.setAttribute("aria-label", "Sort transactions");
+    for (const [value, label] of [
+      ["date:desc", "Newest first"],
+      ["date:asc", "Oldest first"],
+      ["description:asc", "Description A–Z"],
+      ["description:desc", "Description Z–A"],
+      ["cost:desc", "Cost: high to low"],
+      ["cost:asc", "Cost: low to high"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      field.append(option);
+    }
+    field.value = `${current.field}:${current.direction}`;
+    fieldLabel.append(fieldText, field);
+    function notify() {
+      options.onChange?.({ ...current });
+    }
+    field.addEventListener("change", () => {
+      [current.field, current.direction] = field.value.split(":");
+      notify();
+    });
+    container.classList.add("transaction-sort-controls");
+    container.replaceChildren(fieldLabel);
+    return Object.freeze({
+      value: () => ({ ...current }),
+    });
+  }
+
   function createTransactionRow(transaction, options) {
     const {
       currency,
@@ -89,6 +160,7 @@
       duplicate = false,
       needsClassification = false,
       disabled = false,
+      showEdit = true,
       amountForDisplay = null,
     } = options;
     const refunded = hasTransactionFlag(transaction, "refunded");
@@ -159,6 +231,21 @@
         : "Marked manually";
       description.append(transferBadge);
     }
+    const tags = String(transaction.tags || "")
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    if (tags.length > 0) {
+      const tagList = document.createElement("span");
+      tagList.className = "transaction-tags";
+      for (const tag of tags) {
+        const badge = document.createElement("span");
+        badge.className = "transaction-tag";
+        badge.textContent = tag;
+        tagList.append(badge);
+      }
+      description.append(tagList);
+    }
     if (transaction.notes) {
       const notes = document.createElement("span");
       notes.className = "transaction-note";
@@ -175,14 +262,17 @@
     if (refunded || internalTransfer) {
       amount.title = "Excluded from budget totals";
     }
-    const editButton = document.createElement("button");
-    editButton.className = "edit-button";
-    editButton.type = "button";
-    editButton.textContent = "Edit";
-    editButton.disabled = disabled;
-    editButton.setAttribute("aria-label", `Edit ${transaction.description}`);
-    editButton.addEventListener("click", onEdit);
-    actions.append(amount, editButton);
+    actions.append(amount);
+    if (showEdit) {
+      const editButton = document.createElement("button");
+      editButton.className = "edit-button";
+      editButton.type = "button";
+      editButton.textContent = "Edit";
+      editButton.disabled = disabled;
+      editButton.setAttribute("aria-label", `Edit ${transaction.description}`);
+      editButton.addEventListener("click", onEdit);
+      actions.append(editButton);
+    }
 
     row.append(...(leadingControl ? [leadingControl] : []), dateElement, description, actions);
     return row;
@@ -197,12 +287,15 @@
   }
 
   globalObject.LedgerTransactionUI = Object.freeze({
+    compareTransactions,
     createTransactionRow,
+    createTransactionSortControls,
     hasTransactionFlag,
     internalTransferTreatment,
     isInternalTransfer,
     populateTransactionEditor,
     renderTransactionList,
+    sortTransactions,
     transactionFlags,
     transactionFromEditor,
   });

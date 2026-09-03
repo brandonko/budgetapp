@@ -8,7 +8,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from server import find_bill_payment_ids, public_state  # noqa: E402
+from server import find_bill_payment_ids, preview_imported_transactions, public_state  # noqa: E402
 
 
 def transaction(
@@ -73,6 +73,28 @@ class BillPaymentReconciliationTests(unittest.TestCase):
     def test_does_not_hide_unmatched_bank_transfer(self) -> None:
         transactions = [
             transaction(date="2026-05-08", amount=150.00, category="Transfer", account_type="BANK"),
+        ]
+
+        self.assertEqual(find_bill_payment_ids(transactions), set())
+
+    def test_does_not_match_an_ordinary_purchase_and_refund(self) -> None:
+        transactions = [
+            transaction(
+                date="2026-05-08",
+                amount=100.00,
+                category="Shopping",
+                account_type="CREDIT",
+                account_name="First card",
+                description="CARD PURCHASE",
+            ),
+            transaction(
+                date="2026-05-09",
+                amount=-100.00,
+                category="Shopping",
+                account_type="CREDIT",
+                account_name="Second card",
+                description="MERCHANT REFUND",
+            ),
         ]
 
         self.assertEqual(find_bill_payment_ids(transactions), set())
@@ -164,6 +186,63 @@ class BillPaymentReconciliationTests(unittest.TestCase):
         rows = public_state(transactions, "revision")["transactions"]
         self.assertTrue(all(row["_isInternalTransfer"] for row in rows))
         self.assertTrue(all(row["_internalTransferSource"] == "automatic" for row in rows))
+
+    def test_import_preview_exposes_new_automatic_pair_as_internal_transfer(self) -> None:
+        parsed = [
+            transaction(
+                date="2026-08-31",
+                amount=-334.47,
+                category="Income",
+                account_type="BANK",
+                account_name="Credit Card Mastercard",
+                description="ONLINE/MOBILE RECURRING FROM CHK 2051",
+            ),
+            transaction(
+                date="2026-08-31",
+                amount=334.47,
+                category="Business services",
+                account_type="BANK",
+                account_name="Checking Account",
+                description="Online Scheduled Payment to ACCT# 9215 Confirmation# 94455",
+            ),
+        ]
+
+        preview, new_count, duplicate_count = preview_imported_transactions(
+            [], parsed, "creditkarma", [False, False]
+        )
+
+        self.assertEqual((new_count, duplicate_count), (2, 0))
+        self.assertTrue(all(row["_isInternalTransfer"] for row in preview))
+        self.assertTrue(all(row["_internalTransferSource"] == "automatic" for row in preview))
+        self.assertTrue(all(not row["_classificationMatched"] for row in preview))
+
+    def test_import_preview_detects_a_pair_completed_by_an_existing_transaction(self) -> None:
+        existing = [
+            transaction(
+                date="2026-08-24",
+                amount=2223.09,
+                category="Transfer",
+                account_type="BANK",
+                account_name="Savings Account",
+            )
+        ]
+        parsed = [
+            transaction(
+                date="2026-08-24",
+                amount=-2223.09,
+                category="Transfer",
+                account_type="BANK",
+                account_name="Checking Account",
+            )
+        ]
+
+        preview, new_count, duplicate_count = preview_imported_transactions(
+            existing, parsed, "creditkarma", [False]
+        )
+
+        self.assertEqual((new_count, duplicate_count), (1, 0))
+        self.assertTrue(preview[0]["_isInternalTransfer"])
+        self.assertEqual(preview[0]["_internalTransferSource"], "automatic")
 
 
 if __name__ == "__main__":

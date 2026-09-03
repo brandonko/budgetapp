@@ -29,10 +29,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The eleven persisted columns, in order, are:
+- The twelve persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,subcategory,accountName,accountType,provider,notes,flags,createdAt
+  date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,flags,createdAt
   ```
 
 - `flags` contains normalized, comma-separated identifiers. `refunded`,
@@ -42,6 +42,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   `_id` and `_isBillPayment` must not be written as extra CSV columns.
 - `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
   one committed import. It is blank for manual and legacy transactions.
+- `tags` is an optional comma-separated list of user-defined labels. Trim each
+  label, discard blanks, and deduplicate case-insensitively while preserving the
+  first spelling and order. A comma is therefore the tag delimiter and is not
+  part of an individual tag.
 
 ## Backups
 
@@ -51,7 +55,7 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - List every regular CSV placed directly in `data/backups/`, regardless of its
   filename. Order backups newest first by last-modified date and show their
   validated transaction count. Accept the current schema and compatible older
-  seven- through ten-column Ledger schemas without modifying the backup file. Never follow symlinks or
+  seven- through eleven-column Ledger schemas without modifying the backup file. Never follow symlinks or
   allow nested paths.
 - Restoring a backup completely replaces the canonical CSV only after explicit
   user confirmation. Create a safety backup of the current file immediately
@@ -81,9 +85,15 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Keep exactly two category levels for now: required `category` and optional
   `subcategory`. Do not introduce arbitrary-depth category trees without a new
   product decision.
-- Dashboard cards and annual charts group by the top-level category. Opening a
-  category surfaces subcategory dollar totals and permits filtering; blank
-  subcategories are labeled **Unclassified** in the UI.
+- Dashboard cards, annual charts, and the annual breakdown table can group by
+  top-level category or by user-defined tag. Opening a category surfaces
+  subcategory dollar totals and permits filtering; blank subcategories are
+  labeled **Unclassified** in the UI. Tag grouping is flat, labels blank-tag
+  rows **Untagged**, and ignores category entirely.
+- A transaction with multiple tags contributes its full budget amount to every
+  applicable tag. Tag totals can overlap and must not be presented as additive
+  parts of a grand total. Classification rules do not set tags for now; tags are
+  explicitly user-managed transaction metadata.
 - Store alphabetically ordered import classifications in `data/classifications.json`, beside
   the canonical CSV. Keep the file private through the existing `data/` ignore
   rule and expose an explicit JSON export action on the dedicated Classifications page.
@@ -148,9 +158,11 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - If nothing matches, preserve the category supplied by the parser and populate
   a blank subcategory.
 - From the Classifications page, provide an all-dates modal of every transaction
-  with a blank subcategory. Include description search plus category, account,
-  and provider filters. Keep the user on Classification settings and preserve
-  any draft when the modal closes.
+  with a blank subcategory. Use the shared transaction row and compact
+  search/filter/sort toolbar. Show **Internal transfer** on excluded rows and
+  **No rule matched** on the remaining rows, while preserving refund and custom
+  tag badges. Keep the user on Classifications and preserve any draft when the
+  modal closes.
 
 ## Privacy
 
@@ -191,13 +203,17 @@ on it. Translate it for people in the interface:
   selector and summarizes the full selected year.
 - Changing the period updates summaries, category cards, charts, and dialogs
   together.
-- Persist the selected view mode, year, month, and annual category/subcategory
+- Persist the selected view mode, year, month, breakdown dimension, and annual category/subcategory
   filter in the browser so dashboard context survives navigation to any primary page.
   Validate restored values against the current transaction data and fall back
   safely when a saved selection is no longer available.
-- Render one card for every visible category, including unmatched `Transfer`
-  transactions.
-- A category card shows its transaction count and net category total.
+- Let users switch the monthly and annual spending breakdown between **By
+  category** and **By tag**. Keep the selected dimension synchronized between
+  views and persist it across navigation.
+- In category mode, render one card for every visible category, including
+  unmatched `Transfer` transactions. In tag mode, render a card for each tag
+  plus **Untagged** when needed.
+- A category or tag card shows its transaction count and net total.
 - Opening a category shows dollar totals for its subcategories. Transactions
   without a subcategory are presented as **Unclassified**.
 - Clicking a category opens its transactions in a modal.
@@ -205,6 +221,9 @@ on it. Translate it for people in the interface:
   shows annual dollar totals. Selecting a category redraws the same monthly
   chart as subcategory stacks; selecting a subcategory isolates it. Use a
   breadcrumb and **Back to categories** action for upward navigation.
+- In tag mode, the annual spending chart is stacked by tag, its legend filters
+  to one tag, and the annual table has flat tag rows without subcategory
+  expansion. Keep the monthly net chart unchanged.
 - Include an expandable exact-dollar annual table below the spending chart.
   Category rows show January through December plus annual totals; expanding a
   row reveals its subcategories, including **Unclassified**. Keep the first
@@ -212,8 +231,42 @@ on it. Translate it for people in the interface:
 - Annual view includes a zero-centered monthly net chart. Months with positive
   net totals are green; months with negative net totals are red.
 - Provide a **View all transactions** action for the selected period.
-- All transaction lists are ordered by date, latest first.
+- All transaction-list dialogs default to date, latest first. Provide the shared
+  sort control everywhere transactions are reviewed: Date, Description, or Cost,
+  each ascending or descending. Cost sorting uses the absolute stored amount so
+  expenses, credits, and income compare by dollar magnitude.
+- Keep the dashboard transaction toolbar compact: description search and a
+  plain-language combined sort menu remain visible; category/subcategory and
+  tag and account/provider live in a Filters popover. Keep category and subcategory
+  adjacent, limit subcategory choices to the selected category, show an active
+  filter count, and render applied filters as removable chips. Populate the tag
+  filter from the distinct tags available in the current transaction list and
+  match tag names case-insensitively. On narrow screens,
+  stack each related pair and keep the popover within the modal.
 - The interface must remain responsive and usable on desktop and mobile.
+
+### Shared transaction-modal contract
+
+- Treat every modal that presents a transaction collection as a variant of one
+  shared transaction-list experience. This includes dashboard transaction
+  lists, post-import review, import history, classification previews, and
+  **Review unclassified**.
+- Keep the core structure and behavior synchronized across those variants:
+  shared transaction rows and badges, description search, the Filters popover,
+  category/subcategory pairing, tag/account/provider filters, active-filter
+  chips, and the combined sort control. Reuse helpers from
+  `app/transaction-ui.js` instead of independently recreating row or sort
+  behavior.
+- Page-specific behavior is additive and must not fork or replace the shared
+  experience. For example, import review adds selection checkboxes, duplicate
+  detection, New/No rule matched/Duplicate visibility toggles, and commit/cancel
+  actions beneath the shared toolbar. Classification views add rule-match and
+  internal-transfer context. Dashboard lists add their own period and category
+  context.
+- Whenever the transaction-list UI is enhanced or fixed, audit every modal
+  variant and apply the compatible change everywhere. Preserve each variant's
+  unique controls when doing so, and add regression coverage that prevents one
+  modal from silently falling behind the others.
 
 ## Navigation
 
@@ -235,9 +288,10 @@ transfers may be legitimate expenses or incoming money.
 Under the default Automatic treatment, exclude only reconciled credit-card
 bill-payment pairs. The current rule is:
 
-1. One row has category `Transfer`, case-insensitively; the other may be
-   `Transfer` or `Income` because source exports may label the receiving side
-   as income.
+1. At least one row has category `Transfer`, case-insensitively, or a description
+   that looks like a transfer or account payment. The other row may retain any
+   source category because exports sometimes label payment rows as `Income` or
+   `Business services`.
 2. The rows belong to different account identities. Account type does not
    restrict matching, so bank-to-bank transfers are supported.
 3. Their nonzero amounts are exact opposites. Either direction is valid, which
@@ -266,8 +320,10 @@ with a line-through, while continuing to use a $0 budget amount.
   parsed rows and must never replace an existing database.
 
 - User-editable CSV fields are date, description, amount, category,
-  subcategory, accountName, accountType, provider, notes, and supported flags. Notes are
+  subcategory, accountName, accountType, provider, notes, tags, and supported flags. Notes are
   optional freeform text and may safely contain commas or line breaks.
+- Tags are optional user-defined labels edited as a comma-separated list. Show
+  them as compact badges in transaction lists.
 - Users can toggle the `refunded` flag in the transaction editor. A refunded
   transaction remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
@@ -275,7 +331,7 @@ with a line-through, while continuing to use a $0 budget amount.
   editor, including import review and import history. Keep automatic detection
   overridable in both directions.
 - `createdAt` is system-managed and must survive edits unchanged.
-- Migrate compatible older CSVs to the eleven-column schema
+- Migrate compatible older CSVs to the twelve-column schema
   atomically by adding missing optional fields; never require users to recreate
   an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
@@ -319,8 +375,13 @@ ingestion belongs in the **Import data** page at `/import`.
   label must state the exact case-insensitive description substring or substrings
   used by that filter.
 - Report parsed, new, and duplicate counts in a pre-commit review modal.
-- Display every parsed transaction in the preview. Select new occurrences by
-  default; leave duplicates deselected, visibly marked, and highlighted soft red.
+- Put the shared compact search/filter/sort toolbar directly below the import
+  review header. Place Duplicate, No rule matched, and New visibility toggles
+  below that toolbar; these toggles affect visibility, while checkboxes alone
+  determine which rows will be committed.
+- Display every parsed transaction in the preview. Select nonzero new occurrences
+  by default; leave duplicates and $0 transactions deselected. Keep duplicates
+  visibly marked and highlighted soft red.
 - Carry each row's rule-match result into the import preview. Highlight rows
   that matched no classification rule in soft amber and label them **No rule
   matched** so users can identify manual work or missing rules. Duplicate red

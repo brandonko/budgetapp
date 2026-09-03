@@ -114,6 +114,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-sort-bar">
+          <div id="import-history-sort"></div>
+        </div>
         <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
           role="alert" hidden></p>
         <div class="transaction-list" id="import-history-transactions"></div>
@@ -172,6 +175,11 @@
             <label class="form-field">
               <span>Provider</span>
               <input name="provider" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Tags</span>
+              <input name="tags" type="text" autocomplete="off" />
+              <small>Separate multiple tags with commas.</small>
             </label>
             <label class="form-field form-field--wide">
               <span>Notes</span>

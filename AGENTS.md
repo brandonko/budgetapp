@@ -41,3 +41,12 @@ commit the private contents of `data/` or `raw_data_files/`.
   backdrop path, accept a stale revision, overwrite an existing database during
   initialization, or skip the required pre-mutation backup. Preserve the user's
   staged review and make destructive outcomes clear.
+
+### Shared transaction modals
+
+- Treat dashboard, import, import-history, and classification transaction
+  dialogs as variants of the shared transaction-list UI described in
+  `llm_context.md`. A compatible row, filter, badge, or sort improvement must be
+  applied to every variant; page-specific controls such as import selection and
+  duplicate toggles remain additive. Reuse `app/transaction-ui.js`, audit all
+  variants when changing one, and keep regression tests synchronized.

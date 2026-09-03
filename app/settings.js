@@ -22,6 +22,7 @@ const elements = {
   importHistoryDialogSubtitle: document.querySelector("#import-history-dialog-subtitle"),
   importHistoryDialogError: document.querySelector("#import-history-dialog-error"),
   importHistoryTransactions: document.querySelector("#import-history-transactions"),
+  importHistorySort: document.querySelector("#import-history-sort"),
   closeImportHistoryDialog: document.querySelector("#close-import-history-dialog"),
   importHistoryEditDialog: document.querySelector("#import-history-edit-dialog"),
   importHistoryEditForm: document.querySelector("#import-history-edit-form"),
@@ -45,16 +46,27 @@ const elements = {
   unclassifiedSummary: document.querySelector("#unclassified-summary"),
   unclassifiedSearch: document.querySelector("#unclassified-search"),
   unclassifiedCategory: document.querySelector("#unclassified-category-filter"),
+  unclassifiedSubcategory: document.querySelector("#unclassified-subcategory-filter"),
+  unclassifiedTag: document.querySelector("#unclassified-tag-filter"),
   unclassifiedAccount: document.querySelector("#unclassified-account-filter"),
   unclassifiedProvider: document.querySelector("#unclassified-provider-filter"),
+  unclassifiedFilterButton: document.querySelector("#unclassified-filter-button"),
+  unclassifiedFilterPopover: document.querySelector("#unclassified-filter-popover"),
+  unclassifiedFilterCount: document.querySelector("#unclassified-filter-count"),
+  resetUnclassifiedFilters: document.querySelector("#reset-unclassified-filters"),
+  applyUnclassifiedFilters: document.querySelector("#apply-unclassified-filters"),
+  unclassifiedActiveFilters: document.querySelector("#unclassified-active-filters"),
+  unclassifiedFilterChips: document.querySelector("#unclassified-filter-chips"),
   clearUnclassifiedFilters: document.querySelector("#clear-unclassified-filters"),
   unclassifiedError: document.querySelector("#unclassified-error"),
   unclassifiedList: document.querySelector("#unclassified-list"),
+  unclassifiedSort: document.querySelector("#unclassified-sort"),
   closeUnclassified: document.querySelector("#close-unclassified-dialog"),
   previewDialog: document.querySelector("#classification-preview-dialog"),
   previewSummary: document.querySelector("#classification-preview-summary"),
   previewError: document.querySelector("#classification-preview-error"),
   previewList: document.querySelector("#classification-preview-list"),
+  previewSort: document.querySelector("#classification-preview-sort"),
   closePreview: document.querySelector("#close-classification-preview"),
   cancelPreview: document.querySelector("#cancel-classification-preview"),
   confirmPreview: document.querySelector("#confirm-classification-preview"),
@@ -68,6 +80,9 @@ let ruleEdits = new Map();
 let pendingNewClassificationIndex = null;
 let pendingClassificationPreview = null;
 let unclassifiedTransactions = [];
+let unclassifiedFieldFilters = {
+  description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+};
 
 const backupDateFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -78,6 +93,25 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 });
+
+const importHistorySort = elements.importHistorySort
+  ? transactionUi.createTransactionSortControls(
+      elements.importHistorySort,
+      { onChange: () => renderImportHistoryTransactions() },
+    )
+  : null;
+const unclassifiedSort = elements.unclassifiedSort
+  ? transactionUi.createTransactionSortControls(
+      elements.unclassifiedSort,
+      { onChange: () => renderUnclassifiedTransactions() },
+    )
+  : null;
+const classificationPreviewSort = elements.previewSort
+  ? transactionUi.createTransactionSortControls(
+      elements.previewSort,
+      { onChange: () => renderClassificationPreviewChanges() },
+    )
+  : null;
 
 const transactionDateFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -243,7 +277,7 @@ function renderImportHistoryTransactions() {
   }
   transactionUi.renderTransactionList(
     elements.importHistoryTransactions,
-    transactions,
+    transactionUi.sortTransactions(transactions, importHistorySort.value()),
     importHistoryTransactionOptions,
   );
 }
@@ -568,51 +602,121 @@ function populateUnclassifiedFilter(select, values, allLabel) {
   select.replaceChildren(all, ...options);
 }
 
-function unclassifiedTransactionRow(transaction) {
-  const row = document.createElement("article");
-  row.className = "transaction-row";
-  const parsedDate = new Date(`${transaction.date}T12:00:00Z`);
-  const date = document.createElement("time");
-  date.className = "transaction-date";
-  date.dateTime = transaction.date;
-  const month = document.createTextNode(unclassifiedMonthFormatter.format(parsedDate));
-  const day = document.createElement("strong");
-  day.textContent = parsedDate.getUTCDate();
-  date.append(month, day);
+const UNCLASSIFIED_FILTER_VALUE = "__ledger_unclassified_subcategory__";
 
-  const details = document.createElement("div");
-  details.className = "transaction-description";
-  const description = document.createElement("strong");
-  description.textContent = transaction.description;
-  description.title = transaction.description;
-  const metadata = document.createElement("span");
-  metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
-  details.append(description, metadata);
+function unclassifiedTags(transaction) {
+  return String(transaction.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+}
 
-  const amount = document.createElement("span");
-  amount.className = "transaction-amount";
-  amount.classList.toggle("is-credit", transaction.amount < 0);
-  amount.textContent = currencyFormatter.format(Math.abs(transaction.amount));
-  row.append(date, details, amount);
-  return row;
+function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
+  const unique = (field) => [...new Set(
+    unclassifiedTransactions.map((transaction) => transaction[field]).filter(Boolean),
+  )].sort((left, right) => left.localeCompare(right));
+  const tags = new Map();
+  unclassifiedTransactions.forEach((transaction) => unclassifiedTags(transaction).forEach((tag) => {
+    if (!tags.has(tag.toLocaleLowerCase())) tags.set(tag.toLocaleLowerCase(), tag);
+  }));
+  const tagValues = [...tags.values()].sort((left, right) => left.localeCompare(right));
+  const selectedTag = tagValues.find(
+    (tag) => tag.toLocaleLowerCase() === String(filters.tag || "").toLocaleLowerCase(),
+  ) || "";
+  elements.unclassifiedSearch.value = filters.description || "";
+  populateUnclassifiedFilter(elements.unclassifiedCategory, unique("category"), "All categories");
+  populateUnclassifiedFilter(elements.unclassifiedAccount, unique("accountName"), "All accounts");
+  populateUnclassifiedFilter(elements.unclassifiedProvider, unique("provider"), "All providers");
+  populateUnclassifiedFilter(
+    elements.unclassifiedTag,
+    tagValues,
+    "All tags",
+  );
+  populateUnclassifiedFilter(elements.unclassifiedSubcategory, [], "All subcategories");
+  if (unclassifiedTransactions.length > 0) {
+    const option = document.createElement("option");
+    option.value = UNCLASSIFIED_FILTER_VALUE;
+    option.textContent = "Unclassified";
+    elements.unclassifiedSubcategory.append(option);
+  }
+  elements.unclassifiedCategory.value = unique("category").includes(filters.category) ? filters.category : "";
+  elements.unclassifiedAccount.value = unique("accountName").includes(filters.accountName) ? filters.accountName : "";
+  elements.unclassifiedProvider.value = unique("provider").includes(filters.provider) ? filters.provider : "";
+  elements.unclassifiedTag.value = selectedTag;
+  elements.unclassifiedSubcategory.value = filters.subcategory === UNCLASSIFIED_FILTER_VALUE
+    ? UNCLASSIFIED_FILTER_VALUE
+    : "";
+  unclassifiedFieldFilters = {
+    description: elements.unclassifiedSearch.value.trim(),
+    category: elements.unclassifiedCategory.value,
+    subcategory: elements.unclassifiedSubcategory.value,
+    tag: elements.unclassifiedTag.value,
+    accountName: elements.unclassifiedAccount.value,
+    provider: elements.unclassifiedProvider.value,
+  };
+  renderUnclassifiedFilterChips();
+}
+
+function unclassifiedFilterDraft() {
+  return {
+    category: elements.unclassifiedCategory.value,
+    subcategory: elements.unclassifiedSubcategory.value,
+    tag: elements.unclassifiedTag.value,
+    accountName: elements.unclassifiedAccount.value,
+    provider: elements.unclassifiedProvider.value,
+  };
+}
+
+function renderUnclassifiedFilterChips() {
+  const definitions = [
+    ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
+    ["accountName", "Account"], ["provider", "Provider"],
+  ];
+  const active = definitions.filter(([field]) => unclassifiedFieldFilters[field]);
+  elements.unclassifiedFilterCount.textContent = String(active.length);
+  elements.unclassifiedFilterCount.hidden = active.length === 0;
+  elements.unclassifiedFilterButton.classList.toggle("has-active-filters", active.length > 0);
+  elements.unclassifiedActiveFilters.hidden = active.length === 0;
+  elements.unclassifiedFilterChips.replaceChildren(...active.map(([field, label]) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "transaction-filter-chip";
+    const value = field === "subcategory" ? "Unclassified" : unclassifiedFieldFilters[field];
+    chip.textContent = `${label}: ${value} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
+    chip.addEventListener("click", () => {
+      unclassifiedFieldFilters[field] = "";
+      configureUnclassifiedFilters(unclassifiedFieldFilters);
+      renderUnclassifiedTransactions();
+    });
+    return chip;
+  }));
+}
+
+function setUnclassifiedFilterPopover(open, restore = true) {
+  if (!open && restore) configureUnclassifiedFilters(unclassifiedFieldFilters);
+  elements.unclassifiedFilterPopover.hidden = !open;
+  elements.unclassifiedFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function renderUnclassifiedTransactions() {
-  const description = elements.unclassifiedSearch.value.trim().toLocaleLowerCase();
-  const category = elements.unclassifiedCategory.value;
-  const account = elements.unclassifiedAccount.value;
-  const provider = elements.unclassifiedProvider.value;
-  const visible = unclassifiedTransactions.filter((transaction) =>
-    (!description || transaction.description.toLocaleLowerCase().includes(description))
-    && (!category || transaction.category === category)
-    && (!account || transaction.accountName === account)
-    && (!provider || transaction.provider === provider),
+  unclassifiedFieldFilters.description = elements.unclassifiedSearch.value.trim();
+  const description = unclassifiedFieldFilters.description.toLocaleLowerCase();
+  const visible = transactionUi.sortTransactions(
+    unclassifiedTransactions.filter((transaction) =>
+      (!description || transaction.description.toLocaleLowerCase().includes(description))
+      && (!unclassifiedFieldFilters.category || transaction.category === unclassifiedFieldFilters.category)
+      && (!unclassifiedFieldFilters.subcategory || !transaction.subcategory)
+      && (!unclassifiedFieldFilters.tag || unclassifiedTags(transaction).some(
+        (tag) => tag.toLocaleLowerCase() === unclassifiedFieldFilters.tag.toLocaleLowerCase(),
+      ))
+      && (!unclassifiedFieldFilters.accountName || transaction.accountName === unclassifiedFieldFilters.accountName)
+      && (!unclassifiedFieldFilters.provider || transaction.provider === unclassifiedFieldFilters.provider),
+    ),
+    unclassifiedSort.value(),
   );
-  const filtered = Boolean(description || category || account || provider);
+  const filtered = Object.values(unclassifiedFieldFilters).some(Boolean);
   elements.unclassifiedSummary.textContent = filtered
     ? `${visible.length} of ${unclassifiedTransactions.length} transactions`
     : `${unclassifiedTransactions.length} ${unclassifiedTransactions.length === 1 ? "transaction" : "transactions"}`;
-  elements.clearUnclassifiedFilters.disabled = !filtered;
+  renderUnclassifiedFilterChips();
   if (visible.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
@@ -622,7 +726,17 @@ function renderUnclassifiedTransactions() {
     elements.unclassifiedList.replaceChildren(empty);
     return;
   }
-  elements.unclassifiedList.replaceChildren(...visible.map(unclassifiedTransactionRow));
+  transactionUi.renderTransactionList(
+    elements.unclassifiedList,
+    visible,
+    (transaction) => ({
+      currency: currencyFormatter,
+      shortMonthFormatter: unclassifiedMonthFormatter,
+      needsClassification: !transactionUi.isInternalTransfer(transaction),
+      showEdit: false,
+      onEdit: () => {},
+    }),
+  );
 }
 
 async function openUnclassifiedDialog() {
@@ -640,24 +754,11 @@ async function openUnclassifiedDialog() {
       .filter((transaction) => !transaction.subcategory)
       .sort((left, right) => right.date.localeCompare(left.date)
         || right.description.localeCompare(left.description));
-    populateUnclassifiedFilter(
-      elements.unclassifiedCategory,
-      [...new Set(unclassifiedTransactions.map((transaction) => transaction.category))]
-        .sort((left, right) => left.localeCompare(right)),
-      "All categories",
-    );
-    populateUnclassifiedFilter(
-      elements.unclassifiedAccount,
-      [...new Set(unclassifiedTransactions.map((transaction) => transaction.accountName))]
-        .sort((left, right) => left.localeCompare(right)),
-      "All accounts",
-    );
-    populateUnclassifiedFilter(
-      elements.unclassifiedProvider,
-      [...new Set(unclassifiedTransactions.map((transaction) => transaction.provider))]
-        .sort((left, right) => left.localeCompare(right)),
-      "All providers",
-    );
+    unclassifiedFieldFilters = {
+      description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+    };
+    configureUnclassifiedFilters(unclassifiedFieldFilters);
+    setUnclassifiedFilterPopover(false);
     renderUnclassifiedTransactions();
   } catch (error) {
     elements.unclassifiedError.textContent =
@@ -668,6 +769,7 @@ async function openUnclassifiedDialog() {
 }
 
 function closeUnclassifiedDialog() {
+  setUnclassifiedFilterPopover(false);
   elements.unclassifiedDialog.close();
 }
 
@@ -1414,6 +1516,15 @@ function classificationPreviewRow(change) {
   return row;
 }
 
+function renderClassificationPreviewChanges() {
+  if (!pendingClassificationPreview) return;
+  const changes = transactionUi.sortTransactions(
+    pendingClassificationPreview.changes,
+    classificationPreviewSort.value(),
+  );
+  elements.previewList.replaceChildren(...changes.map(classificationPreviewRow));
+}
+
 function closeClassificationPreview() {
   if (classificationsBusy) return;
   pendingClassificationPreview = null;
@@ -1463,7 +1574,7 @@ async function previewClassificationsForExisting() {
     elements.previewError.hidden = true;
     elements.previewError.textContent = "";
     elements.confirmPreview.textContent = `Apply changes (${preview.changed})`;
-    elements.previewList.replaceChildren(...preview.changes.map(classificationPreviewRow));
+    renderClassificationPreviewChanges();
     elements.previewDialog.showModal();
   } catch (error) {
     setClassificationStatus(
@@ -1669,17 +1780,51 @@ if (elements.addClassification) {
   renderClassifications();
   });
   elements.reviewUnclassified.addEventListener("click", openUnclassifiedDialog);
-  elements.unclassifiedSearch.addEventListener("input", renderUnclassifiedTransactions);
-  elements.unclassifiedCategory.addEventListener("change", renderUnclassifiedTransactions);
-  elements.unclassifiedAccount.addEventListener("change", renderUnclassifiedTransactions);
-  elements.unclassifiedProvider.addEventListener("change", renderUnclassifiedTransactions);
-  elements.clearUnclassifiedFilters.addEventListener("click", () => {
-  elements.unclassifiedSearch.value = "";
+  elements.unclassifiedSearch.addEventListener("input", () => {
+  unclassifiedFieldFilters.description = elements.unclassifiedSearch.value.trim();
+  renderUnclassifiedTransactions();
+  });
+  elements.unclassifiedFilterButton.addEventListener("click", () => {
+  const open = elements.unclassifiedFilterButton.getAttribute("aria-expanded") !== "true";
+  setUnclassifiedFilterPopover(open);
+  if (open) elements.unclassifiedCategory.focus();
+  });
+  elements.resetUnclassifiedFilters.addEventListener("click", () => {
   elements.unclassifiedCategory.value = "";
+  elements.unclassifiedSubcategory.value = "";
+  elements.unclassifiedTag.value = "";
   elements.unclassifiedAccount.value = "";
   elements.unclassifiedProvider.value = "";
+  elements.unclassifiedCategory.focus();
+  });
+  elements.applyUnclassifiedFilters.addEventListener("click", () => {
+  unclassifiedFieldFilters = { ...unclassifiedFieldFilters, ...unclassifiedFilterDraft() };
+  setUnclassifiedFilterPopover(false, false);
   renderUnclassifiedTransactions();
-  elements.unclassifiedSearch.focus();
+  elements.unclassifiedFilterButton.focus();
+  });
+  elements.clearUnclassifiedFilters.addEventListener("click", () => {
+  unclassifiedFieldFilters = {
+    ...unclassifiedFieldFilters,
+    category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
+  configureUnclassifiedFilters(unclassifiedFieldFilters);
+  renderUnclassifiedTransactions();
+  elements.unclassifiedFilterButton.focus();
+  });
+  document.addEventListener("click", (event) => {
+  if (
+    elements.unclassifiedFilterButton.getAttribute("aria-expanded") === "true"
+    && !event.target.closest(".transaction-filter-menu")
+  ) setUnclassifiedFilterPopover(false);
+  });
+  elements.unclassifiedDialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && elements.unclassifiedFilterButton.getAttribute("aria-expanded") === "true") {
+    event.preventDefault();
+    event.stopPropagation();
+    setUnclassifiedFilterPopover(false);
+    elements.unclassifiedFilterButton.focus();
+  }
   });
   elements.closeUnclassified.addEventListener("click", closeUnclassifiedDialog);
   elements.unclassifiedDialog.addEventListener("cancel", (event) => {

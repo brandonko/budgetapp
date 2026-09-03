@@ -144,6 +144,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-sort-bar">
+          <div id="classification-preview-sort"></div>
+        </div>
         <p class="form-error classification-preview-error" id="classification-preview-error" role="alert" hidden></p>
         <div class="classification-preview-list" id="classification-preview-list"></div>
         <footer class="form-footer">
@@ -170,24 +173,49 @@
             </svg>
           </button>
         </header>
-        <div class="transaction-filter-bar unclassified-filter-bar" aria-label="Filter unclassified transactions">
+        <div class="transaction-toolbar">
           <label class="transaction-search-field">
             <span>Description</span>
-            <input id="unclassified-search" type="search" autocomplete="off" />
+            <input id="unclassified-search" type="search" autocomplete="off"
+              placeholder="Search descriptions" />
           </label>
-          <label>
-            <span>Category</span>
-            <select id="unclassified-category-filter"><option value="">All categories</option></select>
-          </label>
-          <label>
-            <span>Account name</span>
-            <select id="unclassified-account-filter"><option value="">All accounts</option></select>
-          </label>
-          <label>
-            <span>Provider</span>
-            <select id="unclassified-provider-filter"><option value="">All providers</option></select>
-          </label>
-          <button class="text-button" id="clear-unclassified-filters" type="button">Clear filters</button>
+          <div class="transaction-filter-menu">
+            <button class="transaction-filter-button" id="unclassified-filter-button" type="button"
+              aria-expanded="false" aria-haspopup="true" aria-controls="unclassified-filter-popover">
+              Filters <span id="unclassified-filter-count" hidden></span>
+            </button>
+            <div class="transaction-filter-popover" id="unclassified-filter-popover"
+              role="group" aria-label="Unclassified transaction filters" hidden>
+              <div class="transaction-filter-popover-heading">
+                <strong>Filter transactions</strong>
+                <span>Choose one or more filters.</span>
+              </div>
+              <fieldset>
+                <legend>Classification</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Category</span><select id="unclassified-category-filter"><option value="">All categories</option></select></label>
+                  <label><span>Subcategory</span><select id="unclassified-subcategory-filter"><option value="">All subcategories</option></select></label>
+                </div>
+                <label class="transaction-filter-wide"><span>Tag</span><select id="unclassified-tag-filter"><option value="">All tags</option></select></label>
+              </fieldset>
+              <fieldset>
+                <legend>Account</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Account name</span><select id="unclassified-account-filter"><option value="">All accounts</option></select></label>
+                  <label><span>Provider</span><select id="unclassified-provider-filter"><option value="">All providers</option></select></label>
+                </div>
+              </fieldset>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-unclassified-filters" type="button">Reset</button>
+                <button class="primary-button" id="apply-unclassified-filters" type="button">Apply</button>
+              </div>
+            </div>
+          </div>
+          <div id="unclassified-sort"></div>
+        </div>
+        <div class="transaction-active-filters" id="unclassified-active-filters" hidden>
+          <div class="transaction-filter-chips" id="unclassified-filter-chips"></div>
+          <button class="text-button" id="clear-unclassified-filters" type="button">Clear all</button>
         </div>
         <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
         <div class="transaction-list" id="unclassified-list"></div>

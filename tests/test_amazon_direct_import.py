@@ -19,6 +19,7 @@ from server import (  # noqa: E402
     COLUMNS,
     LEGACY_COLUMNS,
     NOTES_COLUMNS,
+    PRE_TAG_COLUMNS,
     PRE_SUBCATEGORY_COLUMNS,
     ThreadingHTTPServer,
     initialize_csv_if_missing,
@@ -303,6 +304,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(transactions[0]["description"], "Legacy purchase")
         self.assertEqual(transactions[0]["subcategory"], "")
         self.assertEqual(transactions[0]["notes"], "")
+        self.assertEqual(transactions[0]["tags"], "")
         self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
         with legacy_path.open(encoding="utf-8", newline="") as handle:
@@ -330,6 +332,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         transactions, _revision = read_transaction_state(previous_path)
         self.assertEqual(transactions[0]["subcategory"], "")
         self.assertEqual(transactions[0]["notes"], "Keep this note")
+        self.assertEqual(transactions[0]["tags"], "")
         self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
         with previous_path.open(encoding="utf-8", newline="") as handle:
@@ -356,6 +359,33 @@ class AmazonDirectImportTests(unittest.TestCase):
         transactions, _revision = read_transaction_state(prior_path)
         self.assertEqual(transactions[0]["subcategory"], "")
         self.assertEqual(transactions[0]["notes"], "Keep this note")
+
+    def test_migrates_pre_tag_schema_and_preserves_every_existing_field(self) -> None:
+        previous_path = Path(self.temporary_directory.name) / "pre-tags.csv"
+        previous_row = {
+            "date": "2026-08-20",
+            "description": "Tagged later",
+            "amount": "12.34",
+            "category": "Shopping",
+            "subcategory": "Home",
+            "accountName": "Card",
+            "accountType": "CREDIT",
+            "provider": "Bank",
+            "notes": "Keep this note",
+            "flags": "refunded",
+            "createdAt": "2026-08-21T00:00:00.000000Z",
+        }
+        with previous_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=PRE_TAG_COLUMNS)
+            writer.writeheader()
+            writer.writerow(previous_row)
+
+        self.assertTrue(migrate_transaction_schema(previous_path))
+        [migrated], _revision = read_transaction_state(previous_path)
+        self.assertEqual(migrated["tags"], "")
+        self.assertEqual(migrated["subcategory"], "Home")
+        self.assertEqual(migrated["notes"], "Keep this note")
+        self.assertEqual(migrated["flags"], "refunded")
 
     def test_progress_cancel_and_terminal_updates_are_idempotent(self) -> None:
         token = self.create_session()
