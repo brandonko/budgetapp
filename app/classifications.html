@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Create reusable rules that classify and update Ledger transactions." />
+    <title>Classifications — Ledger</title>
+    <link rel="stylesheet" href="/styles.css?v=20260903-classifications-page" />
+    <script src="/navigation.js" defer></script>
+    <script src="/transaction-ui.js" defer></script>
+    <script src="/settings.js?v=20260903-classifications-page" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Ledger home">
+        <span class="brand-mark" aria-hidden="true">L</span>
+        <span>Ledger</span>
+      </a>
+      <details class="site-menu">
+        <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false">
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </summary>
+        <nav class="menu-panel" aria-label="Main navigation">
+          <a href="/">Dashboard</a>
+          <a href="/import">Import data</a>
+          <a href="/classifications" aria-current="page">Classifications</a>
+          <a href="/settings">Settings</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="settings-main">
+      <section class="settings-hero" aria-labelledby="classifications-title">
+        <p class="eyebrow">Transaction rules</p>
+        <h1 id="classifications-title">Classifications.</h1>
+        <p>Build reusable rules that keep transaction details consistent.</p>
+      </section>
+
+      <article class="settings-card classification-settings-card">
+        <div class="settings-card-heading">
+          <div>
+            <p class="eyebrow">Classification library</p>
+            <h2>Manage rules</h2>
+          </div>
+          <div class="classification-heading-actions">
+            <a class="secondary-button" id="export-classifications-link"
+              href="/api/classifications/export" download>Export JSON</a>
+          </div>
+        </div>
+        <details class="import-note import-guide classification-guide">
+          <summary>
+            <span class="import-note-icon" aria-hidden="true">i</span>
+            <span>
+              <strong>How matching works</strong>
+              <small>Learn how rules find transactions and classifications apply changes.</small>
+            </span>
+          </summary>
+          <div class="import-guide-content">
+            <section>
+              <h2>Classifications and actions</h2>
+              <p>
+                A classification is a reusable set of changes. It can update a transaction’s
+                description, category, subcategory, account identity, notes, refund status, or
+                internal-transfer treatment.
+                Only selected actions are applied; every other transaction field stays unchanged.
+              </p>
+              <p>
+                Classifications are evaluated alphabetically by category and subcategory. The
+                first matching classification wins, so each transaction is changed at most once
+                during a classification pass.
+              </p>
+            </section>
+            <section>
+              <h2>Rules and matchers</h2>
+              <p>
+                Each rule can match the current category, subcategory, description, account name,
+                and provider with case-insensitive regular expressions. Every populated matcher
+                in one rule must match. Empty matchers are ignored, and multiple rules within one
+                classification act as alternatives.
+              </p>
+              <p>
+                A rule note is only a reminder for you. It is never used to match a transaction.
+                Rules run automatically during import; use <strong>Apply to existing transactions</strong>
+                to preview and confirm the same changes for transactions already in Ledger.
+              </p>
+            </section>
+            <section class="classification-guide-code">
+              <h2>Classification flow</h2>
+              <pre><code>for each transaction:
+  for each classification in alphabetical order:
+    for each rule in the classification:
+      if every populated matcher matches the transaction:
+        apply each configured classification action
+        stop checking this transaction</code></pre>
+            </section>
+          </div>
+        </details>
+        <p class="settings-status" id="classification-status" role="status" hidden></p>
+        <nav class="classification-pagination" id="classification-pagination"
+          aria-label="Classification pages" hidden>
+          <button class="secondary-button" id="previous-classification-button"
+            type="button" aria-label="Previous classification">Previous</button>
+          <span id="classification-page-indicator" aria-live="polite"></span>
+          <button class="secondary-button" id="next-classification-button"
+            type="button" aria-label="Next classification">Next</button>
+        </nav>
+        <div class="classification-list" id="classification-list" aria-live="polite"></div>
+        <div class="classification-list-actions">
+          <button class="primary-button" id="add-classification-button" type="button">Add classification</button>
+        </div>
+        <div class="classification-footer">
+          <span>Rules are stored in <code>data/classifications.json</code>.</span>
+          <div class="classification-footer-actions">
+            <button class="secondary-button" id="review-unclassified-button"
+              type="button">Review unclassified</button>
+            <button class="secondary-button" id="apply-classifications-button"
+              type="button">Apply to existing transactions</button>
+          </div>
+        </div>
+      </article>
+    </main>
+
+    <dialog class="transaction-dialog classification-preview-dialog" id="classification-preview-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Apply classifications</p>
+            <h2>Review transaction changes</h2>
+            <p class="dialog-subtitle" id="classification-preview-summary"></p>
+          </div>
+          <button class="icon-button" id="close-classification-preview" type="button"
+            aria-label="Cancel and close classification preview">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <p class="form-error classification-preview-error" id="classification-preview-error" role="alert" hidden></p>
+        <div class="classification-preview-list" id="classification-preview-list"></div>
+        <footer class="form-footer">
+          <p>A safety backup will be created before these changes are written.</p>
+          <div class="form-footer-spacer"></div>
+          <button class="secondary-button" id="cancel-classification-preview" type="button">Cancel</button>
+          <button class="primary-button" id="confirm-classification-preview" type="button">Apply changes</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog class="transaction-dialog" id="unclassified-dialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Classification coverage</p>
+            <h2>Unclassified transactions</h2>
+            <p class="dialog-subtitle" id="unclassified-summary"></p>
+          </div>
+          <button class="icon-button" id="close-unclassified-dialog" type="button"
+            aria-label="Close unclassified transactions">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="transaction-filter-bar unclassified-filter-bar" aria-label="Filter unclassified transactions">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="unclassified-search" type="search" autocomplete="off" />
+          </label>
+          <label>
+            <span>Category</span>
+            <select id="unclassified-category-filter"><option value="">All categories</option></select>
+          </label>
+          <label>
+            <span>Account name</span>
+            <select id="unclassified-account-filter"><option value="">All accounts</option></select>
+          </label>
+          <label>
+            <span>Provider</span>
+            <select id="unclassified-provider-filter"><option value="">All providers</option></select>
+          </label>
+          <button class="text-button" id="clear-unclassified-filters" type="button">Clear filters</button>
+        </div>
+        <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
+        <div class="transaction-list" id="unclassified-list"></div>
+      </div>
+    </dialog>
+  </body>
+</html>

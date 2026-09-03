@@ -18,8 +18,11 @@ through the companion Chrome extension, or an official Apple Card transaction
 CSV. Transactions can also be added,
 edited, assigned an optional subcategory, annotated with optional freeform notes,
 flagged as refunded so they contribute $0 to totals, and deleted from the dashboard.
+Transactions can also use Automatic, Internal transfer, or Count normally budget
+treatment; excluded internal transfers retain their original amount but contribute
+$0 to monthly and annual calculations.
 Imported rows also retain a batch timestamp so accidental imports can be
-reviewed and removed from **Settings → Import history**.
+reviewed and removed from **Settings → Imports**.
 Editing from a monthly or annual transaction list returns to the refreshed list
 after the change is saved.
 
@@ -29,15 +32,15 @@ summary. Annual view includes monthly category spending bars that drill into
 subcategory stacks, an expandable exact-dollar monthly breakdown table, and a
 monthly net chart with green surpluses and red deficits. The browser remembers
 the selected view, period, and annual category/subcategory filter when navigating
-to Import data or Settings and back.
+to another page and back.
 
 Use the top-right navigation menu to move between the dashboard, Import data,
-and Settings. The first Settings tab creates timestamped snapshots in
+Classifications, and Settings. The first Settings tab creates timestamped snapshots in
 `data/backups/`, lists their dates and transaction counts, and restores a chosen
 snapshot after confirmation. Ledger creates a safety backup of the current CSV
 before every restore. Individual backups can be renamed without overwriting an
 existing backup, or permanently deleted after a separate confirmation. The
-Classifications tab manages ordered regular-expression
+dedicated Classifications page manages ordered regular-expression
 rules that assign categories and subcategories to future imports. Category and
 subcategory are available as separate match fields. Each rule also supports
 optional freeform notes that explain its rationale without affecting matching.
@@ -48,7 +51,7 @@ each inline Save persists the complete classification document immediately.
 General settings remain a placeholder.
 
 Use **Review unclassified** to open every blank-subcategory transaction in a
-filterable modal without leaving Classification settings or disturbing the
+filterable modal without leaving the Classifications page or disturbing the
 current draft.
 
 For direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card workflows, load `ledger_data_importer_extension`

@@ -61,7 +61,8 @@ let classifications = [];
 let classificationsBusy = false;
 let selectedClassificationIndex = 0;
 let classificationEdit = null;
-let ruleEdit = null;
+let ruleEdits = new Map();
+let pendingNewClassificationIndex = null;
 let pendingClassificationPreview = null;
 let unclassifiedTransactions = [];
 
@@ -301,7 +302,7 @@ function closeImportHistoryTransactionEditor() {
 
 function setImportHistoryEditBusy(busy) {
   state.importHistoryEditBusy = busy;
-  elements.importHistoryEditForm.querySelectorAll("button, input, textarea").forEach((control) => {
+  elements.importHistoryEditForm.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = busy;
   });
   elements.saveImportHistoryEdit.textContent = busy ? "Saving…" : "Save transaction";
@@ -462,7 +463,7 @@ async function createBackup() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not create backup (${response.status}).`);
     setStatus(`Backup created with ${payload.backup.transactionCount} transactions.`);
-    await loadBackups();
+    if (elements.backupList) await loadBackups();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Could not create backup.", "error");
   } finally {
@@ -671,6 +672,53 @@ function blankRule() {
   return { category: "", subcategory: "", description: "", accountName: "", provider: "", notes: "" };
 }
 
+const CLASSIFICATION_ACTIONS = [
+  { field: "description", label: "Description", type: "text", required: true },
+  { field: "category", label: "Category", type: "text", required: true },
+  { field: "subcategory", label: "Subcategory", type: "text" },
+  { field: "accountName", label: "Account name", type: "text", required: true },
+  { field: "accountType", label: "Account type", type: "text", required: true },
+  { field: "provider", label: "Provider", type: "text", required: true },
+  { field: "notes", label: "Notes", type: "textarea" },
+  { field: "refunded", label: "Refund status", type: "refund" },
+  {
+    field: "internalTransfer",
+    label: "Internal transfer treatment",
+    type: "internal-transfer",
+  },
+];
+
+function blankClassificationUpdates() {
+  return Object.fromEntries(CLASSIFICATION_ACTIONS.map(({ field }) => [field, null]));
+}
+
+function blankClassification() {
+  const updates = blankClassificationUpdates();
+  updates.category = "";
+  updates.subcategory = "";
+  return { updates, rules: [blankRule()] };
+}
+
+function classificationHasActions(classification) {
+  return CLASSIFICATION_ACTIONS.some(({ field }) => classification?.updates?.[field] !== null);
+}
+
+function classificationActionSignature(classification) {
+  return JSON.stringify(CLASSIFICATION_ACTIONS.map(({ field, type }) => {
+    const value = classification?.updates?.[field] ?? null;
+    if (value === null) return null;
+    if (type === "refund") return Boolean(value);
+    return String(value).trim();
+  }));
+}
+
+function duplicateClassificationIndex(index) {
+  const signature = classificationActionSignature(classifications[index]);
+  return classifications.findIndex((classification, candidateIndex) =>
+    candidateIndex !== index && classificationActionSignature(classification) === signature,
+  );
+}
+
 function classificationInput(label, value, onInput, { required = false } = {}) {
   const field = document.createElement("label");
   field.className = "classification-field";
@@ -694,16 +742,91 @@ function classificationNotes(value, onInput) {
   const field = document.createElement("label");
   field.className = "classification-field classification-rule-notes";
   const caption = document.createElement("span");
-  caption.textContent = "Notes";
+  caption.textContent = "Rule note (optional)";
   const textarea = document.createElement("textarea");
   textarea.value = value || "";
   textarea.rows = 3;
   textarea.maxLength = 2000;
-  textarea.placeholder = "Why does this rule exist?";
   textarea.disabled = classificationsBusy;
   textarea.addEventListener("input", () => onInput(textarea.value));
-  field.append(caption, textarea);
+  const help = document.createElement("small");
+  help.textContent = "For your reference only. This text is not used when matching transactions.";
+  field.append(caption, textarea, help);
   return field;
+}
+
+function classificationActionEditor(classification, index, definition) {
+  const { field, label, type } = definition;
+  const row = document.createElement("div");
+  row.className = "classification-action-field";
+  const toggleLabel = document.createElement("label");
+  toggleLabel.className = "classification-action-toggle";
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = classification.updates[field] !== null;
+  toggle.disabled = classificationsBusy;
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  toggleLabel.append(toggle, caption);
+
+  let control;
+  if (type === "refund" || type === "internal-transfer") {
+    control = document.createElement("select");
+    const choices = type === "refund"
+      ? [["true", "Mark as refunded"], ["false", "Mark as not refunded"]]
+      : [
+        ["true", "Mark as internal transfer"],
+        ["false", "Always count normally"],
+      ];
+    for (const [value, text] of choices) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      control.append(option);
+    }
+    control.value = classification.updates[field] === false ? "false" : "true";
+    control.addEventListener("change", () => {
+      classification.updates[field] = control.value === "true";
+    });
+  } else if (type === "textarea") {
+    control = document.createElement("textarea");
+    control.rows = 3;
+    control.maxLength = 2000;
+    control.value = classification.updates[field] ?? "";
+    control.addEventListener("input", () => { classification.updates[field] = control.value; });
+  } else {
+    control = document.createElement("input");
+    control.type = type;
+    control.autocomplete = "off";
+    control.value = classification.updates[field] ?? "";
+    control.addEventListener("input", () => { classification.updates[field] = control.value; });
+  }
+  control.disabled = classificationsBusy || !toggle.checked;
+  control.setAttribute("aria-label", `${label} value`);
+
+  toggle.addEventListener("change", () => {
+    if (toggle.checked) {
+      classification.updates[field] = ["refund", "internal-transfer"].includes(type)
+        ? control.value === "true"
+        : control.value;
+    } else {
+      classification.updates[field] = null;
+    }
+    control.disabled = classificationsBusy || !toggle.checked;
+    updateAddClassificationAvailability();
+    if (toggle.checked && !["refund", "internal-transfer"].includes(type)) control.focus();
+  });
+  row.append(toggleLabel, control);
+  return row;
+}
+
+function displayClassificationAction(definition, value) {
+  if (definition.field === "refunded") return value ? "Mark as refunded" : "Mark as not refunded";
+  if (definition.field === "internalTransfer") {
+    return value ? "Mark as internal transfer" : "Always count normally";
+  }
+  if (value === "") return "Clear value";
+  return String(value);
 }
 
 function smallAction(label, onClick, { danger = false, disabled = false } = {}) {
@@ -725,7 +848,15 @@ const RULE_FIELD_LABELS = {
 };
 
 function editorOpen() {
-  return classificationEdit !== null || ruleEdit !== null;
+  return classificationEdit !== null || ruleEdits.size > 0;
+}
+
+function ruleEditKey(classificationIndex, ruleIndex) {
+  return `${classificationIndex}:${ruleIndex}`;
+}
+
+function cloneValue(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function inlineEditorActions(onCancel, onSave) {
@@ -739,20 +870,80 @@ function inlineEditorActions(onCancel, onSave) {
   return actions;
 }
 
-function cancelRuleEdit() {
-  if (!ruleEdit) return;
-  const { classificationIndex, ruleIndex, original, isNew } = ruleEdit;
-  if (isNew) classifications[classificationIndex].rules.splice(ruleIndex, 1);
-  else classifications[classificationIndex].rules[ruleIndex] = original;
-  ruleEdit = null;
+function cancelRuleEdit(classificationIndex, ruleIndex) {
+  const key = ruleEditKey(classificationIndex, ruleIndex);
+  const edit = ruleEdits.get(key);
+  if (!edit) return;
+  if (edit.isNew && pendingNewClassificationIndex === classificationIndex) {
+    classifications.splice(classificationIndex, 1);
+    classificationEdit = null;
+    pendingNewClassificationIndex = null;
+    selectedClassificationIndex = Math.max(0, classificationIndex - 1);
+    ruleEdits.clear();
+  } else if (edit.isNew) {
+    classifications[classificationIndex].rules.splice(ruleIndex, 1);
+    ruleEdits.delete(key);
+  } else {
+    classifications[classificationIndex].rules[ruleIndex] = edit.original;
+    ruleEdits.delete(key);
+  }
   renderClassifications();
 }
 
-async function saveRuleEdit() {
-  if (!ruleEdit) return;
-  if (await persistClassifications("Rule saved.")) {
-    ruleEdit = null;
-    classificationEdit = null;
+async function saveRuleEdit(classificationIndex, ruleIndex) {
+  const key = ruleEditKey(classificationIndex, ruleIndex);
+  const targetEdit = ruleEdits.get(key);
+  if (!targetEdit) return;
+
+  if (pendingNewClassificationIndex === classificationIndex && classificationEdit?.isNew) {
+    try {
+      validateRule(classifications[classificationIndex].rules[ruleIndex], classificationIndex, ruleIndex);
+    } catch (error) {
+      setClassificationStatus(error.message, "error");
+      return;
+    }
+    ruleEdits.delete(key);
+    setClassificationStatus("Rule ready. Save the classification details to create it.");
+    renderClassifications();
+    return;
+  }
+
+  const candidate = cloneValue(classifications);
+  if (classificationEdit) {
+    candidate[classificationEdit.index].updates = cloneValue(classificationEdit.original.updates);
+  }
+  const otherEdits = [...ruleEdits.values()]
+    .filter((edit) => !(edit.classificationIndex === classificationIndex && edit.ruleIndex === ruleIndex))
+    .sort((left, right) => right.ruleIndex - left.ruleIndex);
+  for (const edit of otherEdits) {
+    if (edit.original === null) candidate[edit.classificationIndex].rules.splice(edit.ruleIndex, 1);
+    else candidate[edit.classificationIndex].rules[edit.ruleIndex] = cloneValue(edit.original);
+  }
+  const preservedEdits = [...ruleEdits.values()]
+    .filter((edit) => edit !== targetEdit)
+    .map((edit) => ({ ...edit, draft: cloneValue(classifications[edit.classificationIndex].rules[edit.ruleIndex]) }));
+  const classificationDraft = classificationEdit
+    ? cloneValue(classifications[classificationEdit.index].updates)
+    : null;
+  if (await persistClassifications("Rule saved.", candidate, () => {
+    ruleEdits = new Map();
+    if (classificationEdit && classificationDraft) {
+      classifications[classificationEdit.index].updates = classificationDraft;
+    }
+    for (const edit of preservedEdits) {
+      classifications[edit.classificationIndex].rules[edit.ruleIndex] = edit.draft;
+      ruleEdits.set(ruleEditKey(edit.classificationIndex, edit.ruleIndex), {
+        classificationIndex: edit.classificationIndex,
+        ruleIndex: edit.ruleIndex,
+        original: edit.original,
+        isNew: edit.isNew,
+      });
+    }
+  })) {
+    ruleEdits.delete(key);
+    if (targetEdit.isNew && pendingNewClassificationIndex === classificationIndex) {
+      pendingNewClassificationIndex = null;
+    }
     renderClassifications();
   }
 }
@@ -773,17 +964,23 @@ async function deleteRule(classificationIndex, ruleIndex) {
 function renderRule(rule, classificationIndex, ruleIndex) {
   const row = document.createElement("article");
   row.className = "classification-rule";
-  const partOfNewClassification = classificationEdit?.index === classificationIndex
-    && classificationEdit?.isNew && ruleIndex === 0;
-  const editing = partOfNewClassification || (
-    ruleEdit?.classificationIndex === classificationIndex && ruleEdit?.ruleIndex === ruleIndex
-  );
+  const key = ruleEditKey(classificationIndex, ruleIndex);
+  const editState = ruleEdits.get(key);
+  const editing = editState !== undefined;
 
   const header = document.createElement("div");
   header.className = "classification-rule-display-header";
+  const titleBlock = document.createElement("div");
+  titleBlock.className = "classification-rule-title";
   const number = document.createElement("strong");
   number.textContent = `Rule ${ruleIndex + 1}`;
-  header.append(number);
+  titleBlock.append(number);
+  if (!editing && rule.notes) {
+    const note = document.createElement("p");
+    note.textContent = rule.notes;
+    titleBlock.append(note);
+  }
+  header.append(titleBlock);
 
   if (editing) {
     const fields = document.createElement("div");
@@ -793,28 +990,29 @@ function renderRule(rule, classificationIndex, ruleIndex) {
         classifications[classificationIndex].rules[ruleIndex][field] = value;
       }));
     }
-    fields.append(classificationNotes(rule.notes, (value) => {
+    const note = classificationNotes(rule.notes, (value) => {
       classifications[classificationIndex].rules[ruleIndex].notes = value;
-    }));
+    });
     row.classList.add("is-editing");
-    row.append(header, fields);
-    if (!partOfNewClassification) {
-      row.append(inlineEditorActions(cancelRuleEdit, saveRuleEdit));
-    }
+    row.append(header, fields, note);
+    row.append(inlineEditorActions(
+      () => cancelRuleEdit(classificationIndex, ruleIndex),
+      () => saveRuleEdit(classificationIndex, ruleIndex),
+    ));
     return row;
   }
 
   const actions = document.createElement("div");
   actions.className = "classification-compact-actions";
   const edit = smallAction("Edit", () => {
-    ruleEdit = {
+    ruleEdits.set(key, {
       classificationIndex,
       ruleIndex,
       original: { ...rule },
       isNew: false,
-    };
+    });
     renderClassifications();
-  }, { disabled: ruleEdit !== null });
+  });
   const remove = smallAction("Delete rule", () => deleteRule(classificationIndex, ruleIndex), {
     danger: true,
     disabled: editorOpen(),
@@ -837,16 +1035,6 @@ function renderRule(rule, classificationIndex, ruleIndex) {
     line.append(name, arrow, pattern);
     summary.append(line);
   }
-  if (rule.notes) {
-    const notes = document.createElement("p");
-    notes.className = "classification-rule-notes-summary";
-    const label = document.createElement("span");
-    label.textContent = "Notes";
-    const value = document.createElement("span");
-    value.textContent = rule.notes;
-    notes.append(label, value);
-    summary.append(notes);
-  }
   row.append(header, summary);
   return row;
 }
@@ -856,10 +1044,13 @@ function cancelClassificationEdit() {
   const { index, original, isNew } = classificationEdit;
   if (isNew) {
     classifications.splice(index, 1);
+    ruleEdits = new Map(
+      [...ruleEdits.entries()].filter(([, edit]) => edit.classificationIndex !== index),
+    );
+    pendingNewClassificationIndex = null;
     selectedClassificationIndex = Math.max(0, Math.min(index - 1, classifications.length - 1));
   } else {
-    classifications[index].category = original.category;
-    classifications[index].subcategory = original.subcategory;
+    classifications[index].updates = original.updates;
   }
   classificationEdit = null;
   renderClassifications();
@@ -867,9 +1058,61 @@ function cancelClassificationEdit() {
 
 async function saveClassificationEdit() {
   if (!classificationEdit) return;
-  if (await persistClassifications("Classification saved.")) {
+  const editedIndex = classificationEdit.index;
+  const duplicateIndex = duplicateClassificationIndex(editedIndex);
+  if (duplicateIndex !== -1) {
+    setClassificationStatus(
+      `This classification already exists on page ${duplicateIndex + 1}. Add the rule there instead.`,
+      "error",
+    );
+    return;
+  }
+
+  if (classificationEdit.isNew && ruleEdits.has(ruleEditKey(editedIndex, 0))) {
+    try {
+      validateClassificationActions(classifications[editedIndex], editedIndex);
+    } catch (error) {
+      setClassificationStatus(error.message, "error");
+      return;
+    }
     classificationEdit = null;
-    ruleEdit = null;
+    setClassificationStatus("Classification details ready. Save its rule to create it.");
+    renderClassifications();
+    return;
+  }
+
+  const candidate = cloneValue(classifications);
+  const preservedEdits = [...ruleEdits.values()].map((edit) => ({
+    ...edit,
+    classificationSignature: classificationActionSignature(candidate[edit.classificationIndex]),
+    draft: cloneValue(classifications[edit.classificationIndex].rules[edit.ruleIndex]),
+  }));
+  const editsToRevert = [...ruleEdits.values()].sort(
+    (left, right) => right.ruleIndex - left.ruleIndex,
+  );
+  for (const edit of editsToRevert) {
+    if (edit.original === null) candidate[edit.classificationIndex].rules.splice(edit.ruleIndex, 1);
+    else candidate[edit.classificationIndex].rules[edit.ruleIndex] = cloneValue(edit.original);
+  }
+  if (await persistClassifications("Classification saved.", candidate, () => {
+    const remappedEdits = new Map();
+    for (const edit of preservedEdits) {
+      const classificationIndex = classifications.findIndex(
+        (classification) => classificationActionSignature(classification) === edit.classificationSignature,
+      );
+      if (classificationIndex === -1) continue;
+      classifications[classificationIndex].rules[edit.ruleIndex] = edit.draft;
+      remappedEdits.set(ruleEditKey(classificationIndex, edit.ruleIndex), {
+        classificationIndex,
+        ruleIndex: edit.ruleIndex,
+        original: edit.original,
+        isNew: edit.isNew,
+      });
+    }
+    ruleEdits = remappedEdits;
+  })) {
+    classificationEdit = null;
+    pendingNewClassificationIndex = null;
     renderClassifications();
   }
 }
@@ -899,14 +1142,13 @@ function renderClassification(classification, index) {
   if (editing) {
     const destination = document.createElement("div");
     destination.className = "classification-destination";
-    destination.append(
-      classificationInput("Category", classification.category, (value) => {
-        classifications[index].category = value;
-      }, { required: true }),
-      classificationInput("Subcategory", classification.subcategory, (value) => {
-        classifications[index].subcategory = value;
-      }),
-    );
+    const guidance = document.createElement("p");
+    guidance.className = "classification-action-guidance";
+    guidance.textContent = "Select each field this classification should change. Unselected fields stay untouched.";
+    destination.append(guidance);
+    for (const definition of CLASSIFICATION_ACTIONS) {
+      destination.append(classificationActionEditor(classification, index, definition));
+    }
     card.append(
       header,
       destination,
@@ -919,14 +1161,13 @@ function renderClassification(classification, index) {
       smallAction("Edit", () => {
         classificationEdit = {
           index,
-          original: {
-            category: classification.category,
-            subcategory: classification.subcategory,
-          },
+          original: { updates: structuredClone(classification.updates) },
           isNew: false,
         };
         renderClassifications();
-      }, { disabled: classificationEdit !== null }),
+      }, {
+        disabled: classificationEdit !== null || pendingNewClassificationIndex === index,
+      }),
       smallAction("Delete classification", () => deleteClassification(index), {
         danger: true,
         disabled: editorOpen(),
@@ -935,14 +1176,13 @@ function renderClassification(classification, index) {
     header.append(actions);
     const summary = document.createElement("dl");
     summary.className = "classification-summary";
-    for (const [label, value] of [
-      ["Category", classification.category],
-      ["Subcategory", classification.subcategory || "None"],
-    ]) {
+    for (const definition of CLASSIFICATION_ACTIONS) {
+      const value = classification.updates[definition.field];
+      if (value === null) continue;
       const term = document.createElement("dt");
-      term.textContent = label;
+      term.textContent = definition.label;
       const detail = document.createElement("dd");
-      detail.textContent = value;
+      detail.textContent = displayClassificationAction(definition, value);
       summary.append(term, detail);
     }
     card.append(header, summary);
@@ -955,7 +1195,12 @@ function renderClassification(classification, index) {
   const addRule = smallAction("Add rule", () => {
     const ruleIndex = classifications[index].rules.length;
     classifications[index].rules.push(blankRule());
-    ruleEdit = { classificationIndex: index, ruleIndex, original: null, isNew: true };
+    ruleEdits.set(ruleEditKey(index, ruleIndex), {
+      classificationIndex: index,
+      ruleIndex,
+      original: null,
+      isNew: true,
+    });
     renderClassifications();
   }, { disabled: editorOpen() });
   addRule.classList.add("classification-add-rule");
@@ -969,7 +1214,11 @@ function renderClassification(classification, index) {
 }
 
 function classificationCanBeFollowedByAnother(classification) {
-  if (!classification?.category?.trim()) return false;
+  if (!classificationHasActions(classification)) return false;
+  for (const { field, required } of CLASSIFICATION_ACTIONS) {
+    if (required && classification.updates[field] !== null
+      && !String(classification.updates[field]).trim()) return false;
+  }
   return classification.rules.length > 0 && classification.rules.every((rule) =>
     [rule.category, rule.subcategory, rule.description, rule.accountName, rule.provider]
       .some((matcher) => matcher.trim()),
@@ -982,7 +1231,7 @@ function updateAddClassificationAvailability() {
   elements.addClassification.disabled = classificationsBusy || editorOpen() || !canAdd;
   elements.addClassification.title = canAdd
     ? ""
-    : "Complete the last classification with a category and at least one matcher in every rule first.";
+    : "Complete the last classification with at least one action and one matcher in every rule first.";
 }
 
 function renderClassifications() {
@@ -1013,28 +1262,43 @@ function renderClassifications() {
   );
 }
 
-function validateClassifications() {
-  for (const [classificationIndex, classification] of classifications.entries()) {
-    if (!classification.category.trim()) {
-      throw new Error(`Classification ${classificationIndex + 1} needs a category.`);
+function validateClassificationActions(classification, classificationIndex) {
+  if (!classificationHasActions(classification)) {
+    throw new Error(`Classification ${classificationIndex + 1} needs at least one action.`);
+  }
+  for (const { field, label, required } of CLASSIFICATION_ACTIONS) {
+    const value = classification.updates[field];
+    if (value === null) continue;
+    if (required && !String(value).trim()) {
+      throw new Error(`Classification ${classificationIndex + 1} needs a ${label.toLowerCase()} value.`);
     }
+  }
+}
+
+function validateRule(rule, classificationIndex, ruleIndex) {
+  const matchers = [rule.category, rule.subcategory, rule.description, rule.accountName, rule.provider];
+  if (!matchers.some((value) => value.trim())) {
+    throw new Error(`Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} needs a matcher.`);
+  }
+  for (const value of matchers.filter((matcher) => matcher.trim())) {
+    try {
+      new RegExp(value, "i");
+    } catch (error) {
+      throw new Error(
+        `Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} has an invalid regular expression.`,
+      );
+    }
+  }
+}
+
+function validateClassifications(candidate = classifications) {
+  for (const [classificationIndex, classification] of candidate.entries()) {
+    validateClassificationActions(classification, classificationIndex);
     if (classification.rules.length === 0) {
       throw new Error(`Classification ${classificationIndex + 1} needs at least one rule.`);
     }
     for (const [ruleIndex, rule] of classification.rules.entries()) {
-      const matchers = [rule.category, rule.subcategory, rule.description, rule.accountName, rule.provider];
-      if (!matchers.some((value) => value.trim())) {
-        throw new Error(`Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} needs a matcher.`);
-      }
-      for (const value of matchers.filter((matcher) => matcher.trim())) {
-        try {
-          new RegExp(value, "i");
-        } catch (error) {
-          throw new Error(
-            `Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} has an invalid regular expression.`,
-          );
-        }
-      }
+      validateRule(rule, classificationIndex, ruleIndex);
     }
   }
 }
@@ -1056,24 +1320,34 @@ async function loadClassifications() {
   }
 }
 
-async function persistClassifications(successMessage) {
+async function persistClassifications(successMessage, candidate = classifications, afterLoad = null) {
   try {
-    validateClassifications();
+    validateClassifications(candidate);
   } catch (error) {
     setClassificationStatus(error.message, "error");
     return false;
   }
+  const selectedSignature = candidate[selectedClassificationIndex]
+    ? classificationActionSignature(candidate[selectedClassificationIndex])
+    : null;
   classificationsBusy = true;
   renderClassifications();
   try {
     const response = await fetch("/api/classifications", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ version: 1, classifications }),
+      body: JSON.stringify({ version: 2, classifications: candidate }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save classifications (${response.status}).`);
     classifications = payload.classifications;
+    if (selectedSignature !== null) {
+      const sortedIndex = classifications.findIndex(
+        (classification) => classificationActionSignature(classification) === selectedSignature,
+      );
+      if (sortedIndex !== -1) selectedClassificationIndex = sortedIndex;
+    }
+    if (afterLoad) afterLoad();
     setClassificationStatus(successMessage);
     return true;
   } catch (error) {
@@ -1085,8 +1359,14 @@ async function persistClassifications(successMessage) {
   }
 }
 
-function categoryPath(value) {
-  return value.subcategory ? `${value.category} / ${value.subcategory}` : value.category;
+function formatPreviewActionValue(field, value) {
+  if (field === "refunded") return value ? "Refunded" : "Not refunded";
+  if (field === "internalTransfer") {
+    if (value === null) return "Automatic";
+    return value ? "Internal transfer" : "Count normally";
+  }
+  if (value === "") return "Blank";
+  return String(value);
 }
 
 function classificationPreviewRow(change) {
@@ -1100,22 +1380,31 @@ function classificationPreviewRow(change) {
   metadata.textContent = `${transactionDateFormatter.format(new Date(`${change.date}T12:00:00Z`))} · ${change.accountName} · ${change.provider}`;
   details.append(description, metadata);
 
-  const transition = document.createElement("div");
-  transition.className = "classification-preview-transition";
-  const before = document.createElement("span");
-  before.textContent = categoryPath(change.before);
-  const arrow = document.createElement("span");
-  arrow.className = "classification-preview-arrow";
-  arrow.textContent = "→";
-  arrow.setAttribute("aria-hidden", "true");
-  const after = document.createElement("strong");
-  after.textContent = categoryPath(change.after);
-  transition.append(before, arrow, after);
+  const transitions = document.createElement("div");
+  transitions.className = "classification-preview-transitions";
+  for (const field of change.changedFields) {
+    const definition = CLASSIFICATION_ACTIONS.find((candidate) => candidate.field === field);
+    const transition = document.createElement("div");
+    transition.className = "classification-preview-transition";
+    const label = document.createElement("span");
+    label.className = "classification-preview-field";
+    label.textContent = definition?.label || field;
+    const before = document.createElement("span");
+    before.textContent = formatPreviewActionValue(field, change.before[field]);
+    const arrow = document.createElement("span");
+    arrow.className = "classification-preview-arrow";
+    arrow.textContent = "→";
+    arrow.setAttribute("aria-hidden", "true");
+    const after = document.createElement("strong");
+    after.textContent = formatPreviewActionValue(field, change.after[field]);
+    transition.append(label, before, arrow, after);
+    transitions.append(transition);
+  }
 
   const amount = document.createElement("span");
   amount.className = "classification-preview-amount";
   amount.textContent = currencyFormatter.format(change.amount);
-  row.append(details, transition, amount);
+  row.append(details, transitions, amount);
   return row;
 }
 
@@ -1141,7 +1430,7 @@ async function previewClassificationsForExisting() {
   elements.applyClassifications.textContent = "Preparing preview…";
   renderClassifications();
   try {
-    const document = JSON.parse(JSON.stringify({ version: 1, classifications }));
+    const document = JSON.parse(JSON.stringify({ version: 2, classifications }));
     const response = await fetch("/api/classifications/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1154,7 +1443,7 @@ async function previewClassificationsForExisting() {
     if (preview.changed === 0) {
       const alreadyClassified = preview.matched || 0;
       const matchMessage = alreadyClassified
-        ? `${alreadyClassified} matched, but already have the selected classification.`
+        ? `${alreadyClassified} matched, but already have the selected values.`
         : "No transactions matched these rules.";
       setClassificationStatus(`Checked ${preview.total} transactions. ${matchMessage}`);
       return;
@@ -1164,7 +1453,7 @@ async function previewClassificationsForExisting() {
     const unchangedMatches = Math.max(0, matched - preview.changed);
     elements.previewSummary.textContent =
       `${matched} matched · ${preview.changed} will be modified · ` +
-      `${unchangedMatches} already classified.`;
+      `${unchangedMatches} already have the selected values.`;
     elements.previewError.hidden = true;
     elements.previewError.textContent = "";
     elements.confirmPreview.textContent = `Apply changes (${preview.changed})`;
@@ -1209,7 +1498,7 @@ async function confirmClassificationPreview() {
     setClassificationStatus(
       `Updated ${result.changed} of ${result.total} transactions. A safety backup was created.`,
     );
-    await loadBackups();
+    if (elements.backupList) await loadBackups();
   } catch (error) {
     showPreviewError(error instanceof Error ? error.message : "Could not apply classifications.");
   } finally {
@@ -1225,77 +1514,89 @@ async function confirmClassificationPreview() {
   }
 }
 
-elements.createBackup.addEventListener("click", createBackup);
-elements.refreshBackups.addEventListener("click", loadBackups);
-elements.refreshImportHistory.addEventListener("click", loadImportHistory);
-elements.closeImportHistoryDialog.addEventListener("click", closeImportHistoryDialog);
-elements.importHistoryDialog.addEventListener("cancel", (event) => {
-  event.preventDefault();
-  closeImportHistoryDialog();
-});
-elements.importHistoryDialog.addEventListener("click", (event) => {
-  if (event.target === elements.importHistoryDialog) closeImportHistoryDialog();
-});
-elements.importHistoryEditForm.addEventListener("submit", saveImportHistoryTransaction);
-elements.closeImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
-elements.cancelImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
-elements.importHistoryEditDialog.addEventListener("cancel", (event) => {
-  event.preventDefault();
-  closeImportHistoryTransactionEditor();
-});
-elements.importHistoryEditDialog.addEventListener("click", (event) => {
-  if (event.target === elements.importHistoryEditDialog) closeImportHistoryTransactionEditor();
-});
-elements.addClassification.addEventListener("click", () => {
+if (elements.createBackup) {
+  elements.createBackup.addEventListener("click", createBackup);
+  elements.refreshBackups.addEventListener("click", loadBackups);
+  elements.refreshImportHistory.addEventListener("click", loadImportHistory);
+  elements.closeImportHistoryDialog.addEventListener("click", closeImportHistoryDialog);
+  elements.importHistoryDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeImportHistoryDialog();
+  });
+  elements.importHistoryDialog.addEventListener("click", (event) => {
+    if (event.target === elements.importHistoryDialog) closeImportHistoryDialog();
+  });
+  elements.importHistoryEditForm.addEventListener("submit", saveImportHistoryTransaction);
+  elements.closeImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
+  elements.cancelImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
+  elements.importHistoryEditDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeImportHistoryTransactionEditor();
+  });
+  elements.importHistoryEditDialog.addEventListener("click", (event) => {
+    if (event.target === elements.importHistoryEditDialog) closeImportHistoryTransactionEditor();
+  });
+  initializeSettingsTabs();
+  loadBackups();
+}
+
+if (elements.addClassification) {
+  elements.addClassification.addEventListener("click", () => {
   const lastClassification = classifications.at(-1);
   if (lastClassification && !classificationCanBeFollowedByAnother(lastClassification)) return;
-  classifications.push({ category: "", subcategory: "", rules: [blankRule()] });
+  classifications.push(blankClassification());
   selectedClassificationIndex = classifications.length - 1;
+  pendingNewClassificationIndex = selectedClassificationIndex;
   classificationEdit = { index: selectedClassificationIndex, original: null, isNew: true };
+  ruleEdits.set(ruleEditKey(selectedClassificationIndex, 0), {
+    classificationIndex: selectedClassificationIndex,
+    ruleIndex: 0,
+    original: null,
+    isNew: true,
+  });
   renderClassifications();
-});
-elements.previousClassification.addEventListener("click", () => {
+  });
+  elements.previousClassification.addEventListener("click", () => {
   if (editorOpen() || selectedClassificationIndex === 0) return;
   selectedClassificationIndex -= 1;
   renderClassifications();
-});
-elements.nextClassification.addEventListener("click", () => {
+  });
+  elements.nextClassification.addEventListener("click", () => {
   if (editorOpen() || selectedClassificationIndex >= classifications.length - 1) return;
   selectedClassificationIndex += 1;
   renderClassifications();
-});
-elements.reviewUnclassified.addEventListener("click", openUnclassifiedDialog);
-elements.unclassifiedSearch.addEventListener("input", renderUnclassifiedTransactions);
-elements.unclassifiedCategory.addEventListener("change", renderUnclassifiedTransactions);
-elements.unclassifiedAccount.addEventListener("change", renderUnclassifiedTransactions);
-elements.unclassifiedProvider.addEventListener("change", renderUnclassifiedTransactions);
-elements.clearUnclassifiedFilters.addEventListener("click", () => {
+  });
+  elements.reviewUnclassified.addEventListener("click", openUnclassifiedDialog);
+  elements.unclassifiedSearch.addEventListener("input", renderUnclassifiedTransactions);
+  elements.unclassifiedCategory.addEventListener("change", renderUnclassifiedTransactions);
+  elements.unclassifiedAccount.addEventListener("change", renderUnclassifiedTransactions);
+  elements.unclassifiedProvider.addEventListener("change", renderUnclassifiedTransactions);
+  elements.clearUnclassifiedFilters.addEventListener("click", () => {
   elements.unclassifiedSearch.value = "";
   elements.unclassifiedCategory.value = "";
   elements.unclassifiedAccount.value = "";
   elements.unclassifiedProvider.value = "";
   renderUnclassifiedTransactions();
   elements.unclassifiedSearch.focus();
-});
-elements.closeUnclassified.addEventListener("click", closeUnclassifiedDialog);
-elements.unclassifiedDialog.addEventListener("cancel", (event) => {
+  });
+  elements.closeUnclassified.addEventListener("click", closeUnclassifiedDialog);
+  elements.unclassifiedDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   closeUnclassifiedDialog();
-});
-elements.unclassifiedDialog.addEventListener("click", (event) => {
+  });
+  elements.unclassifiedDialog.addEventListener("click", (event) => {
   if (event.target === elements.unclassifiedDialog) closeUnclassifiedDialog();
-});
-elements.applyClassifications.addEventListener("click", previewClassificationsForExisting);
-elements.closePreview.addEventListener("click", closeClassificationPreview);
-elements.cancelPreview.addEventListener("click", closeClassificationPreview);
-elements.confirmPreview.addEventListener("click", confirmClassificationPreview);
-elements.previewDialog.addEventListener("cancel", (event) => {
+  });
+  elements.applyClassifications.addEventListener("click", previewClassificationsForExisting);
+  elements.closePreview.addEventListener("click", closeClassificationPreview);
+  elements.cancelPreview.addEventListener("click", closeClassificationPreview);
+  elements.confirmPreview.addEventListener("click", confirmClassificationPreview);
+  elements.previewDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   closeClassificationPreview();
-});
-elements.previewDialog.addEventListener("click", (event) => {
+  });
+  elements.previewDialog.addEventListener("click", (event) => {
   if (event.target === elements.previewDialog) closeClassificationPreview();
-});
-initializeSettingsTabs();
-loadBackups();
-loadClassifications();
+  });
+  loadClassifications();
+}

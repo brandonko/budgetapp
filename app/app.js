@@ -112,12 +112,15 @@ const elements = {
   annualNetChart: document.querySelector("#annual-net-chart"),
   viewExcludedButton: document.querySelector("#view-excluded-button"),
   excludedButtonLabel: document.querySelector("#excluded-button-label"),
+  viewAnnualExcludedButton: document.querySelector("#view-annual-excluded-button"),
+  annualExcludedButtonLabel: document.querySelector("#annual-excluded-button-label"),
   addTransactionButton: document.querySelector("#add-transaction-button"),
   viewAllButton: document.querySelector("#view-all-button"),
   dialog: document.querySelector("#transaction-dialog"),
   dialogEyebrow: document.querySelector("#dialog-eyebrow"),
   dialogTitle: document.querySelector("#dialog-title"),
   dialogSubtitle: document.querySelector("#dialog-subtitle"),
+  internalTransferInfo: document.querySelector("#internal-transfer-info"),
   transactionList: document.querySelector("#transaction-list"),
   transactionSearch: document.querySelector("#transaction-search"),
   transactionAccountFilter: document.querySelector("#transaction-account-filter"),
@@ -176,8 +179,8 @@ function selectedPeriodLabel() {
   return state.viewMode === "annual" ? state.selectedYear : monthLabel(selectedMonthKey());
 }
 
-function isBillPayment(transaction) {
-  return transaction._isBillPayment === true;
+function isInternalTransfer(transaction) {
+  return transactionUi.isInternalTransfer(transaction);
 }
 
 function isIncome(transaction) {
@@ -185,7 +188,9 @@ function isIncome(transaction) {
 }
 
 function displayAmount(transaction) {
-  if (transactionUi.hasTransactionFlag(transaction, "refunded")) return 0;
+  if (transactionUi.hasTransactionFlag(transaction, "refunded") || isInternalTransfer(transaction)) {
+    return 0;
+  }
   return isIncome(transaction) ? Math.abs(transaction.amount) : transaction.amount;
 }
 
@@ -204,25 +209,25 @@ function transactionsForSelectedPeriod() {
         state.viewMode === "annual"
           ? yearKey(transaction) === state.selectedYear
           : monthKey(transaction) === selectedMonthKey();
-      return inPeriod && !isBillPayment(transaction);
+      return inPeriod && !isInternalTransfer(transaction);
     })
     .sort(compareLatestFirst);
 }
 
-function excludedBillPaymentsForSelectedPeriod() {
+function excludedInternalTransfersForSelectedPeriod() {
   return state.transactions
     .filter((transaction) => {
       const inPeriod =
         state.viewMode === "annual"
           ? yearKey(transaction) === state.selectedYear
           : monthKey(transaction) === selectedMonthKey();
-      return inPeriod && isBillPayment(transaction);
+      return inPeriod && isInternalTransfer(transaction);
     })
     .sort(compareLatestFirst);
 }
 
 function availableMonths() {
-  return [...new Set(state.transactions.filter((transaction) => !isBillPayment(transaction)).map(monthKey))]
+  return [...new Set(state.transactions.filter((transaction) => !isInternalTransfer(transaction)).map(monthKey))]
     .sort()
     .reverse();
 }
@@ -893,6 +898,7 @@ function openTransactionDialog(title, transactions, context, { preserveFilters =
   state.transactionDialogTransactions = [...transactions].sort(compareLatestFirst);
   elements.dialogEyebrow.textContent = selectedPeriodLabel();
   elements.dialogTitle.textContent = title;
+  elements.internalTransferInfo.hidden = context.type !== "excluded";
   configureTransactionFilters(state.transactionDialogTransactions, filters);
   renderTransactionDialogTransactions();
   elements.dialog.showModal();
@@ -906,7 +912,7 @@ function reopenTransactionDialog(context) {
       (transaction) => transaction.category === context.category,
     );
   } else if (context.type === "excluded") {
-    transactions = excludedBillPaymentsForSelectedPeriod();
+    transactions = excludedInternalTransfersForSelectedPeriod();
   } else {
     transactions = transactionsForSelectedPeriod();
   }
@@ -944,7 +950,7 @@ function clearFormError() {
 
 function setFormBusy(isBusy) {
   state.formBusy = isBusy;
-  elements.form.querySelectorAll("button, input, textarea").forEach((control) => {
+  elements.form.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = isBusy;
   });
   elements.saveTransactionButton.textContent = isBusy ? "Saving…" : "Save transaction";
@@ -1060,7 +1066,7 @@ async function deleteTransaction() {
 
 function renderDashboard() {
   const transactions = transactionsForSelectedPeriod();
-  const excludedBillPayments = excludedBillPaymentsForSelectedPeriod();
+  const excludedInternalTransfers = excludedInternalTransfersForSelectedPeriod();
   const annual = state.viewMode === "annual";
   elements.monthControl.hidden = annual;
   elements.overviewEyebrow.textContent = annual ? "Annual overview" : "Monthly overview";
@@ -1078,10 +1084,13 @@ function renderDashboard() {
     renderAnnualCharts(transactions);
   }
   elements.viewAllButton.disabled = transactions.length === 0;
-  elements.viewExcludedButton.hidden = excludedBillPayments.length === 0;
-  elements.excludedButtonLabel.textContent = `View ${excludedBillPayments.length} excluded bill-payment ${
-    excludedBillPayments.length === 1 ? "transaction" : "transactions"
-  }`;
+  const excludedLabel =
+    `View ${excludedInternalTransfers.length} excluded internal transfer transactions`;
+  elements.excludedButtonLabel.textContent = excludedLabel;
+  elements.annualExcludedButtonLabel.textContent = excludedLabel;
+  elements.viewExcludedButton.hidden = annual || excludedInternalTransfers.length === 0;
+  elements.viewAnnualExcludedButton.hidden = !annual;
+  elements.viewAnnualExcludedButton.disabled = excludedInternalTransfers.length === 0;
 }
 
 function setError(message, code = "") {
@@ -1151,12 +1160,15 @@ elements.viewAllButton.addEventListener("click", () => {
     title: "All transactions",
   });
 });
-elements.viewExcludedButton.addEventListener("click", () => {
-  openTransactionDialog("Excluded bill payments", excludedBillPaymentsForSelectedPeriod(), {
+function openExcludedInternalTransfers() {
+  openTransactionDialog("Excluded internal transfers", excludedInternalTransfersForSelectedPeriod(), {
     type: "excluded",
-    title: "Excluded bill payments",
+    title: "Excluded internal transfers",
   });
-});
+}
+
+elements.viewExcludedButton.addEventListener("click", openExcludedInternalTransfers);
+elements.viewAnnualExcludedButton.addEventListener("click", openExcludedInternalTransfers);
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
 elements.transactionAccountFilter.addEventListener("change", renderTransactionDialogTransactions);

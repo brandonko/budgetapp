@@ -15,6 +15,8 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('textarea name="notes"', upload_html)
         self.assertIn('input id="field-refunded" name="refunded"', index_html)
         self.assertIn('input name="refunded" type="checkbox"', upload_html)
+        self.assertIn('select id="field-internal-transfer-treatment" name="internalTransferTreatment"', index_html)
+        self.assertIn('select name="internalTransferTreatment"', upload_html)
         self.assertIn('name="subcategory"', index_html)
         self.assertIn('name="subcategory"', upload_html)
 
@@ -27,6 +29,9 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("transactionUi.transactionFromEditor", javascript)
         self.assertIn('flags.add("refunded")', shared_javascript)
         self.assertIn('refunded.checked = hasTransactionFlag(transaction, "refunded")', shared_javascript)
+        self.assertIn('flags.add("internal-transfer")', shared_javascript)
+        self.assertIn('flags.add("include-in-budget")', shared_javascript)
+        self.assertIn("transactionUi.isInternalTransfer(transaction)", javascript)
         self.assertIn('transactionUi.hasTransactionFlag(transaction, "refunded")', javascript)
 
     def test_dashboard_and_import_use_the_shared_transaction_list_component(self) -> None:
@@ -85,8 +90,43 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("monthly.set(month, displaySum(", javascript)
         self.assertNotIn("function sum(transactions)", javascript)
 
-    def test_settings_can_open_an_all_dates_unclassified_review_modal(self) -> None:
-        html = (ROOT / "app" / "settings.html").read_text(encoding="utf-8")
+    def test_internal_transfers_are_excluded_and_available_in_monthly_or_annual_review(self) -> None:
+        html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function excludedInternalTransfersForSelectedPeriod", javascript)
+        self.assertIn("state.viewMode === \"annual\"", javascript)
+        self.assertIn("inPeriod && !isInternalTransfer(transaction)", javascript)
+        self.assertIn(
+            "View ${excludedInternalTransfers.length} excluded internal transfer transactions",
+            javascript,
+        )
+        self.assertIn("Excluded internal transfers", javascript)
+        self.assertIn("View excluded internal transfer transactions", html)
+        self.assertIn('id="view-annual-excluded-button"', html)
+        self.assertIn('id="annual-excluded-button-label"', html)
+        self.assertNotIn("Select a category to focus the spending chart.", html)
+        self.assertIn("elements.viewExcludedButton.hidden = annual", javascript)
+        self.assertIn("elements.viewAnnualExcludedButton.hidden = !annual", javascript)
+        self.assertIn("openExcludedInternalTransfers", javascript)
+        self.assertIn('id="internal-transfer-info"', html)
+        self.assertIn("How automatic matching works", html)
+        self.assertIn("transactions from different accounts", html)
+        self.assertIn('context.type !== "excluded"', javascript)
+
+    def test_excluded_rows_show_their_original_amount_with_strikethrough(self) -> None:
+        shared_javascript = (ROOT / "app" / "transaction-ui.js").read_text(encoding="utf-8")
+        css = (ROOT / "app" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("const originalDisplayedAmount = income", shared_javascript)
+        self.assertIn("refunded || internalTransfer", shared_javascript)
+        self.assertIn('? originalDisplayedAmount', shared_javascript)
+        excluded_style = css.split(
+            ".transaction-row--refunded .transaction-amount,", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("color: var(--muted)", excluded_style)
+        self.assertIn("text-decoration: line-through", excluded_style)
+
+    def test_classifications_page_can_open_an_all_dates_unclassified_review_modal(self) -> None:
+        html = (ROOT / "app" / "classifications.html").read_text(encoding="utf-8")
         javascript = (ROOT / "app" / "settings.js").read_text(encoding="utf-8")
         self.assertIn('id="review-unclassified-button"', html)
         self.assertIn('id="unclassified-dialog"', html)

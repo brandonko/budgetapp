@@ -1146,6 +1146,7 @@ function importedTransactionRowOptions(transaction, index) {
     shortMonthFormatter,
     leadingControl: selection,
     duplicate: transaction._isDuplicate,
+    needsClassification: transaction._classificationMatched === false,
     disabled: state.reviewCommitted,
     onEdit: () => openImportedTransactionEditor(index),
   };
@@ -1190,7 +1191,7 @@ function clearEditError() {
 
 function setEditBusy(busy) {
   state.editBusy = busy;
-  elements.editForm.querySelectorAll("button, input, textarea").forEach((control) => {
+  elements.editForm.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = busy;
   });
   elements.saveEdit.textContent = busy ? "Saving…" : "Save transaction";

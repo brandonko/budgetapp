@@ -8,7 +8,7 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from server import find_bill_payment_ids  # noqa: E402
+from server import find_bill_payment_ids, public_state  # noqa: E402
 
 
 def transaction(
@@ -18,15 +18,18 @@ def transaction(
     category: str,
     account_type: str,
     description: str = "Test transaction",
+    flags: str = "",
+    account_name: str | None = None,
 ) -> dict[str, object]:
     return {
         "date": date,
         "description": description,
         "amount": amount,
         "category": category,
-        "accountName": f"{account_type} account",
+        "accountName": account_name or f"{account_type} account",
         "accountType": account_type,
         "provider": "Test provider",
+        "flags": flags,
     }
 
 
@@ -73,6 +76,94 @@ class BillPaymentReconciliationTests(unittest.TestCase):
         ]
 
         self.assertEqual(find_bill_payment_ids(transactions), set())
+
+    def test_matches_transfer_between_two_bank_accounts(self) -> None:
+        transactions = [
+            transaction(
+                date="2026-08-24",
+                amount=2223.09,
+                category="Transfer",
+                account_type="BANK",
+                account_name="Savings Account",
+                description="Online Banking transfer to CHK 2051 Confirmation# 11714",
+            ),
+            transaction(
+                date="2026-08-24",
+                amount=-2223.09,
+                category="Transfer",
+                account_type="BANK",
+                account_name="Checking Account",
+                description="Online Banking transfer from SAV 9417 Confirmation# 11714",
+            ),
+        ]
+
+        self.assertEqual(find_bill_payment_ids(transactions), {0, 1})
+
+    def test_does_not_pair_opposite_entries_within_the_same_account(self) -> None:
+        transactions = [
+            transaction(
+                date="2026-08-24",
+                amount=100.00,
+                category="Transfer",
+                account_type="BANK",
+                account_name="Checking Account",
+            ),
+            transaction(
+                date="2026-08-24",
+                amount=-100.00,
+                category="Income",
+                account_type="BANK",
+                account_name="Checking Account",
+            ),
+        ]
+
+        self.assertEqual(find_bill_payment_ids(transactions), set())
+
+    def test_manual_internal_transfer_is_excluded_without_an_automatic_pair(self) -> None:
+        transactions = [
+            transaction(
+                date="2026-05-08",
+                amount=150.00,
+                category="Transfer",
+                account_type="BANK",
+                flags="internal-transfer",
+            ),
+        ]
+
+        [row] = public_state(transactions, "revision")["transactions"]
+        self.assertTrue(row["_isInternalTransfer"])
+        self.assertEqual(row["_internalTransferSource"], "manual")
+
+    def test_include_in_budget_overrides_automatic_pair_detection(self) -> None:
+        transactions = [
+            transaction(
+                date="2026-01-08",
+                amount=-34.37,
+                category="Income",
+                account_type="CREDIT",
+                flags="include-in-budget",
+            ),
+            transaction(
+                date="2026-01-08",
+                amount=34.37,
+                category="Transfer",
+                account_type="BANK",
+            ),
+        ]
+
+        self.assertEqual(find_bill_payment_ids(transactions), set())
+        rows = public_state(transactions, "revision")["transactions"]
+        self.assertFalse(any(row["_isInternalTransfer"] for row in rows))
+
+    def test_automatic_pair_is_exposed_as_internal_transfer(self) -> None:
+        transactions = [
+            transaction(date="2026-01-08", amount=-34.37, category="Income", account_type="CREDIT"),
+            transaction(date="2026-01-08", amount=34.37, category="Transfer", account_type="BANK"),
+        ]
+
+        rows = public_state(transactions, "revision")["transactions"]
+        self.assertTrue(all(row["_isInternalTransfer"] for row in rows))
+        self.assertTrue(all(row["_internalTransferSource"] == "automatic" for row in rows))
 
 
 if __name__ == "__main__":

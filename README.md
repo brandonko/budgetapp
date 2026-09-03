@@ -12,12 +12,12 @@ The dashboard includes:
 - Top-level category breakdowns with dollar-based subcategory summaries and latest-first transaction lists
 - Monthly/annual view selection with independent year and month controls
 - Browser-local restoration of the last selected reporting view and period
-- A shared navigation menu for the dashboard, data imports, and settings
+- A shared navigation menu for the dashboard, data imports, classifications, and settings
 - Manual transaction creation, editing, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
-- One-to-one reconciliation of credit-card bill-payment transfers
+- Automatic and manually overridable internal-transfer exclusion
 - Ordered, regular-expression classification rules for import categories and subcategories
 - Neutral spending presentation with green surpluses and red deficits
 
@@ -116,12 +116,14 @@ segments. Apple Card drives the official date-range CSV export form. All six use
 receives site credentials or cookies. Progress is shown on the Import data
 page, and data is sent through a random, one-hour import session rather than
 being left in Downloads. Parsed rows are staged in a review modal before the
-master CSV changes. New rows are selected by default; duplicates remain visible,
-highlighted, and deselected. Every field can be corrected, rows can be removed,
+master CSV changes. Repeated whitespace in imported transaction text is collapsed
+before classification matching and storage. New rows are selected by default; duplicates remain visible,
+highlighted, and deselected. Rows that match no classification rule use a soft
+warning highlight and a **No rule matched** badge. Every field can be corrected,
 and duplicates can be deliberately selected before confirming the import.
 
 Before duplicate detection and review, Ledger applies classifications saved
-under **Settings → Classifications**. If no rule matches, the importer-provided
+on the dedicated **Classifications** page. If no rule matches, the importer-provided
 category is retained and the subcategory stays blank.
 
 Credit Karma, AliExpress, eBay, and Venmo can change their private APIs; Amazon and Apple can change their
@@ -188,33 +190,46 @@ transaction file before applying the removal.
 
 ## Classifications
 
-Open **Settings → Classifications** to create ordered import rules. Each
-classification assigns one required category and one optional subcategory, and
-may contain multiple rules. A rule has separate matchers for the transaction's
+Open **Classifications** from the navigation menu to create reusable transaction rules. Each
+classification defines one or more actions and may contain multiple rules.
+The page’s **How matching works** disclosure provides a concise overview of
+actions, matcher behavior, precedence, and the classification flow in pseudocode.
+Actions can set the description, category, subcategory, account name, account
+type, provider, notes, refund status, or internal-transfer treatment. Date and amount are intentionally not
+available as classification actions. Every action is explicit:
+unselected fields remain unchanged, while an enabled blank subcategory or notes
+action clears that value. A rule has separate matchers for the transaction's
 current category, subcategory, description, account name, and provider using case-insensitive regular expressions. Empty
 matchers are ignored; when a rule has several populated matchers, all must
 match. Each rule can also include optional freeform notes explaining its
-rationale; notes are displayed with the rule but never participate in matching.
-Ledger evaluates classifications from top to bottom and uses the first matching
-rule. The editor presents one classification at a time with Previous
-and Next navigation, while newly added classifications are appended at the end.
+rationale; notes appear as subtitle text beneath the rule title and never
+participate in matching.
+Ledger sorts classifications alphabetically by category and subcategory, places
+classifications without a category action afterward, and uses the first matching
+rule in that displayed order. The editor presents one classification at a time
+with Previous and Next navigation. Newly added classifications are placed in
+their alphabetical position when saved.
+When a new classification has the same configured actions as an existing one,
+Ledger blocks the duplicate and identifies the existing page so another rule
+can be added there instead.
 Classification details and rules use compact read-only summaries by default.
-Use their individual **Edit** actions to reveal inputs; **Cancel** discards that
-draft, while **Save** validates the change and atomically persists the entire
-classification document. Classification details and one rule may be edited at
-the same time. Cancelling either editor restores only its own fields; saving
-either commits all currently visible edits and closes both editors. There is no
-separate global save step.
+Use their individual **Edit** actions to reveal inputs; **Cancel** discards only
+that draft, while **Save** validates and persists only its corresponding
+classification-details or rule edit. Classification details and multiple rules
+may be edited at the same time without one editor's Save committing or closing
+the others. New classifications stage their details and first rule separately,
+then persist once both sections have been accepted. There is no separate global
+save step.
 
 Rules are saved atomically beside the master CSV as
 `data/classifications.json`. Use **Export JSON** to download a portable copy.
 Classification changes affect future import previews; they do not silently
 rewrite existing transactions. To intentionally update prior data, use **Apply
 to existing transactions**. Ledger first opens a review modal listing every
-affected transaction and its current and proposed category path. Confirming the
-preview distinguishes rows that will change from matching rows that already
-have the selected classification. Confirming applies the currently displayed rules and creates a safety backup before
-it writes any category changes. Cancelling, pressing Escape, using the close
+affected transaction and every proposed field-level change. The preview
+distinguishes rows that will change from matching rows that already have the
+selected values. Confirming applies the currently displayed rules and creates a safety backup before
+it writes any transaction changes. Cancelling, pressing Escape, using the close
 button, or clicking the backdrop writes nothing. Rows that match no rule keep
 their existing category and subcategory.
 
@@ -273,19 +288,25 @@ and a spending deficit is red.
   Import data or Settings restores that reporting context when it is still
   available in the transaction data.
 
-### Bill-payment reconciliation
+### Internal transfers and bill-payment reconciliation
 
-Ledger does not exclude every transaction categorized as `Transfer`. It excludes
-only matched bank/credit-account pairs with equal and opposite nonzero amounts
+Ledger does not exclude every transaction categorized as `Transfer`. In the
+default **Automatic** treatment, it excludes only matched transactions from
+different accounts with equal and opposite nonzero amounts
 that post within five days. At least one side must be categorized as `Transfer`;
 the other may be `Transfer` or `Income` because source exports sometimes label
 the receiving side as income. This also handles credit-balance refunds that flow
 from a card back to a bank account. Matching is one-to-one and runs across the
 complete database, including month boundaries. Unmatched transfers, such as
-Venmo or Zelle payments, remain visible and affect the budget normally.
+Venmo or Zelle payments, remain visible and affect the budget normally. Every
+transaction editor can instead mark a row as an internal transfer or force it
+to count normally. These choices are stored as `internal-transfer` and
+`include-in-budget` flags; the original amount always remains in the CSV.
 
-Matched rows remain available through **View excluded bill-payment
-transactions**, where they can still be edited or deleted.
+Excluded rows contribute $0 to monthly and annual summaries, categories,
+subcategories, charts, and breakdown tables. They remain available through
+**View X excluded internal transfer transactions**, where they can still be
+edited or deleted.
 
 ## Data integrity and privacy
 
@@ -305,7 +326,9 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed backup, import-history, and classification settings
+app/settings.html  Tabbed backup, import-history, and general settings
+app/classifications.html
+                    Dedicated transaction-classification workspace
 app/settings.js    Backup, import-batch, and classification-rule management
 app/upload.html     Data import page
 ledger_data_importer_extension/

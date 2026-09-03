@@ -57,6 +57,7 @@
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/" aria-current="page">Dashboard</a>
           <a href="/import">Import data</a>
+          <a href="/classifications">Classifications</a>
           <a href="/settings">Settings</a>
         </nav>
       </details>
@@ -88,7 +89,7 @@
             <span class="summary-icon summary-icon--spent" aria-hidden="true">&nearr;</span>
           </div>
           <p class="summary-value" id="total-spent">—</p>
-          <p class="summary-note">Matched card bill payments and income excluded</p>
+          <p class="summary-note">Internal transfers are excluded</p>
         </article>
         <article class="summary-card">
           <div class="summary-label">
@@ -114,7 +115,10 @@
             <p class="eyebrow">Annual trends</p>
             <h2 id="annual-insights-heading">A year at a glance</h2>
           </div>
-          <p class="section-note">Select a category to focus the spending chart.</p>
+          <button class="excluded-note excluded-button" id="view-annual-excluded-button" type="button" hidden>
+            <span aria-hidden="true">✓</span>
+            <span id="annual-excluded-button-label">View 0 excluded internal transfer transactions</span>
+          </button>
         </div>
 
         <article class="chart-card" aria-labelledby="spending-chart-title">
@@ -163,7 +167,7 @@
           </div>
           <button class="excluded-note excluded-button" id="view-excluded-button" type="button" hidden>
             <span aria-hidden="true">✓</span>
-            <span id="excluded-button-label">View excluded bill payments</span>
+            <span id="excluded-button-label">View excluded internal transfer transactions</span>
           </button>
         </div>
         <div class="category-grid" id="category-grid" aria-live="polite"></div>
@@ -194,6 +198,18 @@
             </svg>
           </button>
         </header>
+        <aside class="internal-transfer-info" id="internal-transfer-info" hidden>
+          <span class="import-note-icon" aria-hidden="true">i</span>
+          <div>
+            <strong>How automatic matching works</strong>
+            <p>
+              Ledger pairs transactions from different accounts when at least one is categorized
+              as Transfer, the other is Transfer or Income, their nonzero amounts are exact
+              opposites, and their dates are within five days. Closest matches are paired once.
+              A transaction’s Budget treatment can always exclude it manually or force it to count normally.
+            </p>
+          </div>
+        </aside>
         <div class="transaction-filter-bar" aria-label="Filter transactions">
           <label class="transaction-search-field">
             <span>Description</span>
@@ -289,6 +305,15 @@
                 <strong>Refunded</strong>
                 <small>Keep this transaction in the ledger but count it as $0 in spending totals.</small>
               </span>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Budget treatment</span>
+              <select id="field-internal-transfer-treatment" name="internalTransferTreatment">
+                <option value="automatic">Automatic</option>
+                <option value="internal-transfer">Internal transfer — exclude from budget</option>
+                <option value="include-in-budget">Count normally — override automatic detection</option>
+              </select>
+              <small>Automatic detects matching movements between your bank and credit accounts.</small>
             </label>
           </div>
           <p class="form-error" id="form-error" role="alert" hidden></p>

@@ -25,6 +25,7 @@
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
           <a href="/import" aria-current="page">Import data</a>
+          <a href="/classifications">Classifications</a>
           <a href="/settings">Settings</a>
         </nav>
       </details>
@@ -57,6 +58,11 @@
               Potential duplicates appear unchecked in the review. Duplicate matching uses date,
               amount, and occurrence count, so multiple identical transactions from the same day
               are still preserved when they represent separate occurrences.
+            </p>
+            <p>
+              Transactions that match no saved classification rule are highlighted with a
+              <strong>No rule matched</strong> badge. Review them manually or use them to identify
+              a classification rule you may want to add.
             </p>
             <p>
               Credit Karma and Apple Card retain their source categories. Amazon, AliExpress, and
@@ -564,6 +570,15 @@
                 <strong>Refunded</strong>
                 <small>Keep this transaction in the import but count it as $0 in spending totals.</small>
               </span>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Budget treatment</span>
+              <select name="internalTransferTreatment">
+                <option value="automatic">Automatic</option>
+                <option value="internal-transfer">Internal transfer — exclude from budget</option>
+                <option value="include-in-budget">Count normally — override automatic detection</option>
+              </select>
+              <small>Automatic detects matching movements between your bank and credit accounts.</small>
             </label>
           </div>
           <p class="form-error" id="import-edit-error" role="alert" hidden></p>

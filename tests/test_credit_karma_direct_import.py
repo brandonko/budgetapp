@@ -14,7 +14,12 @@ from urllib.request import Request, urlopen
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(APP_DIR))
 
-from server import BudgetRequestHandler, ThreadingHTTPServer, initialize_csv_if_missing  # noqa: E402
+from server import (  # noqa: E402
+    BudgetRequestHandler,
+    ThreadingHTTPServer,
+    classifications_path,
+    initialize_csv_if_missing,
+)
 
 
 class CreditKarmaDirectImportTests(unittest.TestCase):
@@ -166,6 +171,55 @@ class CreditKarmaDirectImportTests(unittest.TestCase):
         self.assertIn("AMAZON MARKETPLACE", descriptions)
         self.assertIn("ALIPAY US", descriptions)
         self.assertIn("VENMO PAYMENT", descriptions)
+
+    def test_import_collapses_source_whitespace_before_classification_and_storage(self) -> None:
+        classifications_path(self.csv_path).write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "classifications": [
+                        {
+                            "updates": {
+                                "category": "Recurring",
+                                "subcategory": "Auto",
+                            },
+                            "rules": [{"description": "ally des:ally paymt"}],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        export = json.loads(self.export())
+        export["transactions"] = [
+            {
+                **export["transactions"][0],
+                "description": "ALLY             DES:ALLY PAYMT   ID:123",
+            }
+        ]
+
+        token = self.create_session()
+        status, result = self.request(
+            "POST",
+            f"/api/creditkarma-import-sessions/{token}/complete",
+            {"content": json.dumps(export)},
+        )
+
+        self.assertEqual(status, 200)
+        [preview] = result["import"]["transactions"]
+        self.assertEqual(preview["description"], "ALLY DES:ALLY PAYMT ID:123")
+        self.assertEqual(preview["category"], "Recurring")
+        self.assertEqual(preview["subcategory"], "Auto")
+
+        status, _committed = self.request(
+            "POST",
+            f"/api/creditkarma-import-sessions/{token}/commit",
+            {"transactions": [preview]},
+        )
+        self.assertEqual(status, 200)
+        with self.csv_path.open(encoding="utf-8", newline="") as handle:
+            [saved] = list(csv.DictReader(handle))
+        self.assertEqual(saved["description"], "ALLY DES:ALLY PAYMT ID:123")
 
     def test_sessions_are_source_scoped_and_support_progress(self) -> None:
         token = self.create_session()

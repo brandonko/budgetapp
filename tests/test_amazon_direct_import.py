@@ -108,6 +108,12 @@ class AmazonDirectImportTests(unittest.TestCase):
                 for transaction in first["import"]["transactions"]
             )
         )
+        self.assertTrue(
+            all(
+                transaction["_classificationMatched"] is False
+                for transaction in first["import"]["transactions"]
+            )
+        )
         with self.csv_path.open(encoding="utf-8", newline="") as handle:
             self.assertEqual(list(csv.DictReader(handle)), [])
         status, first_committed = self.request(
@@ -470,6 +476,13 @@ class AmazonDirectImportTests(unittest.TestCase):
         with urlopen(f"{self.base_url}/upload", timeout=3) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(response.geturl(), f"{self.base_url}/import")
+
+    def test_classifications_page_is_served_directly(self) -> None:
+        with urlopen(f"{self.base_url}/classifications", timeout=3) as response:
+            self.assertEqual(response.status, 200)
+            html = response.read().decode("utf-8")
+        self.assertIn('<h1 id="classifications-title">Classifications.</h1>', html)
+        self.assertIn('href="/classifications" aria-current="page"', html)
 
 
 if __name__ == "__main__":

@@ -24,12 +24,32 @@
     return transactionFlags(transaction).includes(flag.toLocaleLowerCase());
   }
 
+  function internalTransferTreatment(transaction) {
+    if (hasTransactionFlag(transaction, "internal-transfer")) return "internal-transfer";
+    if (hasTransactionFlag(transaction, "include-in-budget")) return "include-in-budget";
+    return "automatic";
+  }
+
+  function isInternalTransfer(transaction) {
+    const treatment = internalTransferTreatment(transaction);
+    if (treatment === "internal-transfer") return true;
+    if (treatment === "include-in-budget") return false;
+    return transaction?._isInternalTransfer === true;
+  }
+
   function flagsFromEditor(form, transaction) {
     const flags = new Set(transactionFlags(transaction));
     const refunded = form.elements.namedItem("refunded");
     if (refunded instanceof HTMLInputElement && refunded.type === "checkbox") {
       if (refunded.checked) flags.add("refunded");
       else flags.delete("refunded");
+    }
+    const transferTreatment = form.elements.namedItem("internalTransferTreatment");
+    if (transferTreatment instanceof HTMLSelectElement) {
+      flags.delete("internal-transfer");
+      flags.delete("include-in-budget");
+      if (transferTreatment.value === "internal-transfer") flags.add("internal-transfer");
+      if (transferTreatment.value === "include-in-budget") flags.add("include-in-budget");
     }
     return [...flags].sort().join(",");
   }
@@ -43,6 +63,10 @@
     const refunded = form.elements.namedItem("refunded");
     if (refunded instanceof HTMLInputElement && refunded.type === "checkbox") {
       refunded.checked = hasTransactionFlag(transaction, "refunded");
+    }
+    const transferTreatment = form.elements.namedItem("internalTransferTreatment");
+    if (transferTreatment instanceof HTMLSelectElement) {
+      transferTreatment.value = internalTransferTreatment(transaction);
     }
   }
 
@@ -63,23 +87,28 @@
       onEdit,
       leadingControl = null,
       duplicate = false,
+      needsClassification = false,
       disabled = false,
       amountForDisplay = null,
     } = options;
     const refunded = hasTransactionFlag(transaction, "refunded");
+    const internalTransfer = isInternalTransfer(transaction);
     const income = transaction.category.trim().toLocaleLowerCase() === "income";
-    const displayedAmount = amountForDisplay
-      ? amountForDisplay(transaction)
-      : refunded
-        ? 0
-        : income
-          ? Math.abs(Number(transaction.amount))
-          : Number(transaction.amount);
+    const originalDisplayedAmount = income
+      ? Math.abs(Number(transaction.amount))
+      : Number(transaction.amount);
+    const displayedAmount = refunded || internalTransfer
+      ? originalDisplayedAmount
+      : amountForDisplay
+        ? amountForDisplay(transaction)
+        : originalDisplayedAmount;
 
     const row = document.createElement("article");
     row.className = "transaction-row";
     row.classList.toggle("transaction-row--duplicate", duplicate);
+    row.classList.toggle("transaction-row--needs-classification", needsClassification);
     row.classList.toggle("transaction-row--refunded", refunded);
+    row.classList.toggle("transaction-row--internal-transfer", internalTransfer);
 
     const parsedDate = new Date(`${transaction.date}T12:00:00Z`);
     const dateElement = document.createElement("time");
@@ -108,11 +137,27 @@
       duplicateBadge.textContent = "Duplicate";
       description.append(duplicateBadge);
     }
+    if (needsClassification) {
+      const classificationBadge = document.createElement("span");
+      classificationBadge.className = "classification-needed-badge";
+      classificationBadge.textContent = "No rule matched";
+      classificationBadge.title = "Review this transaction manually or create a classification rule.";
+      description.append(classificationBadge);
+    }
     if (refunded) {
       const refundedBadge = document.createElement("span");
       refundedBadge.className = "transaction-flag transaction-flag--refunded";
       refundedBadge.textContent = "Refunded";
       description.append(refundedBadge);
+    }
+    if (internalTransfer) {
+      const transferBadge = document.createElement("span");
+      transferBadge.className = "transaction-flag transaction-flag--internal-transfer";
+      transferBadge.textContent = "Internal transfer";
+      transferBadge.title = transaction._internalTransferSource === "automatic"
+        ? "Detected automatically"
+        : "Marked manually";
+      description.append(transferBadge);
     }
     if (transaction.notes) {
       const notes = document.createElement("span");
@@ -127,8 +172,8 @@
     amount.className = "transaction-amount";
     amount.classList.toggle("is-credit", Number(transaction.amount) < 0 || income);
     amount.textContent = currency.format(displayedAmount);
-    if (refunded) {
-      amount.title = `Original amount: ${currency.format(Number(transaction.amount))}; excluded from totals`;
+    if (refunded || internalTransfer) {
+      amount.title = "Excluded from budget totals";
     }
     const editButton = document.createElement("button");
     editButton.className = "edit-button";
@@ -154,6 +199,8 @@
   globalObject.LedgerTransactionUI = Object.freeze({
     createTransactionRow,
     hasTransactionFlag,
+    internalTransferTreatment,
+    isInternalTransfer,
     populateTransactionEditor,
     renderTransactionList,
     transactionFlags,

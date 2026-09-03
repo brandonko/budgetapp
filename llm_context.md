@@ -35,7 +35,9 @@ third-party Python dependency unless a future requirement clearly justifies it.
   date,description,amount,category,subcategory,accountName,accountType,provider,notes,flags,createdAt
   ```
 
-- `flags` contains normalized, comma-separated identifiers. `refunded` is the
+- `flags` contains normalized, comma-separated identifiers. `refunded`,
+  `internal-transfer`, and `include-in-budget` are supported budget-treatment
+  flags. `refunded` is the
   first supported flag. Internal UI identifiers and derived properties such as
   `_id` and `_isBillPayment` must not be written as extra CSV columns.
 - `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
@@ -82,43 +84,70 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Dashboard cards and annual charts group by the top-level category. Opening a
   category surfaces subcategory dollar totals and permits filtering; blank
   subcategories are labeled **Unclassified** in the UI.
-- Store ordered import classifications in `data/classifications.json`, beside
+- Store alphabetically ordered import classifications in `data/classifications.json`, beside
   the canonical CSV. Keep the file private through the existing `data/` ignore
-  rule and expose an explicit JSON export action in Settings.
-- Each classification maps to one required category and one optional
-  subcategory and contains one or more rules.
+  rule and expose an explicit JSON export action on the dedicated Classifications page.
+- Treat Classifications as a primary app destination. It belongs in the shared
+  hamburger menu and must not be nested under Settings.
+- Keep explanatory classification content inside a compact, accessible info
+  disclosure patterned after the Import page. Include plain-language sections
+  for actions and matching plus concise pseudocode showing nested transaction,
+  classification, and rule evaluation. Avoid a redundant page subtitle.
+- Treat classifications as ordered, reusable mass actions. Each classification
+  contains one or more rules and explicitly sets at least one user-editable
+  transaction field: description, category, subcategory, account name, account
+  type, provider, notes, refund status, or internal-transfer treatment. Date and amount are intentionally not
+  classification actions. An unselected action
+  leaves its field unchanged. An enabled blank subcategory or notes action
+  intentionally clears that field. Refund is tri-state: unchanged, mark
+  refunded, or mark not refunded. Never let classifications change `createdAt`
+  or arbitrary internal flags.
 - Each rule has separate optional case-insensitive regular expressions for the
   current category, subcategory, description, account name, and provider. Ignore
   blank matchers. All populated matchers in
   one rule must match; multiple rules within a classification are alternatives.
-- Each rule may include optional freeform notes documenting its rationale. Preserve
-  line breaks when storing and displaying notes, and never treat notes as matchers.
-- Evaluate classifications and their rules in displayed order and stop at the
-  first match. Present one classification at a time with a clear current/total
-  pagination indicator. Append new classifications to the end and navigate to
-  them immediately; do not expose manual reordering controls. Disable adding
-  another classification until the last one has a category and every rule has
+- Each rule may include optional freeform notes documenting its rationale. Keep
+  the notes editor visually separate from regex matchers and explicitly explain
+  that notes do not participate in matching. In read-only mode, show a saved note
+  as subtitle text immediately beneath the rule title. Preserve line breaks.
+- Sort classifications alphabetically by category and subcategory, with
+  classifications that do not set a category afterward. Evaluate them in that
+  displayed order and stop at the first match. Present one classification at a
+  time with a clear current/total pagination indicator. Place newly saved
+  classifications into alphabetical order; do not expose manual reordering controls. Disable adding
+  another classification until the last one has an action and every rule has
   at least one populated matcher, preventing repeated empty entries.
-- Show classification destinations and only populated rule regexes in compact
+- Do not save two classifications with identical configured actions. Keep the
+  duplicate draft open, identify the existing classification's one-based page
+  number, and direct the user to add another rule to that classification.
+- Show configured classification actions and only populated rule regexes in compact
   read-only mode. Each classification and rule has its own Edit, Cancel, and Save
-  flow. Cancel restores the prior in-memory values; Save validates and atomically
-  persists the entire classifications JSON. Allow classification details and one
-  rule to be edited concurrently. Cancelling one restores only that section;
-  saving either commits all visible drafts and closes both editors. Do not show
-  a global Save button.
+  flow. Cancel restores only that editor's prior in-memory values. Save validates
+  and persists only the corresponding draft, without committing or closing any
+  other open editor. Allow classification details and multiple rules to be edited
+  concurrently. For a new classification, stage its details and first rule
+  independently and persist after both have been accepted. The server may still
+  atomically replace the complete classifications JSON, but unsaved UI drafts
+  must never be included in that request. Do not show a global Save button.
 - Apply classifications before import preview and duplicate detection. Do not
   automatically reclassify existing CSV rows when rules are changed.
+- Before classification matching, collapse every run of whitespace in imported
+  description, category, subcategory, account name, account type, and provider
+  values to one regular space. Persist and preview those normalized values. Do
+  not apply this policy to freeform notes or retroactively rewrite existing rows.
+- Match classification regexes against a whitespace-collapsed view of each
+  matcher field so existing rows with source padding behave like their rendered text.
 - Provide a confirmed **Apply to existing transactions** bulk action. Save the
   currently displayed rules as part of confirmation, preserve unmatched rows,
-  and create a safety backup before atomically writing any category or
-  subcategory changes. Before confirmation, show a modal containing every
-  affected transaction and its before/after category path. All modal dismissal
+  and create a safety backup before atomically writing any transaction changes.
+  Before confirmation, show a modal containing every affected transaction and
+  each field's before/after value. All modal dismissal
   paths must write nothing. Bind the preview to the CSV revision and reject a
   stale confirmation. Do not create a backup or rewrite the CSV when no rows
   changed.
 - If nothing matches, preserve the category supplied by the parser and populate
   a blank subcategory.
-- From Classification settings, provide an all-dates modal of every transaction
+- From the Classifications page, provide an all-dates modal of every transaction
   with a blank subcategory. Include description search plus category, account,
   and provider filters. Keep the user on Classification settings and preserve
   any draft when the modal closes.
@@ -163,7 +192,7 @@ on it. Translate it for people in the interface:
 - Changing the period updates summaries, category cards, charts, and dialogs
   together.
 - Persist the selected view mode, year, month, and annual category/subcategory
-  filter in the browser so dashboard context survives navigation to Import data or Settings.
+  filter in the browser so dashboard context survives navigation to any primary page.
   Validate restored values against the current transaction data and fall back
   safely when a saved selection is no longer available.
 - Render one card for every visible category, including unmatched `Transfer`
@@ -198,18 +227,19 @@ on it. Translate it for people in the interface:
   preferences there instead of adding unrelated controls to the dashboard or
   import page.
 
-## Credit-card bill-payment reconciliation
+## Internal transfers and credit-card bill-payment reconciliation
 
 Do not exclude the entire `Transfer` category. Venmo, Zelle, and other unmatched
 transfers may be legitimate expenses or incoming money.
 
-Exclude only reconciled credit-card bill-payment pairs. The current rule is:
+Under the default Automatic treatment, exclude only reconciled credit-card
+bill-payment pairs. The current rule is:
 
 1. One row has category `Transfer`, case-insensitively; the other may be
    `Transfer` or `Income` because source exports may label the receiving side
    as income.
-2. One row belongs to an account with type `BANK` and the other to an account
-   with type `CREDIT`.
+2. The rows belong to different account identities. Account type does not
+   restrict matching, so bank-to-bank transfers are supported.
 3. Their nonzero amounts are exact opposites. Either direction is valid, which
    covers both bill payments and credit-balance refunds back to a bank account.
 4. Their posting dates are no more than five calendar days apart.
@@ -217,10 +247,16 @@ Exclude only reconciled credit-card bill-payment pairs. The current rule is:
 6. Reconciliation runs against the complete database, not only the selected
    month, so pairs can cross month boundaries.
 
-Matched rows do not affect category cards, spending, income, or net totals.
-They must remain accessible and editable through **View excluded bill-payment
-transactions**. Editing either row may intentionally break the match and make
-the transaction budget-visible again.
+An `internal-transfer` flag always excludes a row. An `include-in-budget` flag
+prevents automatic reconciliation and forces the row to count normally. With
+neither flag, the automatic rule applies. The shared transaction editor exposes
+these states as Automatic, Internal transfer, and Count normally.
+
+Excluded rows do not affect monthly or annual category cards, subcategories,
+charts, breakdown tables, spending, income, or net totals. They must remain
+accessible and editable through **View X excluded internal transfer
+transactions**. Preserve and display the original stored amount in muted text
+with a line-through, while continuing to use a $0 budget amount.
 
 ## Transaction editing
 
@@ -235,6 +271,9 @@ the transaction budget-visible again.
 - Users can toggle the `refunded` flag in the transaction editor. A refunded
   transaction remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
+- Users can set an internal-transfer treatment from every shared transaction
+  editor, including import review and import history. Keep automatic detection
+  overridable in both directions.
 - `createdAt` is system-managed and must survive edits unchanged.
 - Migrate compatible older CSVs to the eleven-column schema
   atomically by adding missing optional fields; never require users to recreate
@@ -248,7 +287,7 @@ the transaction budget-visible again.
   will be changed and the action cannot be undone.
 - Reject stale writes with a clear message instead of silently overwriting a
   newer database revision.
-- Even excluded bill-payment rows must remain editable.
+- Even excluded internal-transfer rows must remain editable.
 
 ## Upload-first ingestion
 
@@ -282,6 +321,10 @@ ingestion belongs in the **Import data** page at `/import`.
 - Report parsed, new, and duplicate counts in a pre-commit review modal.
 - Display every parsed transaction in the preview. Select new occurrences by
   default; leave duplicates deselected, visibly marked, and highlighted soft red.
+- Carry each row's rule-match result into the import preview. Highlight rows
+  that matched no classification rule in soft amber and label them **No rule
+  matched** so users can identify manual work or missing rules. Duplicate red
+  styling takes visual precedence when both states apply.
 - Transaction-list modal subtitles show counts only and never an aggregate amount.
   Provide case-insensitive description search plus account-name and provider
   filters while retaining latest-first ordering and preserving active filters

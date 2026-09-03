@@ -81,6 +81,9 @@ REQUIRED_TEXT_COLUMNS = tuple(
     for column in COLUMNS
     if column not in {"date", "amount", "subcategory", "notes", "flags", "createdAt"}
 )
+IMPORT_TEXT_COLUMNS = (
+    "description", "category", "subcategory", "accountName", "accountType", "provider"
+)
 FLAG_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
@@ -158,6 +161,8 @@ STATIC_FILES = {
     "/import": APP_DIR / "upload.html",
     "/import.html": APP_DIR / "upload.html",
     "/upload.js": APP_DIR / "upload.js",
+    "/classifications": APP_DIR / "classifications.html",
+    "/classifications.html": APP_DIR / "classifications.html",
     "/settings": APP_DIR / "settings.html",
     "/settings.html": APP_DIR / "settings.html",
     "/settings.js": APP_DIR / "settings.js",
@@ -256,6 +261,18 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     return transaction
 
 
+def collapse_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def normalize_imported_transaction(raw: Any, location: str) -> dict[str, Any]:
+    """Validate an imported row and collapse source formatting whitespace."""
+    transaction = normalize_transaction(raw, location)
+    for column in IMPORT_TEXT_COLUMNS:
+        transaction[column] = collapse_whitespace(transaction[column])
+    return transaction
+
+
 def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
     """Read and validate a single, revisioned snapshot of the master CSV."""
     try:
@@ -340,7 +357,70 @@ def classifications_path(csv_path: Path) -> Path:
 CLASSIFICATION_MATCHER_FIELDS = (
     "category", "subcategory", "description", "accountName", "provider"
 )
+CLASSIFICATION_ACTION_FIELDS = (
+    "description",
+    "category",
+    "subcategory",
+    "accountName",
+    "accountType",
+    "provider",
+    "notes",
+    "refunded",
+    "internalTransfer",
+)
+DEPRECATED_CLASSIFICATION_ACTION_FIELDS = {"date", "amount"}
+CLASSIFICATION_REQUIRED_TEXT_ACTION_FIELDS = {
+    "description", "category", "accountName", "accountType", "provider"
+}
 CLASSIFICATION_RULE_NOTES_MAX_LENGTH = 2_000
+
+
+def normalize_classification_updates(raw: Any, location: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise CsvDataError(f"{location} must be an object")
+    unknown = set(raw) - set(CLASSIFICATION_ACTION_FIELDS) - DEPRECATED_CLASSIFICATION_ACTION_FIELDS
+    if unknown:
+        raise CsvDataError(f"{location} contains unsupported fields: {', '.join(sorted(unknown))}")
+
+    updates: dict[str, Any] = {field: None for field in CLASSIFICATION_ACTION_FIELDS}
+    for field in CLASSIFICATION_ACTION_FIELDS:
+        value = raw.get(field)
+        if value is None:
+            continue
+        field_location = f"{location}.{field}"
+        if field in {"refunded", "internalTransfer"}:
+            if not isinstance(value, bool):
+                raise CsvDataError(f"{field_location} must be true, false, or null")
+            updates[field] = value
+        elif field == "date":
+            if not isinstance(value, str):
+                raise CsvDataError(f"{field_location} must use YYYY-MM-DD")
+            try:
+                updates[field] = date.fromisoformat(value.strip()).isoformat()
+            except ValueError as exc:
+                raise CsvDataError(f"{field_location} must use YYYY-MM-DD") from exc
+        elif field == "amount":
+            if isinstance(value, bool):
+                raise CsvDataError(f"{field_location} must be numeric")
+            try:
+                amount = Decimal(str(value).strip())
+            except (InvalidOperation, ValueError) as exc:
+                raise CsvDataError(f"{field_location} must be numeric") from exc
+            if not amount.is_finite():
+                raise CsvDataError(f"{field_location} must be finite")
+            updates[field] = float(amount.quantize(CENT, rounding=ROUND_HALF_UP))
+        else:
+            if not isinstance(value, str):
+                raise CsvDataError(f"{field_location} must be text or null")
+            value = value.strip()
+            if field in CLASSIFICATION_REQUIRED_TEXT_ACTION_FIELDS and not value:
+                raise CsvDataError(f"{field_location} cannot be blank")
+            if len(value) > (2_000 if field == "notes" else 500):
+                raise CsvDataError(f"{field_location} is too long")
+            updates[field] = value
+    if not any(value is not None for value in updates.values()):
+        raise CsvDataError(f"{location} must change at least one transaction field")
+    return updates
 
 
 def normalize_classifications(raw: Any) -> dict[str, Any]:
@@ -357,14 +437,22 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
         location = f"classifications[{classification_index}]"
         if not isinstance(raw_classification, Mapping):
             raise CsvDataError(f"{location} must be an object")
-        category = raw_classification.get("category")
-        subcategory = raw_classification.get("subcategory", "")
-        if not isinstance(category, str) or not category.strip():
-            raise CsvDataError(f"{location}.category cannot be blank")
-        if not isinstance(subcategory, str):
-            raise CsvDataError(f"{location}.subcategory must be text")
-        if len(category.strip()) > 200 or len(subcategory.strip()) > 200:
-            raise CsvDataError(f"{location} category values cannot exceed 200 characters")
+        if "updates" in raw_classification:
+            updates = normalize_classification_updates(
+                raw_classification.get("updates"), f"{location}.updates"
+            )
+        else:
+            # Version 1 files assigned only category and subcategory. Normalize
+            # them into the action model so existing saved rules keep working.
+            category = raw_classification.get("category")
+            subcategory = raw_classification.get("subcategory", "")
+            if not isinstance(category, str) or not category.strip():
+                raise CsvDataError(f"{location}.category cannot be blank")
+            if not isinstance(subcategory, str):
+                raise CsvDataError(f"{location}.subcategory must be text")
+            updates = normalize_classification_updates(
+                {"category": category, "subcategory": subcategory}, f"{location}.updates"
+            )
         raw_rules = raw_classification.get("rules")
         if not isinstance(raw_rules, list) or not raw_rules:
             raise CsvDataError(f"{location}.rules must contain at least one rule")
@@ -405,10 +493,26 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
                 )
             rule["notes"] = notes
             rules.append(rule)
-        classifications.append(
-            {"category": category.strip(), "subcategory": subcategory.strip(), "rules": rules}
+        classifications.append({"updates": updates, "rules": rules})
+    classifications.sort(key=classification_sort_key)
+    return {"version": 2, "classifications": classifications}
+
+
+def classification_sort_key(classification: Mapping[str, Any]) -> tuple[str, str, str]:
+    updates = classification["updates"]
+    category = updates.get("category")
+    subcategory = updates.get("subcategory")
+    if category is not None:
+        return (
+            str(category).casefold(),
+            str(subcategory or "").casefold(),
+            json.dumps(updates, ensure_ascii=False, sort_keys=True).casefold(),
         )
-    return {"version": 1, "classifications": classifications}
+    return (
+        "\uffff",
+        "",
+        json.dumps(updates, ensure_ascii=False, sort_keys=True).casefold(),
+    )
 
 
 def load_classifications(csv_path: Path) -> dict[str, Any]:
@@ -416,7 +520,7 @@ def load_classifications(csv_path: Path) -> dict[str, Any]:
     try:
         content = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
-        return {"version": 1, "classifications": []}
+        return {"version": 2, "classifications": []}
     except (OSError, UnicodeDecodeError) as exc:
         raise CsvDataError(f"could not read {path}: {exc}") from exc
     try:
@@ -456,8 +560,7 @@ def classify_transactions(
 ) -> tuple[list[dict[str, Any]], list[bool]]:
     compiled = [
         (
-            classification["category"],
-            classification["subcategory"],
+            classification["updates"],
             [
                 {
                     field: re.compile(rule[field], re.IGNORECASE) if rule[field] else None
@@ -474,14 +577,34 @@ def classify_transactions(
         result = dict(transaction)
         result.setdefault("subcategory", "")
         matched = False
-        for category, subcategory, rules in compiled:
+        for updates, rules in compiled:
             for rule in rules:
                 if all(
-                    pattern is None or pattern.search(str(result.get(field, ""))) is not None
+                    pattern is None
+                    or pattern.search(collapse_whitespace(str(result.get(field, ""))))
+                    is not None
                     for field, pattern in rule.items()
                 ):
-                    result["category"] = category
-                    result["subcategory"] = subcategory
+                    for field, value in updates.items():
+                        if value is None:
+                            continue
+                        if field == "refunded":
+                            flags = [flag for flag in result.get("flags", "").split(",") if flag]
+                            if value and "refunded" not in flags:
+                                flags.append("refunded")
+                            elif not value:
+                                flags = [flag for flag in flags if flag != "refunded"]
+                            result["flags"] = ",".join(flags)
+                        elif field == "internalTransfer":
+                            flags = {
+                                flag for flag in result.get("flags", "").split(",") if flag
+                            }
+                            flags.discard("internal-transfer")
+                            flags.discard("include-in-budget")
+                            flags.add("internal-transfer" if value else "include-in-budget")
+                            result["flags"] = ",".join(sorted(flags))
+                        else:
+                            result[field] = value
                     matched = True
                     break
             if matched:
@@ -496,6 +619,38 @@ def apply_classifications(
 ) -> list[dict[str, Any]]:
     classified, _match_status = classify_transactions(transactions, document)
     return classified
+
+
+def classification_action_values(transaction: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose only user-editable values when comparing or previewing actions."""
+    values = {
+        field: transaction.get(field, "")
+        for field in CLASSIFICATION_ACTION_FIELDS
+        if field not in {"refunded", "internalTransfer"}
+    }
+    flags = {
+        flag.strip().casefold() for flag in str(transaction.get("flags", "")).split(",")
+    }
+    values["refunded"] = "refunded" in flags
+    values["internalTransfer"] = (
+        True
+        if "internal-transfer" in flags
+        else False
+        if "include-in-budget" in flags
+        else None
+    )
+    return values
+
+
+def classification_changed_fields(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> list[str]:
+    before_values = classification_action_values(before)
+    after_values = classification_action_values(after)
+    return [
+        field for field in CLASSIFICATION_ACTION_FIELDS
+        if before_values[field] != after_values[field]
+    ]
 
 
 def valid_backup_filename(filename: str) -> bool:
@@ -690,7 +845,9 @@ def merge_imported_transactions(
 
     for source, parsed_transactions in parsed_by_source.items():
         for parsed_transaction in parsed_transactions:
-            normalized = normalize_transaction(parsed_transaction, f"{source} transaction")
+            normalized = normalize_imported_transaction(
+                parsed_transaction, f"{source} transaction"
+            )
             key = transaction_identity(normalized)
             upload_occurrences[key] += 1
             if upload_occurrences[key] <= existing_counts[key]:
@@ -702,16 +859,23 @@ def merge_imported_transactions(
 
 
 def preview_imported_transactions(
-    existing: list[dict[str, Any]], parsed_transactions: list[dict[str, Any]], source: str
+    existing: list[dict[str, Any]],
+    parsed_transactions: list[dict[str, Any]],
+    source: str,
+    classification_matches: Sequence[bool] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Classify every parsed occurrence without changing the master CSV."""
+    if classification_matches is not None and len(classification_matches) != len(parsed_transactions):
+        raise CsvDataError("classification results do not match parsed transactions")
     existing_counts = Counter(transaction_identity(row) for row in existing)
     upload_occurrences: Counter[tuple[str, Decimal]] = Counter()
     preview: list[dict[str, Any]] = []
     duplicate_count = 0
 
     for staged_id, parsed_transaction in enumerate(parsed_transactions):
-        normalized = normalize_transaction(parsed_transaction, f"{source} transaction")
+        normalized = normalize_imported_transaction(
+            parsed_transaction, f"{source} transaction"
+        )
         key = transaction_identity(normalized)
         upload_occurrences[key] += 1
         is_duplicate = upload_occurrences[key] <= existing_counts[key]
@@ -721,6 +885,11 @@ def preview_imported_transactions(
                 normalized,
                 _stagedId=staged_id,
                 _isDuplicate=is_duplicate,
+                _classificationMatched=(
+                    bool(classification_matches[staged_id])
+                    if classification_matches is not None
+                    else False
+                ),
             )
         )
     preview.sort(
@@ -734,52 +903,84 @@ def preview_imported_transactions(
     return preview, len(preview) - duplicate_count, duplicate_count
 
 
-def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
-    """Reconcile one-to-one transfers between bank and credit accounts."""
-    bank_entries: list[tuple[int, date, Decimal, str]] = []
-    credit_entries: list[tuple[int, date, Decimal, str]] = []
+def find_internal_transfer_ids(transactions: list[dict[str, Any]]) -> set[int]:
+    """Reconcile one-to-one movements between distinct owned accounts."""
+    entries: list[tuple[int, date, Decimal, str, tuple[str, str, str]]] = []
     for index, transaction in enumerate(transactions):
+        flags = {
+            flag.strip().casefold()
+            for flag in str(transaction.get("flags", "")).split(",")
+            if flag.strip()
+        }
+        if "include-in-budget" in flags:
+            continue
         category = str(transaction["category"]).strip().casefold()
         if category not in {"transfer", "income"}:
             continue
-        account_type = str(transaction["accountType"]).strip().casefold()
         amount = Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP)
         transaction_date = date.fromisoformat(str(transaction["date"]))
-        if account_type == "bank":
-            bank_entries.append((index, transaction_date, amount, category))
-        elif account_type == "credit":
-            credit_entries.append((index, transaction_date, amount, category))
+        account_identity = (
+            str(transaction["accountName"]).strip().casefold(),
+            str(transaction["accountType"]).strip().casefold(),
+            str(transaction["provider"]).strip().casefold(),
+        )
+        entries.append((index, transaction_date, amount, category, account_identity))
 
     candidates: list[tuple[int, int, int]] = []
-    for bank_id, bank_date, bank_amount, bank_category in bank_entries:
-        for credit_id, credit_date, credit_amount, credit_category in credit_entries:
-            day_distance = abs((bank_date - credit_date).days)
+    for left_position, left in enumerate(entries):
+        left_id, left_date, left_amount, left_category, left_account = left
+        for right in entries[left_position + 1:]:
+            right_id, right_date, right_amount, right_category, right_account = right
+            day_distance = abs((left_date - right_date).days)
             if (
-                "transfer" in {bank_category, credit_category}
-                and bank_amount != 0
-                and bank_amount == -credit_amount
+                left_account != right_account
+                and "transfer" in {left_category, right_category}
+                and left_amount != 0
+                and left_amount == -right_amount
                 and day_distance <= BILL_PAYMENT_WINDOW_DAYS
             ):
-                candidates.append((day_distance, bank_id, credit_id))
+                candidates.append((day_distance, left_id, right_id))
 
-    matched_banks: set[int] = set()
-    matched_credits: set[int] = set()
-    for _day_distance, bank_id, credit_id in sorted(candidates):
-        if bank_id in matched_banks or credit_id in matched_credits:
+    matched_ids: set[int] = set()
+    for _day_distance, left_id, right_id in sorted(candidates):
+        if left_id in matched_ids or right_id in matched_ids:
             continue
-        matched_banks.add(bank_id)
-        matched_credits.add(credit_id)
-    return matched_banks | matched_credits
+        matched_ids.update({left_id, right_id})
+    return matched_ids
+
+
+def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
+    """Backward-compatible name for internal-transfer reconciliation."""
+    return find_internal_transfer_ids(transactions)
 
 
 def public_state(transactions: list[dict[str, Any]], revision: str) -> dict[str, Any]:
-    bill_payment_ids = find_bill_payment_ids(transactions)
+    bill_payment_ids = find_internal_transfer_ids(transactions)
+    public_transactions = []
+    for index, transaction in enumerate(transactions):
+        flags = {
+            flag.strip().casefold()
+            for flag in str(transaction.get("flags", "")).split(",")
+            if flag.strip()
+        }
+        manually_excluded = "internal-transfer" in flags
+        forced_included = "include-in-budget" in flags
+        automatically_excluded = index in bill_payment_ids and not forced_included
+        is_internal_transfer = manually_excluded or automatically_excluded
+        public_transactions.append(
+            dict(
+                transaction,
+                _id=index,
+                _isBillPayment=automatically_excluded,
+                _isInternalTransfer=is_internal_transfer,
+                _internalTransferSource=(
+                    "manual" if manually_excluded else "automatic" if automatically_excluded else ""
+                ),
+            )
+        )
     return {
         "revision": revision,
-        "transactions": [
-            dict(transaction, _id=index, _isBillPayment=index in bill_payment_ids)
-            for index, transaction in enumerate(transactions)
-        ],
+        "transactions": public_transactions,
     }
 
 
@@ -1361,8 +1562,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 changed = sum(
                     1
                     for before, after in zip(transactions, classified)
-                    if before["category"] != after["category"]
-                    or before["subcategory"] != after["subcategory"]
+                    if classification_changed_fields(before, after)
                 )
                 backup = None
                 if changed:
@@ -1405,27 +1605,24 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             with self.data_lock:
                 transactions, revision = read_transaction_state(self.csv_path)
                 classified, match_status = classify_transactions(transactions, document)
-            changes = [
-                {
-                    "_id": index,
-                    "date": before["date"],
-                    "description": before["description"],
-                    "amount": before["amount"],
-                    "accountName": before["accountName"],
-                    "provider": before["provider"],
-                    "before": {
-                        "category": before["category"],
-                        "subcategory": before["subcategory"],
-                    },
-                    "after": {
-                        "category": after["category"],
-                        "subcategory": after["subcategory"],
-                    },
-                }
-                for index, (before, after) in enumerate(zip(transactions, classified))
-                if before["category"] != after["category"]
-                or before["subcategory"] != after["subcategory"]
-            ]
+            changes = []
+            for index, (before, after) in enumerate(zip(transactions, classified)):
+                changed_fields = classification_changed_fields(before, after)
+                if not changed_fields:
+                    continue
+                changes.append(
+                    {
+                        "_id": index,
+                        "date": before["date"],
+                        "description": before["description"],
+                        "amount": before["amount"],
+                        "accountName": before["accountName"],
+                        "provider": before["provider"],
+                        "before": classification_action_values(before),
+                        "after": classification_action_values(after),
+                        "changedFields": changed_fields,
+                    }
+                )
             changes.sort(
                 key=lambda transaction: (
                     transaction["date"],
@@ -1770,8 +1967,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             else:
                 credit_karma = None
                 parsed_transactions = parse_amazon(content, amazon_account=account_identity)
+            parsed_transactions = [
+                normalize_imported_transaction(transaction, f"{source} transaction")
+                for transaction in parsed_transactions
+            ]
             with self.data_lock:
-                parsed_transactions = apply_classifications(
+                parsed_transactions, classification_matches = classify_transactions(
                     parsed_transactions, load_classifications(self.csv_path)
                 )
                 if self.csv_path.exists():
@@ -1779,7 +1980,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 else:
                     existing, baseline_revision = [], MISSING_CSV_REVISION
                 preview, new_count, duplicate_count = preview_imported_transactions(
-                    existing, parsed_transactions, source
+                    existing, parsed_transactions, source, classification_matches
                 )
 
             result = {
@@ -1869,7 +2070,11 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 ):
                     raise CsvDataError(f"transactions[{index}] has an invalid staged ID")
                 staged_ids.add(staged_id)
-                additions.append(normalize_transaction(raw_transaction, f"transactions[{index}]"))
+                additions.append(
+                    normalize_imported_transaction(
+                        raw_transaction, f"transactions[{index}]"
+                    )
+                )
 
             with self.data_lock:
                 if self.csv_path.exists():
@@ -1965,6 +2170,15 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "The transaction file changed after this page loaded. Reload and try again."
                     )
 
+                parsed_by_source = {
+                    source: [
+                        normalize_imported_transaction(
+                            transaction, f"{source} transaction"
+                        )
+                        for transaction in transactions
+                    ]
+                    for source, transactions in parsed_by_source.items()
+                }
                 classification_document = load_classifications(self.csv_path)
                 parsed_by_source = {
                     source: apply_classifications(transactions, classification_document)
