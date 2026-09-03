@@ -311,6 +311,10 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn('id="classification-settings-tab"', html)
         self.assertNotIn('id="classification-settings-panel"', html)
         self.assertIn('href="/classifications"', html)
+        self.assertIn(
+            '<section class="settings-panel" id="general-settings-panel" role="tabpanel"',
+            html,
+        )
         self.assertIn('aria-selected="true" aria-controls="backup-settings-panel"', html)
         self.assertIn('id="import-history-settings-tab"', html)
         self.assertIn('tabindex="-1">Imports</button>', html)
