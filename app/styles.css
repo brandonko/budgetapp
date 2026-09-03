@@ -1611,7 +1611,7 @@ h2 {
 
 .transaction-filter-bar {
   display: grid;
-  grid-template-columns: minmax(170px, 1.25fr) repeat(3, minmax(125px, 1fr)) auto;
+  grid-template-columns: minmax(170px, 1.25fr) repeat(4, minmax(110px, 1fr)) auto;
   gap: 10px;
   align-items: end;
   padding: 16px 32px;
@@ -2827,6 +2827,12 @@ h2 {
 
 body:has(dialog[open]) {
   overflow: hidden;
+}
+
+@media (max-width: 860px) {
+  .transaction-filter-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
