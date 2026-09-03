@@ -14,6 +14,7 @@ The dashboard includes:
 - Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, and settings
 - Manual transaction creation, editing, refund flags, permanent deletion, and freeform notes
+- Import history with batch-level rollback and automatic safety backups
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
 - One-to-one reconciliation of credit-card bill-payment transfers
@@ -137,9 +138,10 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. All nine CSV fields can be changed, including optional freeform
+transaction. Its nine user-editable fields can be changed, including optional freeform
 notes and flags. Marking a transaction as **Refunded** keeps its original amount
-for duplicate detection while treating it as $0 in dashboard totals. After editing from a transaction list, Ledger returns to the refreshed
+for duplicate detection while treating it as $0 in dashboard totals. The import
+timestamp is system-managed. After editing from a transaction list, Ledger returns to the refreshed
 list instead of closing the workflow. The same form supports
 permanent deletion after an explicit confirmation. Use **Add transaction** on
 the dashboard to create a row manually.
@@ -154,9 +156,9 @@ Open **Settings → Backup** to create and manage transaction database snapshots
 Ledger stores generated backups under `data/backups/` using timestamped names
 such as `transactions_20260902_114500_123456.csv`. Any regular CSV placed directly
 in that folder also appears. The list is ordered by last-modified date, newest
-first, and shows the transaction count in each valid backup. Legacy seven- and
-eight-column Ledger CSVs are supported and receive any missing optional fields
-when restored.
+first, and shows the transaction count in each valid backup. Compatible older
+seven-, eight-, and nine-column Ledger CSVs are supported and receive any
+missing optional fields when restored.
 
 Individual backups can be permanently deleted after an explicit confirmation.
 Deleting a backup does not modify the active transaction file or other backups.
@@ -164,6 +166,17 @@ Deleting a backup does not modify the active transaction file or other backups.
 Restoring requires explicit confirmation and completely replaces
 `data/transactions.csv`. Before replacement, Ledger automatically creates a
 safety backup of the current file so the restore itself remains recoverable.
+
+## Import history
+
+Every transaction committed by one import receives the same UTC `createdAt`
+timestamp. Open **Settings → Import history** to see those batches ordered newest
+first and the number of rows still associated with each import. Legacy and
+manually created transactions have a blank timestamp and do not appear there.
+
+Removing an import batch deletes all of its remaining rows after an explicit
+confirmation and revision check. Ledger creates a safety backup of the complete
+transaction file before applying the removal.
 
 ## Master CSV schema
 
@@ -174,13 +187,14 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,accountName,accountType,provider,notes,flags
+date,description,amount,category,accountName,accountType,provider,notes,flags,createdAt
 ```
 
-Ledger automatically and atomically adds missing optional `notes` and `flags`
-columns when it opens an older database. Notes may contain commas or multiple
+Ledger automatically and atomically adds missing optional `notes`, `flags`, and
+`createdAt` columns when it opens an older database. Notes may contain commas or multiple
 lines. Flags are normalized, comma-separated identifiers; the first supported
-flag is `refunded`.
+flag is `refunded`. `createdAt` is an immutable UTC ISO 8601 timestamp assigned
+to imported rows; it remains blank for manual and legacy rows.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
@@ -241,8 +255,8 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed settings page with backup and restore controls
-app/settings.js    Backup listing, creation, and confirmed restore behavior
+app/settings.html  Tabbed settings page with backups and import history
+app/settings.js    Backup and import-batch management behavior
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports

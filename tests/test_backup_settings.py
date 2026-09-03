@@ -164,7 +164,52 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(restored["transactionCount"], 1)
         restored_rows, _revision = read_transaction_state(self.csv_path)
         self.assertEqual(restored_rows[0]["notes"], "")
+        self.assertEqual(restored_rows[0]["createdAt"], "")
         self.assertEqual(restored_rows[0]["flags"], "")
+
+    def test_import_history_groups_batches_and_removes_one_with_a_backup(self) -> None:
+        first_timestamp = "2026-09-02T10:00:00.000000Z"
+        second_timestamp = "2026-09-02T11:00:00.000000Z"
+        rows = [
+            dict(transaction("First import A", 1), createdAt=first_timestamp),
+            dict(transaction("First import B", 2), createdAt=first_timestamp),
+            dict(transaction("Second import", 3), createdAt=second_timestamp),
+            transaction("Manual transaction", 4),
+        ]
+        write_transactions_atomic(self.csv_path, rows)
+
+        status, history = self.request("GET", "/api/import-history")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            history["imports"],
+            [
+                {"createdAt": second_timestamp, "transactionCount": 1},
+                {"createdAt": first_timestamp, "transactionCount": 2},
+            ],
+        )
+
+        status, rejected = self.request(
+            "DELETE",
+            f"/api/import-history/{quote(first_timestamp)}",
+            {"confirm": False, "revision": history["revision"]},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("confirmation", rejected["error"])
+
+        status, removed = self.request(
+            "DELETE",
+            f"/api/import-history/{quote(first_timestamp)}",
+            {"confirm": True, "revision": history["revision"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(removed["removedCount"], 2)
+        self.assertEqual(removed["imports"], [{"createdAt": second_timestamp, "transactionCount": 1}])
+        self.assertEqual(removed["safetyBackup"]["transactionCount"], 4)
+        remaining, _revision = read_transaction_state(self.csv_path)
+        self.assertEqual(
+            {row["description"] for row in remaining},
+            {"Second import", "Manual transaction"},
+        )
 
     def test_delete_backup_requires_confirmation_and_removes_only_selected_file(self) -> None:
         backup_directory = self.csv_path.parent / "backups"
@@ -208,6 +253,10 @@ class SettingsPageTests(unittest.TestCase):
         javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
         self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="general-settings-tab"'))
         self.assertIn('aria-selected="true" aria-controls="backup-settings-panel"', html)
+        self.assertIn('id="import-history-settings-tab"', html)
+        self.assertIn('id="import-history-settings-panel"', html)
+        self.assertIn('fetch("/api/import-history"', javascript)
+        self.assertIn('method: "DELETE"', javascript)
         self.assertIn('id="create-backup-button"', html)
         self.assertIn('id="backup-list"', html)
         self.assertIn("window.confirm", javascript)

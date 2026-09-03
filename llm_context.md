@@ -29,15 +29,17 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The nine persisted columns, in order, are:
+- The ten persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,accountName,accountType,provider,notes,flags
+  date,description,amount,category,accountName,accountType,provider,notes,flags,createdAt
   ```
 
 - `flags` contains normalized, comma-separated identifiers. `refunded` is the
   first supported flag. Internal UI identifiers and derived properties such as
   `_id` and `_isBillPayment` must not be written as extra CSV columns.
+- `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
+  one committed import. It is blank for manual and legacy transactions.
 
 ## Backups
 
@@ -46,8 +48,8 @@ third-party Python dependency unless a future requirement clearly justifies it.
   `transactions_<timestamp>.csv` filenames.
 - List every regular CSV placed directly in `data/backups/`, regardless of its
   filename. Order backups newest first by last-modified date and show their
-  validated transaction count. Accept current and legacy seven- or eight-column
-  Ledger schemas without modifying the backup file. Never follow symlinks or
+  validated transaction count. Accept the current schema and compatible older
+  seven-, eight-, or nine-column Ledger schemas without modifying the backup file. Never follow symlinks or
   allow nested paths.
 - Restoring a backup completely replaces the canonical CSV only after explicit
   user confirmation. Create a safety backup of the current file immediately
@@ -56,6 +58,18 @@ third-party Python dependency unless a future requirement clearly justifies it.
   confirmation. Never let backup deletion affect the active CSV, other backups,
   symlinks, or nested paths.
 - Keep backups private and ignored by Git together with the rest of `data/`.
+
+## Import history
+
+- Settings includes an **Import history** tab that groups persisted imported
+  rows by `createdAt`, newest first, and displays each batch's remaining row
+  count.
+- Every import commit path stamps all newly added rows with one shared
+  `createdAt` value. Previewing or cancelling an import never assigns one.
+- Removing an import batch requires confirmation and the current CSV revision,
+  deletes only rows with that exact timestamp, and creates a safety backup
+  before changing the master CSV.
+- Once every row in a batch is removed, that batch no longer appears in history.
 
 ## Privacy
 
@@ -156,13 +170,14 @@ the transaction budget-visible again.
   Every supported importer must create a missing CSV before merging its
   parsed rows and must never replace an existing database.
 
-- Every CSV field must be editable: date, description, amount, category,
+- User-editable CSV fields are date, description, amount, category,
   accountName, accountType, provider, notes, and supported flags. Notes are
   optional freeform text and may safely contain commas or line breaks.
 - Users can toggle the `refunded` flag in the transaction editor. A refunded
   transaction remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
-- Migrate legacy seven- and eight-column CSVs to the nine-column schema
+- `createdAt` is system-managed and must survive edits unchanged.
+- Migrate compatible older CSVs to the ten-column schema
   atomically by adding missing optional fields; never require users to recreate
   an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,

@@ -117,6 +117,12 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(first_committed["status"], "complete")
         self.assertEqual(first_committed["import"]["committed"], 2)
+        created_at_values = {
+            transaction["createdAt"]
+            for transaction in first_committed["import"]["transactions"]
+        }
+        self.assertEqual(len(created_at_values), 1)
+        self.assertTrue(next(iter(created_at_values)).endswith("Z"))
 
         second_token = self.create_session()
         status, second = self.request(
@@ -143,6 +149,8 @@ class AmazonDirectImportTests(unittest.TestCase):
         edited["description"] = "Reviewed imported item"
         edited["category"] = "Household"
         edited["notes"] = "Gift, keep the receipt\nReturn window ends September 15."
+        original_created_at = edited["createdAt"]
+        edited["createdAt"] = "2000-01-01T00:00:00Z"
         edited["flags"] = "Refunded,refunded"
         status, updated = self.request(
             "PUT",
@@ -155,6 +163,7 @@ class AmazonDirectImportTests(unittest.TestCase):
                 transaction["description"] == "Reviewed imported item"
                 and transaction["category"] == "Household"
                 and transaction["notes"] == edited["notes"]
+                and transaction["createdAt"] == original_created_at
                 and transaction["flags"] == "refunded"
                 for transaction in updated["transactions"]
             )
@@ -283,12 +292,13 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(len(transactions), 1)
         self.assertEqual(transactions[0]["description"], "Legacy purchase")
         self.assertEqual(transactions[0]["notes"], "")
+        self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
         with legacy_path.open(encoding="utf-8", newline="") as handle:
             self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
         self.assertFalse(migrate_transaction_schema(legacy_path))
 
-    def test_migrates_notes_schema_with_blank_flags_without_losing_rows(self) -> None:
+    def test_migrates_notes_schema_with_blank_flags_and_created_at(self) -> None:
         previous_path = Path(self.temporary_directory.name) / "with-notes.csv"
         previous_row = {
             "date": "2026-08-20",
@@ -308,6 +318,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertTrue(migrate_transaction_schema(previous_path))
         transactions, _revision = read_transaction_state(previous_path)
         self.assertEqual(transactions[0]["notes"], "Keep this note")
+        self.assertEqual(transactions[0]["createdAt"], "")
         self.assertEqual(transactions[0]["flags"], "")
         with previous_path.open(encoding="utf-8", newline="") as handle:
             self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
@@ -402,6 +413,7 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(imported["import"]["added"], 1)
         self.assertEqual(imported["transactions"][0]["amount"], 4.5)
+        self.assertTrue(imported["transactions"][0]["createdAt"].endswith("Z"))
 
     def test_missing_transaction_file_can_be_initialized_from_api(self) -> None:
         self.csv_path.unlink()
