@@ -14,6 +14,7 @@ The dashboard includes:
 - Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, and settings
 - Manual transaction creation, editing, permanent deletion, and freeform notes
+- Import history with batch-level rollback and automatic safety backups
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
 - One-to-one reconciliation of credit-card bill-payment transfers
@@ -137,8 +138,8 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. All eight CSV fields can be changed, including optional freeform
-notes. After editing from a transaction list, Ledger returns to the refreshed
+transaction. Its eight user-editable fields can be changed, including optional
+freeform notes; the import timestamp is system-managed. After editing from a transaction list, Ledger returns to the refreshed
 list instead of closing the workflow. The same form supports
 permanent deletion after an explicit confirmation. Use **Add transaction** on
 the dashboard to create a row manually.
@@ -163,6 +164,17 @@ Restoring requires explicit confirmation and completely replaces
 `data/transactions.csv`. Before replacement, Ledger automatically creates a
 safety backup of the current file so the restore itself remains recoverable.
 
+## Import history
+
+Every transaction committed by one import receives the same UTC `createdAt`
+timestamp. Open **Settings → Import history** to see those batches ordered newest
+first and the number of rows still associated with each import. Legacy and
+manually created transactions have a blank timestamp and do not appear there.
+
+Removing an import batch deletes all of its remaining rows after an explicit
+confirmation and revision check. Ledger creates a safety backup of the complete
+transaction file before applying the removal.
+
 ## Master CSV schema
 
 If the master CSV does not exist, the dashboard offers a direct link to Import
@@ -172,11 +184,13 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,accountName,accountType,provider,notes
+date,description,amount,category,accountName,accountType,provider,notes,createdAt
 ```
 
-Ledger automatically and atomically adds a blank `notes` column when it opens a
-legacy seven-column database. Notes may contain commas or multiple lines.
+Ledger automatically and atomically adds missing `notes` and `createdAt` columns
+when it opens a legacy seven- or eight-column database. Notes may contain commas
+or multiple lines. `createdAt` is an immutable, UTC ISO 8601 timestamp assigned
+to imported rows; it remains blank for manual and legacy rows.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
@@ -235,8 +249,8 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed settings page with backup and restore controls
-app/settings.js    Backup listing, creation, and confirmed restore behavior
+app/settings.html  Tabbed settings page with backups and import history
+app/settings.js    Backup and import-batch management behavior
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports

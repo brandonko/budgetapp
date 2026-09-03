@@ -39,6 +39,8 @@
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
         <button class="settings-tab" id="backup-settings-tab" role="tab" type="button"
           aria-selected="true" aria-controls="backup-settings-panel">Backup</button>
+        <button class="settings-tab" id="import-history-settings-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="import-history-settings-panel" tabindex="-1">Import history</button>
         <button class="settings-tab" id="general-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="general-settings-panel" tabindex="-1">General</button>
       </div>
@@ -60,6 +62,25 @@
             <button class="text-button" id="refresh-backups-button" type="button">Refresh</button>
           </div>
           <div class="backup-list" id="backup-list" aria-live="polite"></div>
+        </article>
+      </section>
+
+      <section class="settings-panel" id="import-history-settings-panel" role="tabpanel"
+        aria-labelledby="import-history-settings-tab" hidden>
+        <article class="settings-card">
+          <div class="settings-card-heading">
+            <div>
+              <p class="eyebrow">Imported transactions</p>
+              <h2>Import history</h2>
+              <p>Review completed imports and remove every transaction from an accidental batch.</p>
+            </div>
+            <button class="secondary-button" id="refresh-import-history-button" type="button">Refresh</button>
+          </div>
+          <p class="settings-status" id="import-history-status" role="status" hidden></p>
+          <div class="backup-list-heading">
+            <h3>Completed imports</h3>
+          </div>
+          <div class="backup-list" id="import-history-list" aria-live="polite"></div>
         </article>
       </section>
 

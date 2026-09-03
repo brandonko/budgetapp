@@ -29,14 +29,16 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The eight persisted columns, in order, are:
+- The nine persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,accountName,accountType,provider,notes
+  date,description,amount,category,accountName,accountType,provider,notes,createdAt
   ```
 
 - Internal UI identifiers and derived flags must not be written as extra CSV
   columns.
+- `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
+  one committed import. It is blank for manual and legacy transactions.
 
 ## Backups
 
@@ -54,6 +56,18 @@ third-party Python dependency unless a future requirement clearly justifies it.
   confirmation. Never let backup deletion affect the active CSV, other backups,
   symlinks, or nested paths.
 - Keep backups private and ignored by Git together with the rest of `data/`.
+
+## Import history
+
+- Settings includes an **Import history** tab that groups persisted imported
+  rows by `createdAt`, newest first, and displays each batch's remaining row
+  count.
+- Every import commit path stamps all newly added rows with one shared
+  `createdAt` value. Previewing or cancelling an import never assigns one.
+- Removing an import batch requires confirmation and the current CSV revision,
+  deletes only rows with that exact timestamp, and creates a safety backup
+  before changing the master CSV.
+- Once every row in a batch is removed, that batch no longer appears in history.
 
 ## Privacy
 
@@ -154,11 +168,13 @@ the transaction budget-visible again.
   Every supported importer must create a missing CSV before merging its
   parsed rows and must never replace an existing database.
 
-- Every CSV field must be editable: date, description, amount, category,
-  accountName, accountType, provider, and notes. Notes are optional freeform text
-  and may safely contain commas or line breaks.
-- Migrate the legacy seven-column CSV to the eight-column schema atomically by
-  adding blank notes; never require users to recreate an existing database.
+- User-editable CSV fields are date, description, amount, category, accountName,
+  accountType, provider, and notes. Notes are optional freeform text and may
+  safely contain commas or line breaks. `createdAt` is system-managed and must
+  survive edits unchanged.
+- Migrate legacy seven- and eight-column CSVs to the nine-column schema
+  atomically by adding missing optional fields; never require users to recreate
+  an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
   saving, deleting, cancelling, or closing the editor returns to that refreshed
   list modal. Manual Add transaction continues to return to the dashboard.

@@ -1,11 +1,18 @@
 "use strict";
 
+const state = {
+  importHistoryRevision: "",
+};
+
 const elements = {
   tabs: [...document.querySelectorAll('[role="tab"][aria-controls]')],
   createBackup: document.querySelector("#create-backup-button"),
   refreshBackups: document.querySelector("#refresh-backups-button"),
   backupStatus: document.querySelector("#backup-status"),
   backupList: document.querySelector("#backup-list"),
+  refreshImportHistory: document.querySelector("#refresh-import-history-button"),
+  importHistoryStatus: document.querySelector("#import-history-status"),
+  importHistoryList: document.querySelector("#import-history-list"),
 };
 
 const backupDateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -46,12 +53,119 @@ function setStatus(message, kind = "success") {
   elements.backupStatus.hidden = false;
 }
 
+function setImportHistoryStatus(message, kind = "success") {
+  elements.importHistoryStatus.textContent = message;
+  elements.importHistoryStatus.className = `settings-status settings-status--${kind}`;
+  elements.importHistoryStatus.hidden = false;
+}
+
 function setBusy(busy) {
   elements.createBackup.disabled = busy;
   elements.refreshBackups.disabled = busy;
   elements.backupList.querySelectorAll("button").forEach((button) => {
     button.disabled = busy || button.dataset.valid === "false";
   });
+}
+
+function setImportHistoryBusy(busy) {
+  elements.refreshImportHistory.disabled = busy;
+  elements.importHistoryList.querySelectorAll("button").forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+function importHistoryRow(importBatch) {
+  const row = document.createElement("article");
+  row.className = "backup-row";
+
+  const details = document.createElement("div");
+  const date = document.createElement("strong");
+  const parsedDate = new Date(importBatch.createdAt);
+  date.textContent = Number.isNaN(parsedDate.getTime())
+    ? importBatch.createdAt
+    : backupDateFormatter.format(parsedDate);
+  const metadata = document.createElement("span");
+  metadata.textContent = `${importBatch.transactionCount} ${
+    importBatch.transactionCount === 1 ? "transaction" : "transactions"
+  } imported`;
+  details.append(date, metadata);
+
+  const remove = document.createElement("button");
+  remove.className = "danger-button backup-delete-button";
+  remove.type = "button";
+  remove.textContent = "Remove transactions";
+  remove.addEventListener("click", () => removeImportBatch(importBatch));
+
+  row.append(details, remove);
+  return row;
+}
+
+function renderImportHistory(imports) {
+  if (imports.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "backup-empty";
+    empty.textContent = "No tracked imports yet. New imports will appear here after they are committed.";
+    elements.importHistoryList.replaceChildren(empty);
+    return;
+  }
+  elements.importHistoryList.replaceChildren(...imports.map(importHistoryRow));
+}
+
+async function loadImportHistory() {
+  setImportHistoryBusy(true);
+  try {
+    const response = await fetch("/api/import-history", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Could not load import history (${response.status}).`);
+    }
+    state.importHistoryRevision = payload.revision;
+    renderImportHistory(Array.isArray(payload.imports) ? payload.imports : []);
+  } catch (error) {
+    setImportHistoryStatus(
+      error instanceof Error ? error.message : "Could not load import history.",
+      "error",
+    );
+  } finally {
+    setImportHistoryBusy(false);
+  }
+}
+
+async function removeImportBatch(importBatch) {
+  const count = importBatch.transactionCount;
+  const importedAt = backupDateFormatter.format(new Date(importBatch.createdAt));
+  const confirmed = window.confirm(
+    `Remove all ${count} ${count === 1 ? "transaction" : "transactions"} imported ${importedAt}?\n\n` +
+      "Ledger will create a safety backup first. This action removes the entire import batch.",
+  );
+  if (!confirmed) return;
+
+  setImportHistoryBusy(true);
+  try {
+    const response = await fetch(`/api/import-history/${encodeURIComponent(importBatch.createdAt)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, revision: state.importHistoryRevision }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Could not remove imported transactions (${response.status}).`);
+    }
+    state.importHistoryRevision = payload.revision;
+    renderImportHistory(Array.isArray(payload.imports) ? payload.imports : []);
+    setImportHistoryStatus(
+      `Removed ${payload.removedCount} imported ${
+        payload.removedCount === 1 ? "transaction" : "transactions"
+      }. A safety backup was created.`,
+    );
+  } catch (error) {
+    setImportHistoryStatus(
+      error instanceof Error ? error.message : "Could not remove imported transactions.",
+      "error",
+    );
+  } finally {
+    setImportHistoryBusy(false);
+  }
 }
 
 function backupRow(backup) {
@@ -191,5 +305,7 @@ async function deleteBackup(backup) {
 
 elements.createBackup.addEventListener("click", createBackup);
 elements.refreshBackups.addEventListener("click", loadBackups);
+elements.refreshImportHistory.addEventListener("click", loadImportHistory);
 initializeSettingsTabs();
 loadBackups();
+loadImportHistory();

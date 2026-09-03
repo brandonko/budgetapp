@@ -51,11 +51,13 @@ COLUMNS = (
     "accountType",
     "provider",
     "notes",
+    "createdAt",
 )
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
-LEGACY_COLUMNS = COLUMNS[:-1]
+LEGACY_COLUMNS = COLUMNS[:-2]
+NOTES_COLUMNS = COLUMNS[:-1]
 REQUIRED_TEXT_COLUMNS = tuple(
-    column for column in COLUMNS if column not in {"date", "amount", "notes"}
+    column for column in COLUMNS if column not in {"date", "amount", "notes", "createdAt"}
 )
 CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
@@ -66,6 +68,7 @@ BACKUP_RESTORE_PATH = re.compile(
     r"^/api/backups/([^/]+)/restore$"
 )
 BACKUP_DELETE_PATH = re.compile(r"^/api/backups/([^/]+)$")
+IMPORT_HISTORY_DELETE_PATH = re.compile(r"^/api/import-history/([^/]+)$")
 GENERATED_BACKUP_FILENAME = re.compile(r"^transactions_\d{8}_\d{6}_\d{6}\.csv$")
 AMAZON_IMPORT_SESSION_PATH = re.compile(
     r"^/api/amazon-import-sessions/([A-Za-z0-9_-]{32,})$"
@@ -148,6 +151,25 @@ class RevisionConflict(RuntimeError):
     """Raised when a client tries to modify an out-of-date CSV revision."""
 
 
+def normalize_created_at(value: Any, location: str) -> str:
+    if not isinstance(value, str):
+        raise CsvDataError(f"{location} must be an ISO 8601 timestamp")
+    created_at = value.strip()
+    if not created_at:
+        return ""
+    try:
+        parsed_created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CsvDataError(f"{location} must be an ISO 8601 timestamp") from exc
+    if parsed_created_at.tzinfo is None:
+        raise CsvDataError(f"{location} must include a timezone")
+    return (
+        parsed_created_at.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise CsvDataError(f"{location} must be an object")
@@ -184,6 +206,9 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(notes, str):
         raise CsvDataError(f"{location}.notes must be text")
     transaction["notes"] = notes.strip()
+    transaction["createdAt"] = normalize_created_at(
+        raw.get("createdAt", ""), f"{location}.createdAt"
+    )
     return transaction
 
 
@@ -289,9 +314,14 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
             normalize_transaction(row, f"line {line_number}")
             for line_number, row in enumerate(reader, start=2)
         ]
+    if set(fieldnames) == set(NOTES_COLUMNS):
+        return [
+            normalize_transaction(dict(row, createdAt=""), f"line {line_number}")
+            for line_number, row in enumerate(reader, start=2)
+        ]
     if set(fieldnames) == set(LEGACY_COLUMNS):
         return [
-            normalize_transaction(dict(row, notes=""), f"line {line_number}")
+            normalize_transaction(dict(row, notes="", createdAt=""), f"line {line_number}")
             for line_number, row in enumerate(reader, start=2)
         ]
     raise CsvDataError("backup CSV must use Ledger's current or legacy transaction columns")
@@ -380,12 +410,16 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     fieldnames = tuple(reader.fieldnames or ())
-    if "notes" in fieldnames:
+    fieldname_set = set(fieldnames)
+    if fieldname_set == set(COLUMNS):
         return False
-    if set(fieldnames) != set(LEGACY_COLUMNS):
+    if fieldname_set != set(LEGACY_COLUMNS) and fieldname_set != set(NOTES_COLUMNS):
         return False
     transactions = [
-        normalize_transaction(dict(row, notes=""), f"line {line_number}")
+        normalize_transaction(
+            dict(row, notes=row.get("notes", ""), createdAt=""),
+            f"line {line_number}",
+        )
         for line_number, row in enumerate(reader, start=2)
     ]
     write_transactions_atomic(csv_path, transactions)
@@ -398,6 +432,32 @@ def transaction_identity(transaction: Mapping[str, Any]) -> tuple[str, Decimal]:
         str(transaction["date"]),
         Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP),
     )
+
+
+def import_timestamp() -> str:
+    """Return a sortable UTC identifier shared by one committed import batch."""
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def stamp_imported_transactions(transactions: list[dict[str, Any]]) -> str:
+    """Assign one immutable creation timestamp to every row in an import batch."""
+    created_at = import_timestamp()
+    for transaction in transactions:
+        transaction["createdAt"] = created_at
+    return created_at
+
+
+def import_history(transactions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Summarize persisted imported rows by their shared creation timestamp."""
+    counts = Counter(
+        str(transaction.get("createdAt", ""))
+        for transaction in transactions
+        if str(transaction.get("createdAt", "")).strip()
+    )
+    return [
+        {"createdAt": created_at, "transactionCount": count}
+        for created_at, count in sorted(counts.items(), reverse=True)
+    ]
 
 
 def merge_imported_transactions(
@@ -522,6 +582,7 @@ def imported_transaction_state(
             str(transaction["accountType"]),
             str(transaction["provider"]),
             str(transaction["notes"]),
+            str(transaction["createdAt"]),
         )
 
     remaining = Counter(content_identity(transaction) for transaction in additions)
@@ -605,6 +666,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/backups":
             self.get_backups()
+            return
+        if path == "/api/import-history":
+            self.get_import_history()
             return
         session_match = AMAZON_IMPORT_SESSION_PATH.fullmatch(path)
         if session_match is not None:
@@ -744,6 +808,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         backup_delete_match = BACKUP_DELETE_PATH.fullmatch(path)
         if backup_delete_match is not None:
             self.delete_backup(unquote(backup_delete_match.group(1)))
+            return
+        import_history_delete_match = IMPORT_HISTORY_DELETE_PATH.fullmatch(path)
+        if import_history_delete_match is not None:
+            self.delete_import_batch(unquote(import_history_delete_match.group(1)))
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -885,6 +953,75 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not list backups: {exc}"},
+            )
+
+    def get_import_history(self) -> None:
+        try:
+            with self.data_lock:
+                if self.csv_path.exists():
+                    transactions, revision = read_transaction_state(self.csv_path)
+                else:
+                    transactions, revision = [], MISSING_CSV_REVISION
+            self.send_json(
+                HTTPStatus.OK,
+                {"imports": import_history(transactions), "revision": revision},
+            )
+        except (CsvDataError, OSError) as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not load import history: {exc}"},
+            )
+
+    def delete_import_batch(self, created_at: str) -> None:
+        try:
+            payload = self.read_json_body()
+            if payload.get("confirm") is not True:
+                raise CsvDataError("confirmation is required to remove an imported batch")
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("revision is required")
+            normalized_created_at = normalize_created_at(created_at, "import batch timestamp")
+            if not normalized_created_at:
+                raise CsvDataError("import batch timestamp is required")
+
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                if revision != expected_revision:
+                    raise RevisionConflict(
+                        "The transaction file changed after import history loaded. Refresh and try again."
+                    )
+                retained = [
+                    transaction
+                    for transaction in transactions
+                    if transaction["createdAt"] != normalized_created_at
+                ]
+                removed_count = len(transactions) - len(retained)
+                if removed_count == 0:
+                    self.send_json(HTTPStatus.NOT_FOUND, {"error": "import batch no longer exists"})
+                    return
+                safety_backup = create_backup_copy(self.csv_path)
+                write_transactions_atomic(self.csv_path, retained)
+                saved_transactions, saved_revision = read_transaction_state(self.csv_path)
+
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "removedCount": removed_count,
+                    "safetyBackup": safety_backup,
+                    "imports": import_history(saved_transactions),
+                    "revision": saved_revision,
+                },
+            )
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvFileMissingError as exc:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not remove imported transactions: {exc}"},
             )
 
     def create_backup(self) -> None:
@@ -1254,6 +1391,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     existing = []
 
                 if additions:
+                    stamp_imported_transactions(additions)
                     existing.extend(additions)
                     existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
                     self.csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1337,6 +1475,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 )
 
                 if additions:
+                    stamp_imported_transactions(additions)
                     existing.extend(additions)
                     existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
                     write_transactions_atomic(self.csv_path, existing)
@@ -1384,15 +1523,19 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     )
 
                 if action == "create":
-                    transactions.append(normalize_transaction(payload.get("transaction"), "transaction"))
+                    created = normalize_transaction(payload.get("transaction"), "transaction")
+                    created["createdAt"] = ""
+                    transactions.append(created)
                     response_status = HTTPStatus.CREATED
                 else:
                     if transaction_id is None or not 0 <= transaction_id < len(transactions):
                         raise CsvDataError("transaction no longer exists")
                     if action == "update":
-                        transactions[transaction_id] = normalize_transaction(
+                        updated = normalize_transaction(
                             payload.get("transaction"), "transaction"
                         )
+                        updated["createdAt"] = transactions[transaction_id]["createdAt"]
+                        transactions[transaction_id] = updated
                     elif action == "delete":
                         del transactions[transaction_id]
                     else:
