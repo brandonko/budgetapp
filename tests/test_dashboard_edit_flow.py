@@ -13,6 +13,7 @@ class DashboardEditFlowTests(unittest.TestCase):
         upload_html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
         self.assertIn('textarea id="field-notes" name="notes"', index_html)
         self.assertIn('textarea name="notes"', upload_html)
+        self.assertIn('input id="field-refunded" name="refunded"', index_html)
 
     def test_dashboard_editor_reopens_its_originating_transaction_list(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
@@ -20,6 +21,9 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("reopenTransactionDialog(context)", javascript)
         self.assertIn("closeTransactionForm({ force: true })", javascript)
         self.assertIn("formData.get(\"notes\")", javascript)
+        self.assertIn('flags.add("refunded")', javascript)
+        self.assertIn('hasTransactionFlag(transaction, "refunded")', javascript)
+        self.assertIn('if (hasTransactionFlag(transaction, "refunded")) return 0;', javascript)
 
     def test_reporting_view_is_saved_and_restored_across_navigation(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")

@@ -165,6 +165,7 @@ class BackupApiTests(unittest.TestCase):
         restored_rows, _revision = read_transaction_state(self.csv_path)
         self.assertEqual(restored_rows[0]["notes"], "")
         self.assertEqual(restored_rows[0]["createdAt"], "")
+        self.assertEqual(restored_rows[0]["flags"], "")
 
     def test_import_history_groups_batches_and_removes_one_with_a_backup(self) -> None:
         first_timestamp = "2026-09-02T10:00:00.000000Z"

@@ -164,11 +164,23 @@ function isIncome(transaction) {
   return transaction.category.trim().toLocaleLowerCase() === "income";
 }
 
+function transactionFlags(transaction) {
+  return String(transaction?.flags ?? "")
+    .split(",")
+    .map((flag) => flag.trim().toLocaleLowerCase())
+    .filter(Boolean);
+}
+
+function hasTransactionFlag(transaction, flag) {
+  return transactionFlags(transaction).includes(flag.toLocaleLowerCase());
+}
+
 function sum(transactions) {
   return transactions.reduce((total, transaction) => total + transaction.amount, 0);
 }
 
 function displayAmount(transaction) {
+  if (hasTransactionFlag(transaction, "refunded")) return 0;
   return isIncome(transaction) ? Math.abs(transaction.amount) : transaction.amount;
 }
 
@@ -481,6 +493,8 @@ function renderAnnualCharts(transactions) {
 function createTransactionRow(transaction) {
   const row = document.createElement("article");
   row.className = "transaction-row";
+  const refunded = hasTransactionFlag(transaction, "refunded");
+  row.classList.toggle("transaction-row--refunded", refunded);
 
   const parsedDate = parseLocalDate(transaction.date);
   const dateElement = document.createElement("time");
@@ -499,6 +513,12 @@ function createTransactionRow(transaction) {
   const metadata = document.createElement("span");
   metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
   description.append(title, metadata);
+  if (refunded) {
+    const refundedBadge = document.createElement("span");
+    refundedBadge.className = "transaction-flag transaction-flag--refunded";
+    refundedBadge.textContent = "Refunded";
+    description.append(refundedBadge);
+  }
   if (transaction.notes) {
     const notes = document.createElement("span");
     notes.className = "transaction-note";
@@ -512,6 +532,9 @@ function createTransactionRow(transaction) {
   amount.className = "transaction-amount";
   amount.classList.toggle("is-credit", transaction.amount < 0 || isIncome(transaction));
   amount.textContent = currency.format(displayAmount(transaction));
+  if (refunded) {
+    amount.title = `Original amount: ${currency.format(transaction.amount)}; excluded from totals`;
+  }
   const editButton = document.createElement("button");
   editButton.className = "edit-button";
   editButton.type = "button";
@@ -611,12 +634,22 @@ function openTransactionForm(transaction = null) {
   formField("accountType").value = transaction?.accountType ?? "";
   formField("provider").value = transaction?.provider ?? "";
   formField("notes").value = transaction?.notes ?? "";
+  formField("refunded").checked = hasTransactionFlag(transaction, "refunded");
   elements.formDialog.showModal();
   formField(editing ? "description" : "date").focus();
 }
 
 function transactionFromForm() {
   const formData = new FormData(elements.form);
+  const existingTransaction = state.transactions.find(
+    (transaction) => transaction._id === state.editingTransactionId,
+  );
+  const flags = new Set(transactionFlags(existingTransaction));
+  if (formData.has("refunded")) {
+    flags.add("refunded");
+  } else {
+    flags.delete("refunded");
+  }
   return {
     date: formData.get("date"),
     description: formData.get("description"),
@@ -626,6 +659,7 @@ function transactionFromForm() {
     accountType: formData.get("accountType"),
     provider: formData.get("provider"),
     notes: formData.get("notes"),
+    flags: [...flags].sort().join(","),
   };
 }
 

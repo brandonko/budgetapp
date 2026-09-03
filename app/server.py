@@ -51,14 +51,21 @@ COLUMNS = (
     "accountType",
     "provider",
     "notes",
+    "flags",
     "createdAt",
 )
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
-LEGACY_COLUMNS = COLUMNS[:-2]
-NOTES_COLUMNS = COLUMNS[:-1]
+LEGACY_COLUMNS = COLUMNS[:7]
+NOTES_COLUMNS = COLUMNS[:8]
+FLAGS_COLUMNS = COLUMNS[:9]
+CREATED_AT_COLUMNS = COLUMNS[:8] + ("createdAt",)
+COMPATIBLE_COLUMNS = (COLUMNS, FLAGS_COLUMNS, CREATED_AT_COLUMNS, NOTES_COLUMNS, LEGACY_COLUMNS)
 REQUIRED_TEXT_COLUMNS = tuple(
-    column for column in COLUMNS if column not in {"date", "amount", "notes", "createdAt"}
+    column
+    for column in COLUMNS
+    if column not in {"date", "amount", "notes", "flags", "createdAt"}
 )
+FLAG_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 CENT = Decimal("0.01")
 MAX_REQUEST_BYTES = 1_000_000
 MAX_IMPORT_REQUEST_BYTES = 50_000_000
@@ -206,6 +213,21 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(notes, str):
         raise CsvDataError(f"{location}.notes must be text")
     transaction["notes"] = notes.strip()
+    raw_flags = raw.get("flags", "")
+    if not isinstance(raw_flags, str):
+        raise CsvDataError(f"{location}.flags must be comma-separated text")
+    flags: list[str] = []
+    for raw_flag in raw_flags.split(","):
+        flag = raw_flag.strip().casefold()
+        if not flag:
+            continue
+        if not FLAG_PATTERN.fullmatch(flag):
+            raise CsvDataError(
+                f"{location}.flags entries must use letters, numbers, hyphens, or underscores"
+            )
+        if flag not in flags:
+            flags.append(flag)
+    transaction["flags"] = ",".join(flags)
     transaction["createdAt"] = normalize_created_at(
         raw.get("createdAt", ""), f"{location}.createdAt"
     )
@@ -309,19 +331,17 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
         raise CsvDataError(f"could not read {path}: {exc}") from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     fieldnames = tuple(reader.fieldnames or ())
-    if set(fieldnames) == set(COLUMNS):
+    if any(set(fieldnames) == set(columns) for columns in COMPATIBLE_COLUMNS):
         return [
-            normalize_transaction(row, f"line {line_number}")
-            for line_number, row in enumerate(reader, start=2)
-        ]
-    if set(fieldnames) == set(NOTES_COLUMNS):
-        return [
-            normalize_transaction(dict(row, createdAt=""), f"line {line_number}")
-            for line_number, row in enumerate(reader, start=2)
-        ]
-    if set(fieldnames) == set(LEGACY_COLUMNS):
-        return [
-            normalize_transaction(dict(row, notes="", createdAt=""), f"line {line_number}")
+            normalize_transaction(
+                dict(
+                    row,
+                    notes=row.get("notes", ""),
+                    flags=row.get("flags", ""),
+                    createdAt=row.get("createdAt", ""),
+                ),
+                f"line {line_number}",
+            )
             for line_number, row in enumerate(reader, start=2)
         ]
     raise CsvDataError("backup CSV must use Ledger's current or legacy transaction columns")
@@ -413,11 +433,16 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
     fieldname_set = set(fieldnames)
     if fieldname_set == set(COLUMNS):
         return False
-    if fieldname_set != set(LEGACY_COLUMNS) and fieldname_set != set(NOTES_COLUMNS):
+    if not any(fieldname_set == set(columns) for columns in COMPATIBLE_COLUMNS[1:]):
         return False
     transactions = [
         normalize_transaction(
-            dict(row, notes=row.get("notes", ""), createdAt=""),
+            dict(
+                row,
+                notes=row.get("notes", ""),
+                flags=row.get("flags", ""),
+                createdAt=row.get("createdAt", ""),
+            ),
             f"line {line_number}",
         )
         for line_number, row in enumerate(reader, start=2)
@@ -582,6 +607,7 @@ def imported_transaction_state(
             str(transaction["accountType"]),
             str(transaction["provider"]),
             str(transaction["notes"]),
+            str(transaction["flags"]),
             str(transaction["createdAt"]),
         )
 
