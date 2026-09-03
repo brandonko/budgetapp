@@ -37,6 +37,13 @@ class DashboardEditFlowTests(unittest.TestCase):
             javascript.rindex("loadTransactions();"),
         )
 
+    def test_refunded_transactions_are_zeroed_in_all_aggregate_paths(self) -> None:
+        javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const spent = displaySum(spendingTransactions);", javascript)
+        self.assertIn("const income = Math.abs(displaySum(incomeTransactions));", javascript)
+        self.assertIn("const categoryTotal = displaySum(", javascript)
+        self.assertNotIn("function sum(transactions)", javascript)
+
     def test_missing_database_prompts_the_user_to_import(self) -> None:
         index_html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")

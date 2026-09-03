@@ -175,10 +175,6 @@ function hasTransactionFlag(transaction, flag) {
   return transactionFlags(transaction).includes(flag.toLocaleLowerCase());
 }
 
-function sum(transactions) {
-  return transactions.reduce((total, transaction) => total + transaction.amount, 0);
-}
-
 function displayAmount(transaction) {
   if (hasTransactionFlag(transaction, "refunded")) return 0;
   return isIncome(transaction) ? Math.abs(transaction.amount) : transaction.amount;
@@ -276,8 +272,8 @@ function populateDatalists() {
 function calculateSummary(transactions) {
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
   const incomeTransactions = transactions.filter(isIncome);
-  const spent = sum(spendingTransactions);
-  const income = Math.abs(sum(incomeTransactions));
+  const spent = displaySum(spendingTransactions);
+  const income = Math.abs(displaySum(incomeTransactions));
   return { spent, income, net: income - spent };
 }
 
@@ -398,7 +394,9 @@ function renderAnnualSpendingChart(transactions) {
   const monthSeries = [...byMonth.entries()].map(([month, monthTransactions]) => {
     const values = new Map();
     for (const category of categories) {
-      const categoryTotal = sum(monthTransactions.filter((transaction) => transaction.category === category));
+      const categoryTotal = displaySum(
+        monthTransactions.filter((transaction) => transaction.category === category),
+      );
       values.set(category, Math.max(categoryTotal, 0));
     }
     const visibleCategories = state.annualCategoryFilter ? [state.annualCategoryFilter] : categories;
