@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Create reusable rules that classify and update Ledger transactions." />
     <title>Classifications — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260903-classifications-page" />
+    <link rel="stylesheet" href="/styles.css?v=20260903-classification-files" />
     <script src="/navigation.js" defer></script>
     <script src="/transaction-ui.js" defer></script>
-    <script src="/settings.js?v=20260903-classifications-page" defer></script>
+    <script src="/settings.js?v=20260903-classification-files" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -32,10 +32,21 @@
     </header>
 
     <main class="settings-main">
-      <section class="settings-hero" aria-labelledby="classifications-title">
-        <p class="eyebrow">Transaction rules</p>
-        <h1 id="classifications-title">Classifications.</h1>
-        <p>Build reusable rules that keep transaction details consistent.</p>
+      <section class="settings-hero classifications-hero" aria-labelledby="classifications-title">
+        <div>
+          <p class="eyebrow">Transaction rules</p>
+          <h1 id="classifications-title">Classifications.</h1>
+          <p>Build reusable rules that keep transaction details consistent.</p>
+        </div>
+        <div class="classification-file-actions">
+          <button class="secondary-button" id="import-classifications-button" type="button">
+            Import
+          </button>
+          <button class="primary-button" id="export-classifications-button" type="button">
+            Export
+          </button>
+          <input id="import-classifications-input" type="file" accept="application/json,.json" hidden />
+        </div>
       </section>
 
       <article class="settings-card classification-settings-card">
@@ -43,10 +54,6 @@
           <div>
             <p class="eyebrow">Classification library</p>
             <h2>Manage rules</h2>
-          </div>
-          <div class="classification-heading-actions">
-            <a class="secondary-button" id="export-classifications-link"
-              href="/api/classifications/export" download>Export JSON</a>
           </div>
         </div>
         <details class="import-note import-guide classification-guide">

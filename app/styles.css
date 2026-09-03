@@ -788,6 +788,31 @@ h1 {
   margin-bottom: 42px;
 }
 
+.classifications-hero {
+  display: flex;
+  max-width: none;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+}
+
+.classifications-hero > div:first-child {
+  max-width: 720px;
+}
+
+.classifications-hero > div:first-child > p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.classification-file-actions {
+  display: flex;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+
 .settings-hero h1 {
   margin-bottom: 16px;
 }
@@ -2968,10 +2993,19 @@ body:has(dialog[open]) {
   }
 
   .classification-heading-actions,
+  .classifications-hero,
   .classification-footer,
   .classification-card-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .classifications-hero {
+    align-items: stretch;
+  }
+
+  .classification-file-actions > button {
+    flex: 1;
   }
 
   .classification-heading-actions > *,

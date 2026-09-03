@@ -222,7 +222,9 @@ then persist once both sections have been accepted. There is no separate global
 save step.
 
 Rules are saved atomically beside the master CSV as
-`data/classifications.json`. Use **Export JSON** to download a portable copy.
+`data/classifications.json`. Use **Export** at the top of the Classifications page
+to choose where to save a portable JSON copy. Use **Import** to select a JSON
+file, validate it, and replace the current classification library.
 Classification changes affect future import previews; they do not silently
 rewrite existing transactions. To intentionally update prior data, use **Apply
 to existing transactions**. Ledger first opens a review modal listing every

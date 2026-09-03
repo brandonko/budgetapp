@@ -29,6 +29,9 @@ const elements = {
   closeImportHistoryEdit: document.querySelector("#close-import-history-edit"),
   cancelImportHistoryEdit: document.querySelector("#cancel-import-history-edit"),
   saveImportHistoryEdit: document.querySelector("#save-import-history-edit"),
+  importClassifications: document.querySelector("#import-classifications-button"),
+  importClassificationsInput: document.querySelector("#import-classifications-input"),
+  exportClassifications: document.querySelector("#export-classifications-button"),
   addClassification: document.querySelector("#add-classification-button"),
   applyClassifications: document.querySelector("#apply-classifications-button"),
   classificationStatus: document.querySelector("#classification-status"),
@@ -1236,6 +1239,9 @@ function updateAddClassificationAvailability() {
 
 function renderClassifications() {
   updateAddClassificationAvailability();
+  elements.importClassifications.disabled = classificationsBusy || editorOpen();
+  elements.importClassificationsInput.disabled = classificationsBusy || editorOpen();
+  elements.exportClassifications.disabled = classificationsBusy || editorOpen();
   elements.applyClassifications.disabled =
     classificationsBusy || editorOpen() || classifications.length === 0;
   elements.classificationPagination.hidden = classifications.length === 0;
@@ -1540,7 +1546,103 @@ if (elements.createBackup) {
   loadBackups();
 }
 
+async function exportClassifications() {
+  if (classificationsBusy) return;
+  classificationsBusy = true;
+  renderClassifications();
+  try {
+    const handle = typeof window.showSaveFilePicker === "function"
+      ? await window.showSaveFilePicker({
+        suggestedName: "classifications.json",
+        types: [{
+          description: "JSON files",
+          accept: { "application/json": [".json"] },
+        }],
+      })
+      : null;
+    const response = await fetch("/api/classifications/export", { cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Could not export classifications (${response.status}).`);
+    }
+    const blob = await response.blob();
+    if (handle) {
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } else {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "classifications.json";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+    setClassificationStatus("Classifications exported.");
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    setClassificationStatus(
+      error instanceof Error ? error.message : "Could not export classifications.",
+      "error",
+    );
+  } finally {
+    classificationsBusy = false;
+    renderClassifications();
+  }
+}
+
+async function importClassifications(event) {
+  const input = event.currentTarget;
+  const [file] = input.files;
+  input.value = "";
+  if (!file || classificationsBusy || editorOpen()) return;
+  try {
+    const document = JSON.parse(await file.text());
+    if (!document || typeof document !== "object" || Array.isArray(document)) {
+      throw new Error("The selected file must contain a classifications JSON object.");
+    }
+    if (!window.confirm(
+      `Import ${file.name}? This will replace the current classification library.`,
+    )) return;
+
+    classificationsBusy = true;
+    renderClassifications();
+    const response = await fetch("/api/classifications", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(document),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `Could not import classifications (${response.status}).`);
+    }
+    classifications = payload.classifications;
+    selectedClassificationIndex = 0;
+    classificationEdit = null;
+    ruleEdits.clear();
+    pendingNewClassificationIndex = null;
+    setClassificationStatus(
+      `Imported ${classifications.length} classification${classifications.length === 1 ? "" : "s"} from ${file.name}.`,
+    );
+  } catch (error) {
+    const message = error instanceof SyntaxError
+      ? "The selected file is not valid JSON."
+      : error instanceof Error ? error.message : "Could not import classifications.";
+    setClassificationStatus(message, "error");
+  } finally {
+    classificationsBusy = false;
+    renderClassifications();
+  }
+}
+
 if (elements.addClassification) {
+  elements.importClassifications.addEventListener("click", () => {
+  elements.importClassificationsInput.click();
+  });
+  elements.importClassificationsInput.addEventListener("change", importClassifications);
+  elements.exportClassifications.addEventListener("click", exportClassifications);
   elements.addClassification.addEventListener("click", () => {
   const lastClassification = classifications.at(-1);
   if (lastClassification && !classificationCanBeFollowedByAnother(lastClassification)) return;
