@@ -7,6 +7,7 @@
     <title>Import data — Ledger</title>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/navigation.js" defer></script>
+    <script src="/transaction-ui.js" defer></script>
     <script src="/upload.js" defer></script>
   </head>
   <body>
@@ -33,18 +34,58 @@
       <section class="upload-hero" aria-labelledby="upload-title">
         <p class="eyebrow">Data import</p>
         <h1 id="upload-title">Bring your data together.</h1>
-        <p>
-          Data is validated before new transactions are added, and existing matches are left untouched.
-        </p>
       </section>
 
-      <div class="import-note">
-        <span aria-hidden="true">i</span>
-        <p>
-          Duplicate matching uses date, amount, and occurrence count. Multiple identical
-          transactions from the same day are preserved.
-        </p>
-      </div>
+      <details class="import-note import-guide">
+        <summary>
+          <span class="import-note-icon" aria-hidden="true">i</span>
+          <span>
+            <strong>New to importing?</strong>
+            <small>Learn how this page turns account and order history into Ledger transactions.</small>
+          </span>
+        </summary>
+        <div class="import-guide-content">
+          <section>
+            <h2>How importing works</h2>
+            <p>
+              Choose a service tab, complete its fields, and select its Import button. For direct
+              imports, the companion Chrome extension opens the service in your browser and reads
+              data from your signed-in session. Ledger stages the results for review; nothing is
+              written to <code>data/transactions.csv</code> until you select transactions and confirm.
+            </p>
+            <p>
+              Potential duplicates appear unchecked in the review. Duplicate matching uses date,
+              amount, and occurrence count, so multiple identical transactions from the same day
+              are still preserved when they represent separate occurrences.
+            </p>
+            <p>
+              Credit Karma and Apple Card retain their source categories. Amazon, AliExpress, and
+              eBay start as Shopping, while Venmo starts as Venmo. Saved classification rules can
+              then assign a matching category and subcategory; otherwise, the initial category is
+              kept and the subcategory remains blank.
+            </p>
+          </section>
+          <section>
+            <h2>Dates and account details</h2>
+            <p>
+              Start and end dates are inclusive and limit the transaction or order dates requested
+              by automatic imports. Apple Card CSV uploads review every row in the selected file, so
+              the date fields do not filter a manually uploaded CSV.
+            </p>
+            <p>
+              Account name, account type, and provider are labels saved on each imported row—not
+              usernames or credentials. Use account name for the specific card, bank account, or
+              wallet; account type for a broad grouping such as CREDIT CARD or BANK; and provider
+              for the issuing bank or service. You can keep the suggested values or replace them.
+            </p>
+          </section>
+          <p class="import-guide-warning">
+            <strong>Apple Card:</strong> automatic importing is currently broken. Export a transaction
+            CSV manually from <a href="https://card.apple.com/" target="_blank"
+              rel="noopener noreferrer">card.apple.com</a>, then use the Apple Card tab’s CSV upload.
+          </p>
+        </div>
+      </details>
 
       <aside class="companion-extension" aria-label="Companion extension status">
         <div class="extension-state">
@@ -100,6 +141,13 @@
               Imports account transactions and applies expense-oriented signs. Optional filters
               prevent Amazon, AliExpress, Venmo, and eBay entries from duplicating richer source data.
             </p>
+            <p class="creditkarma-account-warning">
+              <strong>Check your connections first.</strong> Disconnected accounts will have missing
+              transactions. Visit
+              <a href="https://www.creditkarma.com/connect/manage-accounts" target="_blank"
+                rel="noopener noreferrer">Credit Karma Manage Accounts</a>
+              to reconnect any bank or service before importing.
+            </p>
           </div>
           <div class="amazon-direct-controls">
             <div class="date-range-fields">
@@ -116,19 +164,19 @@
               <legend>Transaction filters</legend>
               <label>
                 <input id="creditkarma-ignore-amazon" type="checkbox" checked />
-                <span>Ignore Amazon transactions</span>
+                <span>Ignore Amazon transactions <small>(description contains “amazon”)</small></span>
               </label>
               <label>
                 <input id="creditkarma-ignore-aliexpress" type="checkbox" checked />
-                <span>Ignore AliExpress transactions <small>(matches Alipay)</small></span>
+                <span>Ignore AliExpress transactions <small>(description contains “alipay”, “ali express”, or “aliexpress”)</small></span>
               </label>
               <label>
                 <input id="creditkarma-ignore-venmo" type="checkbox" checked />
-                <span>Ignore Venmo transactions</span>
+                <span>Ignore Venmo transactions <small>(description contains “venmo”)</small></span>
               </label>
               <label>
                 <input id="creditkarma-ignore-ebay" type="checkbox" checked />
-                <span>Ignore eBay transactions</span>
+                <span>Ignore eBay transactions <small>(description contains “ebay”)</small></span>
               </label>
             </fieldset>
             <div class="amazon-direct-actions">
@@ -310,8 +358,9 @@
           <div class="amazon-direct-copy">
             <h2>Apple Card</h2>
             <p>
-              Opens card.apple.com and uses Apple's official date-range CSV export. If Apple
-              changes the export page, you can select a previously exported CSV as a fallback.
+              Automatic importing is currently unavailable. Export a transaction CSV manually from
+              card.apple.com, then select it below. Apple Card's categories are retained unless a
+              saved classification rule matches.
             </p>
           </div>
           <div class="amazon-direct-controls">
@@ -348,12 +397,16 @@
               </button>
             </div>
             <details class="extension-help apple-card-fallback">
-              <summary>Import an exported CSV instead</summary>
+              <summary>Upload an exported CSV</summary>
               <label class="apple-card-file-field">
                 <span>Apple Card CSV</span>
                 <input id="applecard-file" type="file" accept=".csv,text/csv" required />
               </label>
-              <button class="secondary-button" id="applecard-file-import-button" type="button">
+              <p class="apple-card-file-help">
+                Every transaction in the selected CSV will be reviewed. The date range above
+                applies only to automatic Apple Card imports.
+              </p>
+              <button class="secondary-button" id="applecard-file-import-button" type="button" disabled>
                 Import selected CSV
               </button>
             </details>
@@ -485,6 +538,10 @@
               <input name="category" type="text" autocomplete="off" required />
             </label>
             <label class="form-field">
+              <span>Subcategory</span>
+              <input name="subcategory" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
               <span>Account name</span>
               <input name="accountName" type="text" autocomplete="off" required />
             </label>
@@ -501,12 +558,18 @@
               <textarea name="notes" rows="4"
                 placeholder="Add any details you want to remember"></textarea>
             </label>
+            <label class="refund-toggle form-field--wide">
+              <input name="refunded" type="checkbox" value="refunded" />
+              <span>
+                <strong>Refunded</strong>
+                <small>Keep this transaction in the import but count it as $0 in spending totals.</small>
+              </span>
+            </label>
           </div>
           <p class="form-error" id="import-edit-error" role="alert" hidden></p>
         </div>
 
         <footer class="form-footer">
-          <button class="danger-button" id="delete-imported-transaction" type="button">Remove from import</button>
           <span class="form-footer-spacer"></span>
           <button class="secondary-button" id="cancel-import-edit" type="button">Cancel</button>
           <button class="primary-button" id="save-import-edit" type="submit">Save transaction</button>

@@ -116,6 +116,27 @@ class AppleCardDirectImportTests(unittest.TestCase):
         self.assertTrue(all(row["accountName"] == "My Apple Card" for row in rows))
         self.assertTrue(all(row["provider"] == "Apple" for row in rows))
 
+    def test_manual_csv_session_can_review_every_row_without_date_filtering(self) -> None:
+        status, session = self.request(
+            "POST",
+            "/api/applecard-import-sessions",
+            {
+                "startDate": "2026-08-21",
+                "endDate": "2026-08-31",
+                "filterDateRange": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        status, completed = self.request(
+            "POST",
+            f'/api/applecard-import-sessions/{session["token"]}/complete',
+            {"content": APPLE_CARD_CSV},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(completed["import"]["parsed"], 3)
+        self.assertEqual(completed["import"]["new"], 3)
+        self.assertFalse(self.csv_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

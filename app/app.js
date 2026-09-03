@@ -1,6 +1,8 @@
 "use strict";
 
 const DASHBOARD_VIEW_STORAGE_KEY = "ledger.dashboardView.v1";
+const UNCLASSIFIED_SUBCATEGORY = "__ledger_unclassified_subcategory__";
+const transactionUi = window.LedgerTransactionUI;
 
 const state = {
   transactions: [],
@@ -9,8 +11,12 @@ const state = {
   selectedYear: "",
   selectedMonth: "",
   annualCategoryFilter: "",
+  annualSubcategoryFilter: "",
+  annualExpandedCategories: new Set(),
   editingTransactionId: null,
   transactionDialogContext: null,
+  transactionDialogTransactions: [],
+  transactionDialogFilters: { description: "", accountName: "", provider: "", subcategory: "" },
   returnToTransactionDialog: null,
   formBusy: false,
 };
@@ -24,6 +30,7 @@ function saveDashboardView() {
         selectedYear: state.selectedYear,
         selectedMonth: state.selectedMonth,
         annualCategoryFilter: state.annualCategoryFilter,
+        annualSubcategoryFilter: state.annualSubcategoryFilter,
       }),
     );
   } catch {
@@ -42,6 +49,9 @@ function restoreDashboardView() {
     }
     if (typeof saved.annualCategoryFilter === "string") {
       state.annualCategoryFilter = saved.annualCategoryFilter.slice(0, 200);
+    }
+    if (typeof saved.annualSubcategoryFilter === "string") {
+      state.annualSubcategoryFilter = saved.annualSubcategoryFilter.slice(0, 200);
     }
   } catch {
     // Ignore malformed or inaccessible preferences and use the latest month.
@@ -96,6 +106,9 @@ const elements = {
   annualSpendingChart: document.querySelector("#annual-spending-chart"),
   spendingChartSubtitle: document.querySelector("#spending-chart-subtitle"),
   clearCategoryFilter: document.querySelector("#clear-category-filter"),
+  spendingChartTitle: document.querySelector("#spending-chart-title"),
+  annualBreakdownHead: document.querySelector("#annual-breakdown-head"),
+  annualBreakdownBody: document.querySelector("#annual-breakdown-body"),
   annualNetChart: document.querySelector("#annual-net-chart"),
   viewExcludedButton: document.querySelector("#view-excluded-button"),
   excludedButtonLabel: document.querySelector("#excluded-button-label"),
@@ -106,6 +119,12 @@ const elements = {
   dialogTitle: document.querySelector("#dialog-title"),
   dialogSubtitle: document.querySelector("#dialog-subtitle"),
   transactionList: document.querySelector("#transaction-list"),
+  transactionSearch: document.querySelector("#transaction-search"),
+  transactionAccountFilter: document.querySelector("#transaction-account-filter"),
+  transactionProviderFilter: document.querySelector("#transaction-provider-filter"),
+  transactionSubcategoryFilter: document.querySelector("#transaction-subcategory-filter"),
+  subcategorySummary: document.querySelector("#subcategory-summary"),
+  clearTransactionFilters: document.querySelector("#clear-transaction-filters"),
   closeDialog: document.querySelector("#close-dialog"),
   formDialog: document.querySelector("#transaction-form-dialog"),
   form: document.querySelector("#transaction-form"),
@@ -125,6 +144,7 @@ const elements = {
   dashboardSections: document.querySelectorAll(".hero, .summary-grid, .annual-insights, .categories-section"),
   datalists: {
     category: document.querySelector("#category-options"),
+    subcategory: document.querySelector("#subcategory-options"),
     accountName: document.querySelector("#account-name-options"),
     accountType: document.querySelector("#account-type-options"),
     provider: document.querySelector("#provider-options"),
@@ -164,19 +184,8 @@ function isIncome(transaction) {
   return transaction.category.trim().toLocaleLowerCase() === "income";
 }
 
-function transactionFlags(transaction) {
-  return String(transaction?.flags ?? "")
-    .split(",")
-    .map((flag) => flag.trim().toLocaleLowerCase())
-    .filter(Boolean);
-}
-
-function hasTransactionFlag(transaction, flag) {
-  return transactionFlags(transaction).includes(flag.toLocaleLowerCase());
-}
-
 function displayAmount(transaction) {
-  if (hasTransactionFlag(transaction, "refunded")) return 0;
+  if (transactionUi.hasTransactionFlag(transaction, "refunded")) return 0;
   return isIncome(transaction) ? Math.abs(transaction.amount) : transaction.amount;
 }
 
@@ -256,9 +265,9 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
 
 function populateDatalists() {
   for (const [field, datalist] of Object.entries(elements.datalists)) {
-    const values = [...new Set(state.transactions.map((transaction) => transaction[field]))].sort((a, b) =>
-      a.localeCompare(b),
-    );
+    const values = [...new Set(state.transactions.map((transaction) => transaction[field]))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
     datalist.replaceChildren(
       ...values.map((value) => {
         const option = document.createElement("option");
@@ -359,57 +368,188 @@ function colorForCategory(category, categories) {
   return categoryColors[categories.indexOf(category) % categoryColors.length];
 }
 
-function setAnnualCategoryFilter(category) {
-  state.annualCategoryFilter = state.annualCategoryFilter === category ? "" : category;
+function subcategoryKey(transaction) {
+  return transaction.subcategory || UNCLASSIFIED_SUBCATEGORY;
+}
+
+function subcategoryLabel(subcategory) {
+  return subcategory === UNCLASSIFIED_SUBCATEGORY ? "Unclassified" : subcategory;
+}
+
+function mixHexColor(color, whiteRatio) {
+  const channels = color.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16));
+  return `rgb(${channels.map((channel) => Math.round(channel + (255 - channel) * whiteRatio)).join(" ")})`;
+}
+
+function colorForSubcategory(subcategory, subcategories, categoryColor) {
+  const index = subcategories.indexOf(subcategory);
+  return mixHexColor(categoryColor, Math.min(0.08 + (index % 6) * 0.12, 0.68));
+}
+
+function annualSpendingCategories(transactions) {
+  return groupByCategory(transactions.filter((transaction) => !isIncome(transaction)))
+    .map((group) => group.category);
+}
+
+function selectAnnualCategory(category) {
+  state.annualCategoryFilter = category;
+  state.annualSubcategoryFilter = "";
+  state.annualExpandedCategories.add(category);
   saveDashboardView();
-  renderAnnualCharts(transactionsForSelectedPeriod());
+  renderAnnualSpendingChart(transactionsForSelectedPeriod());
+  renderAnnualBreakdown(transactionsForSelectedPeriod());
+}
+
+function selectAnnualSubcategory(subcategory) {
+  state.annualSubcategoryFilter =
+    state.annualSubcategoryFilter === subcategory ? "" : subcategory;
+  saveDashboardView();
+  renderAnnualSpendingChart(transactionsForSelectedPeriod());
+}
+
+function renderSpendingBreadcrumb() {
+  if (!state.annualCategoryFilter) {
+    elements.spendingChartSubtitle.textContent = "All spending categories";
+    return;
+  }
+  const all = document.createElement("button");
+  all.type = "button";
+  all.className = "chart-breadcrumb-button";
+  all.textContent = "All spending";
+  all.addEventListener("click", clearAnnualSpendingFilter);
+  const categorySeparator = document.createElement("span");
+  categorySeparator.textContent = "›";
+  const category = document.createElement(
+    state.annualSubcategoryFilter ? "button" : "span",
+  );
+  category.textContent = state.annualCategoryFilter;
+  if (state.annualSubcategoryFilter) {
+    category.type = "button";
+    category.className = "chart-breadcrumb-button";
+    category.addEventListener("click", () => {
+      state.annualSubcategoryFilter = "";
+      saveDashboardView();
+      renderAnnualSpendingChart(transactionsForSelectedPeriod());
+    });
+  }
+  const parts = [all, categorySeparator, category];
+  if (state.annualSubcategoryFilter) {
+    const subcategorySeparator = document.createElement("span");
+    subcategorySeparator.textContent = "›";
+    const subcategory = document.createElement("strong");
+    subcategory.textContent = subcategoryLabel(state.annualSubcategoryFilter);
+    parts.push(subcategorySeparator, subcategory);
+  }
+  elements.spendingChartSubtitle.replaceChildren(...parts);
+}
+
+function clearAnnualSpendingFilter() {
+  state.annualCategoryFilter = "";
+  state.annualSubcategoryFilter = "";
+  saveDashboardView();
+  renderAnnualSpendingChart(transactionsForSelectedPeriod());
 }
 
 function renderAnnualSpendingChart(transactions) {
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
-  const categories = [...new Set(spendingTransactions.map((transaction) => transaction.category))].sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const categories = annualSpendingCategories(spendingTransactions);
   if (state.annualCategoryFilter && !categories.includes(state.annualCategoryFilter)) {
     state.annualCategoryFilter = "";
+    state.annualSubcategoryFilter = "";
     saveDashboardView();
   }
 
+  const categoryTransactions = state.annualCategoryFilter
+    ? spendingTransactions.filter(
+        (transaction) => transaction.category === state.annualCategoryFilter,
+      )
+    : spendingTransactions;
+  const subcategories = state.annualCategoryFilter
+    ? [...new Set(categoryTransactions.map(subcategoryKey))].sort((left, right) => {
+        const totalDifference = Math.abs(displaySum(categoryTransactions.filter(
+          (transaction) => subcategoryKey(transaction) === right,
+        ))) - Math.abs(displaySum(categoryTransactions.filter(
+          (transaction) => subcategoryKey(transaction) === left,
+        )));
+        return totalDifference || subcategoryLabel(left).localeCompare(subcategoryLabel(right));
+      })
+    : [];
+  if (
+    state.annualSubcategoryFilter &&
+    !subcategories.includes(state.annualSubcategoryFilter)
+  ) {
+    state.annualSubcategoryFilter = "";
+    saveDashboardView();
+  }
+
+  const series = state.annualCategoryFilter ? subcategories : categories;
+  const visibleSeries = state.annualSubcategoryFilter
+    ? [state.annualSubcategoryFilter]
+    : series;
+  const parentColor = state.annualCategoryFilter
+    ? colorForCategory(state.annualCategoryFilter, categories)
+    : "";
+  const seriesLabel = (key) => state.annualCategoryFilter ? subcategoryLabel(key) : key;
+  const seriesColor = (key) => state.annualCategoryFilter
+    ? colorForSubcategory(key, subcategories, parentColor)
+    : colorForCategory(key, categories);
+  const seriesTransactions = (key, candidates) => candidates.filter((transaction) => (
+    state.annualCategoryFilter
+      ? transaction.category === state.annualCategoryFilter && subcategoryKey(transaction) === key
+      : transaction.category === key
+  ));
+
   elements.annualCategoryLegend.replaceChildren();
-  for (const category of categories) {
+  elements.annualCategoryLegend.setAttribute(
+    "aria-label",
+    state.annualCategoryFilter ? "Filter spending chart by subcategory" : "Filter spending chart by category",
+  );
+  for (const key of series) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "legend-button";
-    button.style.setProperty("--legend-color", colorForCategory(category, categories));
-    button.setAttribute("aria-pressed", String(state.annualCategoryFilter === category));
-    button.textContent = category;
-    button.addEventListener("click", () => setAnnualCategoryFilter(category));
+    button.style.setProperty("--legend-color", seriesColor(key));
+    button.setAttribute(
+      "aria-pressed",
+      String(state.annualCategoryFilter
+        ? state.annualSubcategoryFilter === key
+        : false),
+    );
+    const annualTotal = displaySum(seriesTransactions(key, spendingTransactions));
+    button.textContent = `${seriesLabel(key)} · ${currency.format(annualTotal)}`;
+    button.addEventListener("click", () => {
+      if (state.annualCategoryFilter) selectAnnualSubcategory(key);
+      else selectAnnualCategory(key);
+    });
     elements.annualCategoryLegend.append(button);
   }
 
-  elements.spendingChartSubtitle.textContent = state.annualCategoryFilter || "All spending categories";
+  elements.spendingChartTitle.textContent = state.annualCategoryFilter
+    ? `Monthly ${state.annualCategoryFilter} spending by subcategory`
+    : "Monthly spending by category";
+  renderSpendingBreadcrumb();
   elements.clearCategoryFilter.hidden = !state.annualCategoryFilter;
 
   const byMonth = annualTransactionsByMonth(spendingTransactions);
   const monthSeries = [...byMonth.entries()].map(([month, monthTransactions]) => {
     const values = new Map();
-    for (const category of categories) {
-      const categoryTotal = displaySum(
-        monthTransactions.filter((transaction) => transaction.category === category),
-      );
-      values.set(category, Math.max(categoryTotal, 0));
+    for (const key of series) {
+      const matching = seriesTransactions(key, monthTransactions);
+      values.set(key, { amount: Math.max(displaySum(matching), 0), count: matching.length });
     }
-    const visibleCategories = state.annualCategoryFilter ? [state.annualCategoryFilter] : categories;
     return {
       month,
       values,
-      total: visibleCategories.reduce((total, category) => total + (values.get(category) || 0), 0),
+      total: visibleSeries.reduce(
+        (total, key) => total + (values.get(key)?.amount || 0),
+        0,
+      ),
     };
   });
   const maximum = Math.max(...monthSeries.map((month) => month.total), 1);
 
   elements.annualSpendingChart.replaceChildren();
-  if (categories.length === 0) {
+  if (series.length === 0) {
     const empty = document.createElement("p");
     empty.className = "chart-empty";
     empty.textContent = "No spending transactions found for this year.";
@@ -417,7 +557,6 @@ function renderAnnualSpendingChart(transactions) {
     return;
   }
 
-  const visibleCategories = state.annualCategoryFilter ? [state.annualCategoryFilter] : categories;
   for (const monthData of monthSeries) {
     const column = document.createElement("div");
     column.className = "stacked-month";
@@ -430,14 +569,14 @@ function renderAnnualSpendingChart(transactions) {
       "aria-label",
       `${monthLabel(`${state.selectedYear}-${monthData.month}`)} spending: ${currency.format(monthData.total)}`,
     );
-    for (const category of visibleCategories) {
-      const amount = monthData.values.get(category) || 0;
+    for (const key of visibleSeries) {
+      const { amount, count } = monthData.values.get(key) || { amount: 0, count: 0 };
       if (amount <= 0) continue;
       const segment = document.createElement("span");
       segment.className = "stacked-bar-segment";
       segment.style.height = `${(amount / maximum) * 100}%`;
-      segment.style.backgroundColor = colorForCategory(category, categories);
-      segment.title = `${category}: ${currency.format(amount)}`;
+      segment.style.backgroundColor = seriesColor(key);
+      segment.title = `${seriesLabel(key)}: ${currency.format(amount)} · ${count} ${count === 1 ? "transaction" : "transactions"}`;
       track.append(segment);
     }
     const label = document.createElement("span");
@@ -446,6 +585,117 @@ function renderAnnualSpendingChart(transactions) {
     column.append(value, track, label);
     elements.annualSpendingChart.append(column);
   }
+}
+
+function annualTotals(transactions) {
+  const monthly = new Map();
+  for (let monthNumber = 1; monthNumber <= 12; monthNumber += 1) {
+    const month = String(monthNumber).padStart(2, "0");
+    monthly.set(month, displaySum(transactions.filter(
+      (transaction) => transaction.date.slice(5, 7) === month,
+    )));
+  }
+  return { monthly, annual: displaySum(transactions) };
+}
+
+function annualAmountCell(amount) {
+  const cell = document.createElement("td");
+  cell.textContent = amount === 0 ? "—" : currency.format(amount);
+  cell.classList.toggle("is-negative", amount < 0);
+  return cell;
+}
+
+function appendAnnualAmounts(row, transactions) {
+  const totals = annualTotals(transactions);
+  for (const amount of totals.monthly.values()) row.append(annualAmountCell(amount));
+  const annual = annualAmountCell(totals.annual);
+  annual.classList.add("annual-total-cell");
+  row.append(annual);
+}
+
+function renderAnnualBreakdown(transactions) {
+  const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
+  const groups = groupByCategory(spendingTransactions);
+  const headerRow = document.createElement("tr");
+  const categoryHeader = document.createElement("th");
+  categoryHeader.scope = "col";
+  categoryHeader.textContent = "Category";
+  headerRow.append(categoryHeader);
+  for (let monthNumber = 1; monthNumber <= 12; monthNumber += 1) {
+    const month = String(monthNumber).padStart(2, "0");
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = shortMonthFormatter.format(
+      parseLocalDate(`${state.selectedYear}-${month}-01`),
+    );
+    headerRow.append(header);
+  }
+  const annualHeader = document.createElement("th");
+  annualHeader.scope = "col";
+  annualHeader.textContent = "Annual";
+  headerRow.append(annualHeader);
+  elements.annualBreakdownHead.replaceChildren(headerRow);
+
+  const rows = [];
+  if (groups.length === 0) {
+    const emptyRow = document.createElement("tr");
+    const emptyCell = document.createElement("td");
+    emptyCell.colSpan = 14;
+    emptyCell.className = "annual-breakdown-empty";
+    emptyCell.textContent = "No spending transactions found for this year.";
+    emptyRow.append(emptyCell);
+    rows.push(emptyRow);
+  }
+  for (const group of groups) {
+    const expanded = state.annualExpandedCategories.has(group.category);
+    const categoryRow = document.createElement("tr");
+    categoryRow.className = "annual-category-row";
+    const categoryCell = document.createElement("th");
+    categoryCell.scope = "row";
+    const expandButton = document.createElement("button");
+    expandButton.type = "button";
+    expandButton.className = "annual-category-expand";
+    expandButton.setAttribute("aria-expanded", String(expanded));
+    expandButton.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${group.category} subcategories`);
+    const arrow = document.createElement("span");
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "›";
+    const label = document.createElement("span");
+    label.textContent = group.category;
+    expandButton.append(arrow, label);
+    expandButton.addEventListener("click", () => {
+      if (expanded) state.annualExpandedCategories.delete(group.category);
+      else state.annualExpandedCategories.add(group.category);
+      renderAnnualBreakdown(transactionsForSelectedPeriod());
+    });
+    categoryCell.append(expandButton);
+    categoryRow.append(categoryCell);
+    appendAnnualAmounts(categoryRow, group.transactions);
+    rows.push(categoryRow);
+
+    if (!expanded) continue;
+    const subcategoryGroups = new Map();
+    for (const transaction of group.transactions) {
+      const key = subcategoryKey(transaction);
+      if (!subcategoryGroups.has(key)) subcategoryGroups.set(key, []);
+      subcategoryGroups.get(key).push(transaction);
+    }
+    const sortedSubcategories = [...subcategoryGroups.entries()].sort(
+      (left, right) => Math.abs(displaySum(right[1])) - Math.abs(displaySum(left[1])) ||
+        subcategoryLabel(left[0]).localeCompare(subcategoryLabel(right[0])),
+    );
+    for (const [subcategory, subcategoryTransactions] of sortedSubcategories) {
+      const subcategoryRow = document.createElement("tr");
+      subcategoryRow.className = "annual-subcategory-row";
+      const subcategoryCell = document.createElement("th");
+      subcategoryCell.scope = "row";
+      subcategoryCell.textContent = subcategoryLabel(subcategory);
+      subcategoryRow.append(subcategoryCell);
+      appendAnnualAmounts(subcategoryRow, subcategoryTransactions);
+      rows.push(subcategoryRow);
+    }
+  }
+  elements.annualBreakdownBody.replaceChildren(...rows);
 }
 
 function renderAnnualNetChart(transactions) {
@@ -485,76 +735,166 @@ function renderAnnualNetChart(transactions) {
 
 function renderAnnualCharts(transactions) {
   renderAnnualSpendingChart(transactions);
+  if (state.annualCategoryFilter) {
+    state.annualExpandedCategories.add(state.annualCategoryFilter);
+  }
+  renderAnnualBreakdown(transactions);
   renderAnnualNetChart(transactions);
 }
 
-function createTransactionRow(transaction) {
-  const row = document.createElement("article");
-  row.className = "transaction-row";
-  const refunded = hasTransactionFlag(transaction, "refunded");
-  row.classList.toggle("transaction-row--refunded", refunded);
-
-  const parsedDate = parseLocalDate(transaction.date);
-  const dateElement = document.createElement("time");
-  dateElement.className = "transaction-date";
-  dateElement.dateTime = transaction.date;
-  const month = document.createTextNode(shortMonthFormatter.format(parsedDate));
-  const day = document.createElement("strong");
-  day.textContent = parsedDate.getUTCDate();
-  dateElement.append(month, day);
-
-  const description = document.createElement("div");
-  description.className = "transaction-description";
-  const title = document.createElement("strong");
-  title.textContent = transaction.description;
-  title.title = transaction.description;
-  const metadata = document.createElement("span");
-  metadata.textContent = `${transaction.category} · ${transaction.accountName} · ${transaction.provider}`;
-  description.append(title, metadata);
-  if (refunded) {
-    const refundedBadge = document.createElement("span");
-    refundedBadge.className = "transaction-flag transaction-flag--refunded";
-    refundedBadge.textContent = "Refunded";
-    description.append(refundedBadge);
-  }
-  if (transaction.notes) {
-    const notes = document.createElement("span");
-    notes.className = "transaction-note";
-    notes.textContent = transaction.notes;
-    description.append(notes);
-  }
-
-  const actions = document.createElement("div");
-  actions.className = "transaction-actions";
-  const amount = document.createElement("span");
-  amount.className = "transaction-amount";
-  amount.classList.toggle("is-credit", transaction.amount < 0 || isIncome(transaction));
-  amount.textContent = currency.format(displayAmount(transaction));
-  if (refunded) {
-    amount.title = `Original amount: ${currency.format(transaction.amount)}; excluded from totals`;
-  }
-  const editButton = document.createElement("button");
-  editButton.className = "edit-button";
-  editButton.type = "button";
-  editButton.textContent = "Edit";
-  editButton.setAttribute("aria-label", `Edit ${transaction.description}`);
-  editButton.addEventListener("click", () => openTransactionForm(transaction));
-  actions.append(amount, editButton);
-
-  row.append(dateElement, description, actions);
-  return row;
+function transactionRowOptions(transaction) {
+  return {
+    currency,
+    shortMonthFormatter,
+    amountForDisplay: displayAmount,
+    onEdit: () => openTransactionForm(transaction),
+  };
 }
 
-function openTransactionDialog(title, transactions, context) {
+function currentTransactionDialogFilters() {
+  return {
+    description: elements.transactionSearch.value.trim(),
+    accountName: elements.transactionAccountFilter.value,
+    provider: elements.transactionProviderFilter.value,
+    subcategory: elements.transactionSubcategoryFilter.value,
+  };
+}
+
+function populateTransactionFilter(select, values, allLabel, selectedValue) {
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = allLabel;
+  const options = values.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    return option;
+  });
+  select.replaceChildren(allOption, ...options);
+  select.value = values.includes(selectedValue) ? selectedValue : "";
+}
+
+function configureTransactionFilters(transactions, filters) {
+  elements.transactionSearch.value = filters.description || "";
+  const accounts = [...new Set(transactions.map((transaction) => transaction.accountName))]
+    .sort((left, right) => left.localeCompare(right));
+  const providers = [...new Set(transactions.map((transaction) => transaction.provider))]
+    .sort((left, right) => left.localeCompare(right));
+  const subcategories = [...new Set(transactions.map((transaction) => transaction.subcategory).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+  populateTransactionFilter(
+    elements.transactionAccountFilter, accounts, "All accounts", filters.accountName,
+  );
+  populateTransactionFilter(
+    elements.transactionProviderFilter, providers, "All providers", filters.provider,
+  );
+  populateTransactionFilter(
+    elements.transactionSubcategoryFilter,
+    subcategories,
+    "All subcategories",
+    filters.subcategory,
+  );
+  if (transactions.some((transaction) => !transaction.subcategory)) {
+    const option = document.createElement("option");
+    option.value = UNCLASSIFIED_SUBCATEGORY;
+    option.textContent = "Unclassified";
+    elements.transactionSubcategoryFilter.append(option);
+    if (filters.subcategory === UNCLASSIFIED_SUBCATEGORY) {
+      elements.transactionSubcategoryFilter.value = UNCLASSIFIED_SUBCATEGORY;
+    }
+  }
+  state.transactionDialogFilters = currentTransactionDialogFilters();
+}
+
+function renderSubcategorySummary() {
+  const show = state.transactionDialogContext?.type === "category";
+  elements.subcategorySummary.hidden = !show;
+  if (!show) {
+    elements.subcategorySummary.replaceChildren();
+    return;
+  }
+  const groups = new Map();
+  for (const transaction of state.transactionDialogTransactions) {
+    const key = transaction.subcategory || UNCLASSIFIED_SUBCATEGORY;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(transaction);
+  }
+  const buttons = [...groups.entries()]
+    .map(([subcategory, transactions]) => ({
+      subcategory,
+      transactions,
+      total: displaySum(transactions),
+    }))
+    .sort((left, right) => Math.abs(right.total) - Math.abs(left.total))
+    .map((group) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "subcategory-summary-button";
+      button.classList.toggle(
+        "is-active", elements.transactionSubcategoryFilter.value === group.subcategory,
+      );
+      const label = document.createElement("span");
+      label.textContent = group.subcategory === UNCLASSIFIED_SUBCATEGORY
+        ? "Unclassified"
+        : group.subcategory;
+      const amount = document.createElement("strong");
+      amount.textContent = currency.format(group.total);
+      button.append(label, amount);
+      button.addEventListener("click", () => {
+        elements.transactionSubcategoryFilter.value =
+          elements.transactionSubcategoryFilter.value === group.subcategory ? "" : group.subcategory;
+        renderTransactionDialogTransactions();
+      });
+      return button;
+    });
+  elements.subcategorySummary.replaceChildren(...buttons);
+}
+
+function renderTransactionDialogTransactions() {
+  const filters = currentTransactionDialogFilters();
+  state.transactionDialogFilters = filters;
+  const descriptionQuery = filters.description.toLocaleLowerCase();
+  const visibleTransactions = state.transactionDialogTransactions.filter((transaction) => (
+    (!descriptionQuery || transaction.description.toLocaleLowerCase().includes(descriptionQuery)) &&
+    (!filters.accountName || transaction.accountName === filters.accountName) &&
+    (!filters.provider || transaction.provider === filters.provider) &&
+    (!filters.subcategory || (
+      filters.subcategory === UNCLASSIFIED_SUBCATEGORY
+        ? !transaction.subcategory
+        : transaction.subcategory === filters.subcategory
+    ))
+  ));
+  const total = state.transactionDialogTransactions.length;
+  const filtered = Object.values(filters).some(Boolean);
+  elements.dialogSubtitle.textContent = filtered
+    ? `${visibleTransactions.length} of ${total} transactions`
+    : `${total} ${total === 1 ? "transaction" : "transactions"}`;
+  elements.clearTransactionFilters.disabled = !filtered;
+  renderSubcategorySummary();
+  if (visibleTransactions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-transaction-list";
+    empty.textContent = "No transactions match these filters.";
+    elements.transactionList.replaceChildren(empty);
+    return;
+  }
+  transactionUi.renderTransactionList(
+    elements.transactionList,
+    visibleTransactions,
+    transactionRowOptions,
+  );
+}
+
+function openTransactionDialog(title, transactions, context, { preserveFilters = false } = {}) {
+  const filters = preserveFilters
+    ? state.transactionDialogFilters
+    : { description: "", accountName: "", provider: "", subcategory: "" };
   state.transactionDialogContext = context;
-  const sortedTransactions = [...transactions].sort(compareLatestFirst);
-  const total = displaySum(sortedTransactions);
+  state.transactionDialogTransactions = [...transactions].sort(compareLatestFirst);
   elements.dialogEyebrow.textContent = selectedPeriodLabel();
   elements.dialogTitle.textContent = title;
-  elements.dialogSubtitle.textContent = `${sortedTransactions.length} ${
-    sortedTransactions.length === 1 ? "transaction" : "transactions"
-  } · ${currency.format(total)}`;
-  elements.transactionList.replaceChildren(...sortedTransactions.map(createTransactionRow));
+  configureTransactionFilters(state.transactionDialogTransactions, filters);
+  renderTransactionDialogTransactions();
   elements.dialog.showModal();
 }
 
@@ -570,7 +910,7 @@ function reopenTransactionDialog(context) {
   } else {
     transactions = transactionsForSelectedPeriod();
   }
-  openTransactionDialog(context.title, transactions, context);
+  openTransactionDialog(context.title, transactions, context, { preserveFilters: true });
 }
 
 function formField(name) {
@@ -617,48 +957,24 @@ function openTransactionForm(transaction = null) {
     elements.dialog.close();
   }
   clearFormError();
-  elements.form.reset();
   state.editingTransactionId = transaction?._id ?? null;
   const editing = transaction !== null;
   elements.formEyebrow.textContent = editing ? "Edit transaction" : "New transaction";
   elements.formTitle.textContent = editing ? "Update transaction" : "Add transaction";
   elements.deleteTransactionButton.hidden = !editing;
 
-  formField("date").value = transaction?.date ?? defaultNewTransactionDate();
-  formField("description").value = transaction?.description ?? "";
-  formField("amount").value = transaction?.amount ?? "";
-  formField("category").value = transaction?.category ?? "";
-  formField("accountName").value = transaction?.accountName ?? "";
-  formField("accountType").value = transaction?.accountType ?? "";
-  formField("provider").value = transaction?.provider ?? "";
-  formField("notes").value = transaction?.notes ?? "";
-  formField("refunded").checked = hasTransactionFlag(transaction, "refunded");
+  transactionUi.populateTransactionEditor(elements.form, transaction, {
+    date: defaultNewTransactionDate(),
+  });
   elements.formDialog.showModal();
   formField(editing ? "description" : "date").focus();
 }
 
 function transactionFromForm() {
-  const formData = new FormData(elements.form);
   const existingTransaction = state.transactions.find(
     (transaction) => transaction._id === state.editingTransactionId,
   );
-  const flags = new Set(transactionFlags(existingTransaction));
-  if (formData.has("refunded")) {
-    flags.add("refunded");
-  } else {
-    flags.delete("refunded");
-  }
-  return {
-    date: formData.get("date"),
-    description: formData.get("description"),
-    amount: formData.get("amount"),
-    category: formData.get("category"),
-    accountName: formData.get("accountName"),
-    accountType: formData.get("accountType"),
-    provider: formData.get("provider"),
-    notes: formData.get("notes"),
-    flags: [...flags].sort().join(","),
-  };
+  return transactionUi.transactionFromEditor(elements.form, existingTransaction);
 }
 
 function closeTransactionForm({ returnToList = true, force = false } = {}) {
@@ -812,13 +1128,11 @@ async function loadTransactions() {
 
 elements.viewModeSelect.addEventListener("change", (event) => {
   state.viewMode = event.target.value;
-  state.annualCategoryFilter = "";
   saveDashboardView();
   renderDashboard();
 });
 elements.yearSelect.addEventListener("change", (event) => {
   state.selectedYear = event.target.value;
-  state.annualCategoryFilter = "";
   saveDashboardView();
   renderDashboard();
 });
@@ -828,9 +1142,7 @@ elements.monthSelect.addEventListener("change", (event) => {
   renderDashboard();
 });
 elements.clearCategoryFilter.addEventListener("click", () => {
-  state.annualCategoryFilter = "";
-  saveDashboardView();
-  renderAnnualCharts(transactionsForSelectedPeriod());
+  clearAnnualSpendingFilter();
 });
 elements.addTransactionButton.addEventListener("click", () => openTransactionForm());
 elements.viewAllButton.addEventListener("click", () => {
@@ -846,6 +1158,18 @@ elements.viewExcludedButton.addEventListener("click", () => {
   });
 });
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
+elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
+elements.transactionAccountFilter.addEventListener("change", renderTransactionDialogTransactions);
+elements.transactionProviderFilter.addEventListener("change", renderTransactionDialogTransactions);
+elements.transactionSubcategoryFilter.addEventListener("change", renderTransactionDialogTransactions);
+elements.clearTransactionFilters.addEventListener("click", () => {
+  elements.transactionSearch.value = "";
+  elements.transactionAccountFilter.value = "";
+  elements.transactionProviderFilter.value = "";
+  elements.transactionSubcategoryFilter.value = "";
+  renderTransactionDialogTransactions();
+  elements.transactionSearch.focus();
+});
 elements.dialog.addEventListener("click", (event) => {
   if (event.target === elements.dialog) {
     elements.dialog.close();

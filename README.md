@@ -8,8 +8,8 @@ details.
 The dashboard includes:
 
 - Monthly and annual spending, income, and net summaries
-- Annual category-stacked spending and monthly net charts
-- Category breakdowns and latest-first transaction lists
+- Annual category-stacked spending with subcategory drill-down and monthly net charts
+- Top-level category breakdowns with dollar-based subcategory summaries and latest-first transaction lists
 - Monthly/annual view selection with independent year and month controls
 - Browser-local restoration of the last selected reporting view and period
 - A shared navigation menu for the dashboard, data imports, and settings
@@ -18,6 +18,7 @@ The dashboard includes:
 - Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
 - One-to-one reconciliation of credit-card bill-payment transfers
+- Ordered, regular-expression classification rules for import categories and subcategories
 - Neutral spending presentation with green surpluses and red deficits
 
 ## Requirements
@@ -91,7 +92,8 @@ For Apple Card, select **Import from Apple Card** and sign in if Apple asks.
 Ledger's extension drives Apple's official export form and receives the CSV
 without accessing the user's Apple Account credentials. If Apple changes the
 page, manually export a CSV from [card.apple.com](https://card.apple.com) and
-select it in the same source tab.
+select it in the same source tab. Manual CSV imports review every valid row in
+the file; the page's date selectors apply only to the automatic workflow.
 
 ### Companion browser extension
 
@@ -118,6 +120,10 @@ master CSV changes. New rows are selected by default; duplicates remain visible,
 highlighted, and deselected. Every field can be corrected, rows can be removed,
 and duplicates can be deliberately selected before confirming the import.
 
+Before duplicate detection and review, Ledger applies classifications saved
+under **Settings → Classifications**. If no rule matches, the importer-provided
+category is retained and the subcategory stays blank.
+
 Credit Karma, AliExpress, eBay, and Venmo can change their private APIs; Amazon and Apple can change their
 page markup. Any source can present login/CAPTCHA challenges. Closing an active
 source tab cancels that import. See
@@ -138,8 +144,8 @@ the source transaction to be imported again.
 ## Edit transaction data
 
 Open any category or the all-transactions view and select **Edit** on a
-transaction. Its nine user-editable fields can be changed, including optional freeform
-notes and flags. Marking a transaction as **Refunded** keeps its original amount
+transaction. Its ten user-editable fields can be changed, including the optional
+subcategory, freeform notes, and flags. Marking a transaction as **Refunded** keeps its original amount
 for duplicate detection while treating it as $0 in dashboard totals. The import
 timestamp is system-managed. After editing from a transaction list, Ledger returns to the refreshed
 list instead of closing the workflow. The same form supports
@@ -157,11 +163,13 @@ Ledger stores generated backups under `data/backups/` using timestamped names
 such as `transactions_20260902_114500_123456.csv`. Any regular CSV placed directly
 in that folder also appears. The list is ordered by last-modified date, newest
 first, and shows the transaction count in each valid backup. Compatible older
-seven-, eight-, and nine-column Ledger CSVs are supported and receive any
+seven- through ten-column Ledger CSVs are supported and receive any
 missing optional fields when restored.
 
-Individual backups can be permanently deleted after an explicit confirmation.
-Deleting a backup does not modify the active transaction file or other backups.
+Individual backups can be renamed to any local CSV filename or permanently
+deleted after an explicit confirmation. Renaming never overwrites another
+backup. Deleting a backup does not modify the active transaction file or other
+backups.
 
 Restoring requires explicit confirmation and completely replaces
 `data/transactions.csv`. Before replacement, Ledger automatically creates a
@@ -178,6 +186,43 @@ Removing an import batch deletes all of its remaining rows after an explicit
 confirmation and revision check. Ledger creates a safety backup of the complete
 transaction file before applying the removal.
 
+## Classifications
+
+Open **Settings → Classifications** to create ordered import rules. Each
+classification assigns one required category and one optional subcategory, and
+may contain multiple rules. A rule has separate matchers for the transaction's
+current category, subcategory, description, account name, and provider using case-insensitive regular expressions. Empty
+matchers are ignored; when a rule has several populated matchers, all must
+match. Each rule can also include optional freeform notes explaining its
+rationale; notes are displayed with the rule but never participate in matching.
+Ledger evaluates classifications from top to bottom and uses the first matching
+rule. The editor presents one classification at a time with Previous
+and Next navigation, while newly added classifications are appended at the end.
+Classification details and rules use compact read-only summaries by default.
+Use their individual **Edit** actions to reveal inputs; **Cancel** discards that
+draft, while **Save** validates the change and atomically persists the entire
+classification document. Classification details and one rule may be edited at
+the same time. Cancelling either editor restores only its own fields; saving
+either commits all currently visible edits and closes both editors. There is no
+separate global save step.
+
+Rules are saved atomically beside the master CSV as
+`data/classifications.json`. Use **Export JSON** to download a portable copy.
+Classification changes affect future import previews; they do not silently
+rewrite existing transactions. To intentionally update prior data, use **Apply
+to existing transactions**. Ledger first opens a review modal listing every
+affected transaction and its current and proposed category path. Confirming the
+preview distinguishes rows that will change from matching rows that already
+have the selected classification. Confirming applies the currently displayed rules and creates a safety backup before
+it writes any category changes. Cancelling, pressing Escape, using the close
+button, or clicking the backdrop writes nothing. Rows that match no rule keep
+their existing category and subcategory.
+
+Use **Review unclassified** to open an all-dates modal containing every row with
+a blank subcategory. Search descriptions or filter by category, account, and
+provider to identify patterns for new rules. Closing the modal preserves the
+current Classification page and any draft being edited.
+
 ## Master CSV schema
 
 If the master CSV does not exist, the dashboard offers a direct link to Import
@@ -187,14 +232,15 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,accountName,accountType,provider,notes,flags,createdAt
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,flags,createdAt
 ```
 
-Ledger automatically and atomically adds missing optional `notes`, `flags`, and
+Ledger automatically and atomically adds missing optional `subcategory`, `notes`, `flags`, and
 `createdAt` columns when it opens an older database. Notes may contain commas or multiple
 lines. Flags are normalized, comma-separated identifiers; the first supported
 flag is `refunded`. `createdAt` is an immutable UTC ISO 8601 timestamp assigned
 to imported rows; it remains blank for manual and legacy rows.
+A snapshot of the original CSV is placed in `data/backups/` before schema migration.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
@@ -216,12 +262,16 @@ and a spending deficit is red.
   budget-visible transaction.
 - **Monthly** view filters the dashboard by a selected month and year.
 - **Annual** view summarizes the selected year. Its spending chart stacks each
-  month's spending by category; selecting a category in the legend focuses the
-  chart on that category. Its net chart shows monthly surpluses in green and
-  monthly deficits in red.
+  month's spending by category and shows annual dollar totals in the legend.
+  Selecting a category redraws the monthly stacks by subcategory; selecting a
+  subcategory isolates it, and the breadcrumb returns to higher levels. An
+  expandable dollar table compares every category and subcategory across all
+  twelve months plus an annual total. Its net chart shows monthly surpluses in
+  green and monthly deficits in red.
 - Ledger remembers the selected view, year, month, and annual category filter in
-  the current browser. Returning from Import data or Settings restores that
-  reporting context when it is still available in the transaction data.
+  the current browser, including annual subcategory drill-down. Returning from
+  Import data or Settings restores that reporting context when it is still
+  available in the transaction data.
 
 ### Bill-payment reconciliation
 
@@ -255,8 +305,8 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed settings page with backups and import history
-app/settings.js    Backup and import-batch management behavior
+app/settings.html  Tabbed backup, import-history, and classification settings
+app/settings.js    Backup, import-batch, and classification-rule management
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
@@ -272,5 +322,6 @@ tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)
 data/               Master CSV database and backups (ignored by Git)
   transactions.csv
+  classifications.json
   backups/
 ```
