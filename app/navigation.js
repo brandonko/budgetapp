@@ -7,6 +7,10 @@ for (const menu of siteMenus) {
 
   menu.addEventListener("toggle", () => {
     button.setAttribute("aria-expanded", String(menu.open));
+    button.setAttribute(
+      "aria-label",
+      menu.open ? "Close navigation menu" : "Open navigation menu",
+    );
   });
 
   menu.querySelectorAll("a").forEach((link) => {
