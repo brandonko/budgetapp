@@ -273,7 +273,9 @@ on it. Translate it for people in the interface:
 - The Ledger brand links to the dashboard home page.
 - On the dashboard, center the view/year/month reporting controls in the header.
 - Keep page-level destinations in the top-right hamburger menu: Dashboard,
-  Import data, and Settings.
+  Import data, Classifications, and Settings. Use native disclosure semantics,
+  connect the toggle to the navigation region, and keep its accessible name and
+  expanded state synchronized.
 - Use the same menu across pages, clearly mark the current page, close it on an
   outside click or Escape, and return focus to the menu button after Escape.
 - Organize Settings as accessible tabs, beginning with Backup. Add future user
