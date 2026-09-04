@@ -76,6 +76,14 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
+const formatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  compactDisplay: "short",
+  maximumFractionDigits: 2,
+});
+
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
   year: "numeric",
@@ -325,9 +333,12 @@ function calculateSummary(transactions) {
 
 function renderSummary(transactions) {
   const { spent, income, net } = calculateSummary(transactions);
-  elements.totalSpent.textContent = currency.format(spent);
-  elements.totalIncome.textContent = currency.format(income);
-  elements.netTotal.textContent = currency.format(net);
+  elements.totalSpent.textContent = formatter.format(spent);
+  elements.totalSpent.title = currency.format(spent);
+  elements.totalIncome.textContent = formatter.format(income);
+  elements.totalIncome.title = currency.format(income);
+  elements.netTotal.textContent = formatter.format(net);
+  elements.netTotal.title = currency.format(net);
   elements.netTotalCard.classList.toggle("summary-card--net-positive", net > 0);
   elements.netTotalCard.classList.toggle("summary-card--net-negative", net < 0);
   elements.netTotalNote.textContent =
@@ -1493,6 +1504,7 @@ elements.formDialog.addEventListener("click", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
+
 
 restoreDashboardView();
 loadTransactions();
