@@ -116,6 +116,8 @@ third-party Python dependency unless a future requirement clearly justifies it.
   current category, subcategory, description, account name, and provider. Ignore
   blank matchers. All populated matchers in
   one rule must match; multiple rules within a classification are alternatives.
+  Reject backreferences and repeated groups containing another repetition or
+  alternation so user-authored patterns cannot cause catastrophic backtracking.
 - Each rule may include optional freeform notes documenting its rationale. Keep
   the notes editor visually separate from regex matchers and explicitly explain
   that notes do not participate in matching. In read-only mode, show a saved note

@@ -207,7 +207,8 @@ unselected fields remain unchanged, while an enabled blank subcategory or notes
 action clears that value. A rule has separate matchers for the transaction's
 current category, subcategory, description, account name, and provider using case-insensitive regular expressions. Empty
 matchers are ignored; when a rule has several populated matchers, all must
-match. Each rule can also include optional freeform notes explaining its
+match. To keep matching responsive, Ledger rejects backreferences and repeated
+groups that contain another repetition or alternation. Each rule can also include optional freeform notes explaining its
 rationale; notes appear as subtitle text beneath the rule title and never
 participate in matching.
 Ledger sorts classifications alphabetically by category and subcategory, places

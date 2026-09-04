@@ -390,6 +390,49 @@ class ClassificationEngineTests(unittest.TestCase):
                 }
             )
 
+    def test_dangerous_regular_expression_structures_are_rejected(self) -> None:
+        for pattern in (
+            r"^(a+)+$",
+            r"^(a|aa)+$",
+            r"^(a)\1+$",
+            r"^(?P<letter>a)(?P=letter)+$",
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(
+                CsvDataError, "cannot (repeat|use)"
+            ):
+                normalize_classifications(
+                    {
+                        "classifications": [
+                            {
+                                "category": "Test",
+                                "rules": [{"description": pattern}],
+                            }
+                        ]
+                    }
+                )
+
+    def test_safe_regular_expression_features_remain_supported(self) -> None:
+        document = normalize_classifications(
+            {
+                "classifications": [
+                    {
+                        "category": "Food",
+                        "rules": [
+                            {
+                                "description": r"^(?:whole foods|trader joe's)\s+#?\d{1,4}$"
+                            },
+                            {"description": r"^(whole foods)+$"},
+                        ],
+                    }
+                ]
+            }
+        )
+
+        [classified] = apply_classifications(
+            [transaction(description="WHOLE FOODS #123")], document
+        )
+        self.assertEqual(classified["category"], "Food")
+
 
 class ClassificationApiTests(unittest.TestCase):
     def setUp(self) -> None:
