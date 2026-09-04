@@ -21,6 +21,8 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - If the canonical file does not exist, keep the app available without creating
   an empty database at server startup. Direct the dashboard user to Import data;
   the first successful import creates `transactions.csv` before merging rows.
+- Do not expose an API that creates a header-only canonical database. Creation
+  belongs exclusively to confirmation of a nonempty staged import.
 - A noncanonical CSV may be used only through the explicit `--csv` server
   option.
 - Treat the CSV as the source of truth. Manual adds, edits, and deletes persist
