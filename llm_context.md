@@ -397,6 +397,9 @@ ingestion belongs in the **Import data** page at `/import`.
   without modifying or creating the master CSV.
 - Bind previews to the CSV revision used for duplicate classification and reject
   confirmation if the database changed during review.
+- Do not expose an alternate direct-upload endpoint that parses and writes in one
+  request. Every supported file and browser import must use the staged session,
+  preview, explicit-confirmation, and revision-check flow.
 - If the database is new and empty, the first valid import populates it.
 
 ### Direct browser ingestion

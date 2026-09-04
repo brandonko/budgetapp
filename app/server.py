@@ -1205,7 +1205,15 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/transactions":
             self.mutate_transactions("create")
         elif path == "/api/import":
-            self.import_transactions()
+            self.send_json(
+                HTTPStatus.GONE,
+                {
+                    "error": (
+                        "Direct file imports are no longer supported. "
+                        "Use a staged import session and confirm its preview."
+                    )
+                },
+            )
         elif path == "/api/amazon-import-sessions":
             self.create_amazon_import_session()
         elif path == "/api/creditkarma-import-sessions":
@@ -2185,100 +2193,6 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         except (CsvDataError, OSError) as exc:
             status = HTTPStatus.INTERNAL_SERVER_ERROR if isinstance(exc, OSError) else HTTPStatus.BAD_REQUEST
             self.send_json(status, {"error": str(exc)})
-
-    def import_transactions(self) -> None:
-        try:
-            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
-            expected_revision = payload.get("revision")
-            if not isinstance(expected_revision, str) or not expected_revision:
-                raise CsvDataError("revision is required")
-            files = payload.get("files")
-            if not isinstance(files, Mapping):
-                raise CsvDataError("files must be an object")
-            unknown_parsers = set(files) - {"creditkarma", "amazon"}
-            if unknown_parsers:
-                raise CsvDataError(f"unsupported parser: {sorted(unknown_parsers)[0]}")
-            if not files:
-                raise CsvDataError("select at least one file to import")
-
-            def file_content(parser: str) -> Any:
-                uploaded_file = files.get(parser)
-                if not isinstance(uploaded_file, Mapping):
-                    raise CsvDataError(f"{parser} upload must be an object")
-                return uploaded_file.get("content")
-
-            parsed_by_source: dict[str, list[dict[str, Any]]] = {}
-            ignored_amazon_count = 0
-            amazon_account: tuple[str, str, str] | None = None
-            if "creditkarma" in files:
-                credit_karma = parse_credit_karma(file_content("creditkarma"))
-                parsed_by_source["creditkarma"] = credit_karma.transactions
-                ignored_amazon_count = credit_karma.ignored_amazon_count
-                amazon_account = credit_karma.amazon_account
-            if "amazon" in files:
-                parsed_by_source["amazon"] = parse_amazon(
-                    file_content("amazon"), amazon_account=amazon_account
-                )
-
-            with self.data_lock:
-                existing, revision = read_transaction_state(self.csv_path)
-                if revision != expected_revision:
-                    raise RevisionConflict(
-                        "The transaction file changed after this page loaded. Reload and try again."
-                    )
-
-                parsed_by_source = {
-                    source: [
-                        normalize_imported_transaction(
-                            transaction, f"{source} transaction"
-                        )
-                        for transaction in transactions
-                    ]
-                    for source, transactions in parsed_by_source.items()
-                }
-                classification_document = load_classifications(self.csv_path)
-                parsed_by_source = {
-                    source: apply_classifications(transactions, classification_document)
-                    for source, transactions in parsed_by_source.items()
-                }
-
-                additions, added_by_source, skipped_by_source = merge_imported_transactions(
-                    existing, parsed_by_source
-                )
-
-                if additions:
-                    stamp_imported_transactions(additions)
-                    existing.extend(additions)
-                    existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
-                    write_transactions_atomic(self.csv_path, existing)
-                saved_transactions, saved_revision = read_transaction_state(self.csv_path)
-
-            source_results = {
-                source: {
-                    "parsed": len(parsed_by_source[source]),
-                    "added": added_by_source[source],
-                    "duplicatesSkipped": skipped_by_source[source],
-                }
-                for source in parsed_by_source
-            }
-            if "creditkarma" in source_results:
-                source_results["creditkarma"]["amazonTransactionsIgnored"] = ignored_amazon_count
-            response = public_state(saved_transactions, saved_revision)
-            response["import"] = {
-                "added": len(additions),
-                "duplicatesSkipped": sum(skipped_by_source.values()),
-                "sources": source_results,
-            }
-            self.send_json(HTTPStatus.OK, response)
-        except RevisionConflict as exc:
-            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
-        except (CsvDataError, ImportDataError) as exc:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-        except OSError as exc:
-            self.send_json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": f"could not update {self.csv_path}: {exc}"},
-            )
 
     def mutate_transactions(self, action: str, transaction_id: int | None = None) -> None:
         try:
