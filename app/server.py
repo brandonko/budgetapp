@@ -301,6 +301,43 @@ def normalize_imported_transaction(raw: Any, location: str) -> dict[str, Any]:
     return transaction
 
 
+def validate_csv_columns(
+    fieldnames: Sequence[str],
+    allowed_schemas: Sequence[Sequence[str]],
+    location: str,
+) -> tuple[str, ...]:
+    """Require one exact, ordered schema before reading or rewriting CSV data."""
+    columns = tuple(fieldnames)
+    duplicates = [
+        column or "<blank>"
+        for column, count in Counter(columns).items()
+        if count > 1
+    ]
+    if duplicates:
+        raise CsvDataError(
+            f"{location} has duplicate columns: {', '.join(sorted(duplicates))}"
+        )
+    schemas = tuple(tuple(schema) for schema in allowed_schemas)
+    if columns in schemas:
+        return columns
+    if any(set(columns) == set(schema) for schema in schemas):
+        raise CsvDataError(f"{location} columns are not in Ledger's required order")
+    unexpected = set(columns) - set(COLUMNS)
+    if unexpected:
+        raise CsvDataError(
+            f"{location} has unexpected columns: {', '.join(sorted(unexpected))}"
+        )
+    if len(schemas) == 1:
+        missing = set(schemas[0]) - set(columns)
+        if missing:
+            raise CsvDataError(
+                f"{location} is missing columns: {', '.join(sorted(missing))}"
+            )
+    raise CsvDataError(
+        f"{location} must use Ledger's current or a supported legacy column schema"
+    )
+
+
 def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
     """Read and validate a single, revisioned snapshot of the master CSV."""
     try:
@@ -312,10 +349,7 @@ def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
 
     reader = csv.DictReader(io.StringIO(text, newline=""))
-    actual_columns = set(reader.fieldnames or [])
-    missing = set(COLUMNS) - actual_columns
-    if missing:
-        raise CsvDataError(f"CSV is missing columns: {', '.join(sorted(missing))}")
+    validate_csv_columns(reader.fieldnames or (), (COLUMNS,), "transaction CSV")
 
     transactions = [
         normalize_transaction(row, f"line {line_number}")
@@ -701,22 +735,21 @@ def read_backup_transactions(path: Path) -> list[dict[str, Any]]:
         raise CsvDataError(f"could not read {path}: {exc}") from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     fieldnames = tuple(reader.fieldnames or ())
-    if any(set(fieldnames) == set(columns) for columns in COMPATIBLE_COLUMNS):
-        return [
-            normalize_transaction(
-                dict(
-                    row,
-                    subcategory=row.get("subcategory", ""),
-                    notes=row.get("notes", ""),
-                    tags=row.get("tags", ""),
-                    flags=row.get("flags", ""),
-                    createdAt=row.get("createdAt", ""),
-                ),
-                f"line {line_number}",
-            )
-            for line_number, row in enumerate(reader, start=2)
-        ]
-    raise CsvDataError("backup CSV must use Ledger's current or legacy transaction columns")
+    validate_csv_columns(fieldnames, COMPATIBLE_COLUMNS, "backup CSV")
+    return [
+        normalize_transaction(
+            dict(
+                row,
+                subcategory=row.get("subcategory", ""),
+                notes=row.get("notes", ""),
+                tags=row.get("tags", ""),
+                flags=row.get("flags", ""),
+                createdAt=row.get("createdAt", ""),
+            ),
+            f"line {line_number}",
+        )
+        for line_number, row in enumerate(reader, start=2)
+    ]
 
 
 def backup_metadata(path: Path) -> dict[str, Any]:
@@ -802,10 +835,8 @@ def migrate_transaction_schema(csv_path: Path) -> bool:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
     reader = csv.DictReader(io.StringIO(text, newline=""))
     fieldnames = tuple(reader.fieldnames or ())
-    fieldname_set = set(fieldnames)
-    if fieldname_set == set(COLUMNS):
-        return False
-    if not any(fieldname_set == set(columns) for columns in COMPATIBLE_COLUMNS[1:]):
+    validate_csv_columns(fieldnames, COMPATIBLE_COLUMNS, "transaction CSV")
+    if fieldnames == COLUMNS:
         return False
     transactions = [
         normalize_transaction(

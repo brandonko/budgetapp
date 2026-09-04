@@ -35,6 +35,11 @@ third-party Python dependency unless a future requirement clearly justifies it.
   date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,flags,createdAt
   ```
 
+- Require the exact ordered current header before reading or writing the master
+  CSV. Reject duplicate, unexpected, missing, or reordered columns before any
+  mutation. Apply the same exact-order validation to every explicitly supported
+  legacy schema before migration or restore; never silently discard a column.
+
 - `flags` contains normalized, comma-separated identifiers. `refunded`,
   `internal-transfer`, and `include-in-budget` are supported budget-treatment
   flags. `refunded` is the

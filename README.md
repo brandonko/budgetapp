@@ -268,6 +268,9 @@ comma-separated identifiers; the first supported
 flag is `refunded`. `createdAt` is an immutable UTC ISO 8601 timestamp assigned
 to imported rows; it remains blank for manual and legacy rows.
 A snapshot of the original CSV is placed in `data/backups/` before schema migration.
+Current and legacy headers must use their documented order and may not contain
+duplicate or additional columns. Ledger rejects a malformed header before it
+reads, migrates, restores, or rewrites transaction data.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
