@@ -58,8 +58,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   seven- through eleven-column Ledger schemas without modifying the backup file. Never follow symlinks or
   allow nested paths.
 - Restoring a backup completely replaces the canonical CSV only after explicit
-  user confirmation. Create a safety backup of the current file immediately
-  before every restore, and perform the replacement atomically.
+  user confirmation. Bind the restore to the active CSV revision shown with the
+  backup list and reject a stale revision before creating a safety backup or
+  writing. Create a safety backup of the current file immediately before every
+  accepted restore, and perform the replacement atomically.
 - Allow permanent deletion of an individual backup only after explicit user
   confirmation. Never let backup deletion affect the active CSV, other backups,
   symlinks, or nested paths.

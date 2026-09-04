@@ -2,6 +2,7 @@
 const transactionUi = window.LedgerTransactionUI;
 
 const state = {
+  backupRevision: "",
   importHistoryRevision: "",
   importHistoryBatch: null,
   importHistoryTransactions: [],
@@ -480,6 +481,7 @@ async function loadBackups() {
     const response = await fetch("/api/backups", { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not load backups (${response.status}).`);
+    state.backupRevision = payload.revision;
     renderBackups(Array.isArray(payload.backups) ? payload.backups : []);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Could not load backups.", "error");
@@ -522,7 +524,7 @@ async function restoreBackup(backup) {
     const response = await fetch(`/api/backups/${encodeURIComponent(backup.name)}/restore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: true }),
+      body: JSON.stringify({ confirm: true, revision: state.backupRevision }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not restore backup (${response.status}).`);

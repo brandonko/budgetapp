@@ -182,6 +182,8 @@ backups.
 Restoring requires explicit confirmation and completely replaces
 `data/transactions.csv`. Before replacement, Ledger automatically creates a
 safety backup of the current file so the restore itself remains recoverable.
+The restore is revision-checked and rejected if the active transaction file
+changed after the backup list loaded.
 
 ## Import history
 

@@ -85,6 +85,7 @@ class BackupApiTests(unittest.TestCase):
         status, initial = self.request("GET", "/api/backups")
         self.assertEqual(status, 200)
         self.assertEqual(initial["backups"], [])
+        self.assertTrue(initial["revision"])
 
         status, created = self.request("POST", "/api/backups", {})
         self.assertEqual(status, 201)
@@ -102,7 +103,9 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(len(read_transaction_state(self.csv_path)[0]), 1)
 
         status, restored = self.request(
-            "POST", f'/api/backups/{backup["name"]}/restore', {"confirm": True}
+            "POST",
+            f'/api/backups/{backup["name"]}/restore',
+            {"confirm": True, "revision": read_transaction_state(self.csv_path)[1]},
         )
         self.assertEqual(status, 200)
         self.assertEqual(restored["transactionCount"], 2)
@@ -132,7 +135,7 @@ class BackupApiTests(unittest.TestCase):
         status, restored = self.request(
             "POST",
             f'/api/backups/{quote(custom_backup.name)}/restore',
-            {"confirm": True},
+            {"confirm": True, "revision": read_transaction_state(self.csv_path)[1]},
         )
         self.assertEqual(status, 200)
         self.assertEqual(restored["transactionCount"], 1)
@@ -158,7 +161,9 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(metadata["transactionCount"], 1)
 
         status, restored = self.request(
-            "POST", f"/api/backups/{legacy_backup.name}/restore", {"confirm": True}
+            "POST",
+            f"/api/backups/{legacy_backup.name}/restore",
+            {"confirm": True, "revision": read_transaction_state(self.csv_path)[1]},
         )
         self.assertEqual(status, 200)
         self.assertEqual(restored["transactionCount"], 1)
@@ -166,6 +171,32 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(restored_rows[0]["notes"], "")
         self.assertEqual(restored_rows[0]["createdAt"], "")
         self.assertEqual(restored_rows[0]["flags"], "")
+
+    def test_restore_rejects_a_stale_revision_without_writing_or_creating_a_backup(self) -> None:
+        _, listed = self.request("GET", "/api/backups")
+        status, created = self.request("POST", "/api/backups", {})
+        self.assertEqual(status, 201)
+        backup = created["backup"]
+
+        write_transactions_atomic(self.csv_path, [transaction("Newer edit", 9)])
+        backup_names_before = {
+            path.name for path in (self.csv_path.parent / "backups").iterdir()
+        }
+
+        status, rejected = self.request(
+            "POST",
+            f'/api/backups/{backup["name"]}/restore',
+            {"confirm": True, "revision": listed["revision"]},
+        )
+
+        self.assertEqual(status, 409)
+        self.assertIn("changed after backups loaded", rejected["error"])
+        transactions, _revision = read_transaction_state(self.csv_path)
+        self.assertEqual([row["description"] for row in transactions], ["Newer edit"])
+        self.assertEqual(
+            {path.name for path in (self.csv_path.parent / "backups").iterdir()},
+            backup_names_before,
+        )
 
     def test_import_history_groups_batches_and_removes_one_with_a_backup(self) -> None:
         first_timestamp = "2026-09-02T10:00:00.000000Z"
@@ -337,7 +368,10 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="backup-list"', html)
         self.assertIn("window.confirm", javascript)
         self.assertIn("completely replace transactions.csv", javascript)
-        self.assertIn("JSON.stringify({ confirm: true })", javascript)
+        self.assertIn(
+            "JSON.stringify({ confirm: true, revision: state.backupRevision })",
+            javascript,
+        )
         self.assertIn('method: "DELETE"', javascript)
         self.assertIn("cannot be recovered after deletion", javascript)
         self.assertIn('rename.textContent = "Rename"', javascript)
