@@ -76,7 +76,7 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
-const compactCurrency = new Intl.NumberFormat("en-US", {
+const formatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   notation: "compact",
@@ -331,35 +331,14 @@ function calculateSummary(transactions) {
   return { spent, income, net: income - spent };
 }
 
-let lastSummaryValues = null;
-
-function formatSummaryAmount(amount, compact = false) {
-  if (!Number.isFinite(amount)) {
-    return "—";
-  }
-  return (compact ? compactCurrency : currency).format(amount);
-}
-
-function setSummaryCardAmount(element, amount) {
-  if (!Number.isFinite(amount)) {
-    element.textContent = "—";
-    element.removeAttribute("title");
-    return;
-  }
-  const fullText = currency.format(amount);
-  element.title = fullText;
-  element.textContent = fullText;
-  if (element.clientWidth > 0 && element.scrollWidth > element.clientWidth) {
-    element.textContent = compactCurrency.format(amount);
-  }
-}
-
 function renderSummary(transactions) {
   const { spent, income, net } = calculateSummary(transactions);
-  lastSummaryValues = { spent, income, net };
-  setSummaryCardAmount(elements.totalSpent, spent);
-  setSummaryCardAmount(elements.totalIncome, income);
-  setSummaryCardAmount(elements.netTotal, net);
+  elements.totalSpent.textContent = formatter.format(spent);
+  elements.totalSpent.title = currency.format(spent);
+  elements.totalIncome.textContent = formatter.format(income);
+  elements.totalIncome.title = currency.format(income);
+  elements.netTotal.textContent = formatter.format(net);
+  elements.netTotal.title = currency.format(net);
   elements.netTotalCard.classList.toggle("summary-card--net-positive", net > 0);
   elements.netTotalCard.classList.toggle("summary-card--net-negative", net < 0);
   elements.netTotalNote.textContent =
@@ -1525,13 +1504,7 @@ elements.formDialog.addEventListener("click", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
-window.addEventListener("resize", () => {
-  if (lastSummaryValues) {
-    setSummaryCardAmount(elements.totalSpent, lastSummaryValues.spent);
-    setSummaryCardAmount(elements.totalIncome, lastSummaryValues.income);
-    setSummaryCardAmount(elements.netTotal, lastSummaryValues.net);
-  }
-});
+
 
 restoreDashboardView();
 loadTransactions();
