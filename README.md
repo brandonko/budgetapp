@@ -69,8 +69,9 @@ importer is visible at a time:
   Venmo, and eBay transactions so they can be replaced by richer source data. Each filter
   can be disabled for an individual import.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
-  tax multiplier. Its editable payment-account defaults are `Prime VISA`,
-  `CREDIT CARD`, and `chase`.
+  tax multiplier. Item prices must be positive; refund or adjustment records are
+  rejected rather than stored as purchases with an inverted sign. Its editable
+  payment-account defaults are `Prime VISA`, `CREDIT CARD`, and `chase`.
 - **AliExpress orders** creates one transaction per order line and proportionally
   reconciles item prices to the final order total, preserving discounts, shipping,
   and tax. The current integration accepts USD orders. Its editable defaults

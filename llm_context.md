@@ -488,6 +488,8 @@ ingestion belongs in the **Import data** page at `/import`.
   object.
 - Create one transaction for each item line, including quantity.
 - Calculate the amount using the pre-tax item price multiplied by `1.10502`.
+- Require a strictly positive pre-tax item price. Reject zero or negative source
+  values rather than interpreting them as Amazon purchases or refunds.
 - Use `Shopping` as the category.
 - Use account metadata inferred from Credit Karma when both files are present.
 - For Amazon data without inferred or user-supplied metadata, default accountName,

@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 sys.path.insert(0, str(APP_DIR))
 
+from importers import ImportDataError, parse_amazon  # noqa: E402
 from server import (  # noqa: E402
     BudgetRequestHandler,
     COLUMNS,
@@ -26,6 +27,26 @@ from server import (  # noqa: E402
     migrate_transaction_schema,
     read_transaction_state,
 )
+
+
+class AmazonParserTests(unittest.TestCase):
+    def test_rejects_zero_and_negative_item_prices(self) -> None:
+        for price in (0, -0.01, "-12.34"):
+            with self.subTest(price=price):
+                export = json.dumps(
+                    [
+                        {
+                            "orderDate": "2026-08-20",
+                            "items": [
+                                {"title": "Invalid item", "price": price, "quantity": 1}
+                            ],
+                        }
+                    ]
+                )
+                with self.assertRaisesRegex(
+                    ImportDataError, r"price must be greater than zero"
+                ):
+                    parse_amazon(export)
 
 
 class AmazonDirectImportTests(unittest.TestCase):

@@ -629,7 +629,10 @@ def parse_amazon(
             if quantity < 1 or exact_quantity != quantity:
                 raise ImportDataError(f"{item_location}.quantity must be a positive integer")
 
-            amount = require_decimal(item, "price", item_location) * quantity
+            unit_price = require_decimal(item, "price", item_location)
+            if unit_price <= 0:
+                raise ImportDataError(f"{item_location}.price must be greater than zero")
+            amount = unit_price * quantity
             transactions.append(
                 {
                     "date": order_date,
