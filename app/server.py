@@ -403,6 +403,118 @@ CLASSIFICATION_REQUIRED_TEXT_ACTION_FIELDS = {
 CLASSIFICATION_RULE_NOTES_MAX_LENGTH = 2_000
 
 
+def validate_classification_regex(pattern: str, location: str) -> None:
+    try:
+        re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        raise CsvDataError(
+            f"{location} is not a valid regular expression: {exc}"
+        ) from exc
+
+    groups: list[dict[str, bool]] = []
+    last_group: dict[str, bool] | None = None
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "\\":
+            following = pattern[index + 1 : index + 4]
+            digit_escape = re.match(r"\d{1,3}", following)
+            is_octal_escape = following.startswith("0") or (
+                digit_escape is not None
+                and len(digit_escape.group()) == 3
+                and all(digit in "01234567" for digit in digit_escape.group())
+            )
+            if digit_escape is not None and not is_octal_escape:
+                raise CsvDataError(
+                    f"{location} cannot use regular-expression backreferences"
+                )
+            last_group = None
+            index += 2
+            continue
+        if character == "[":
+            index += 1
+            while index < len(pattern):
+                if pattern[index] == "\\":
+                    index += 2
+                elif pattern[index] == "]":
+                    index += 1
+                    break
+                else:
+                    index += 1
+            last_group = None
+            continue
+        if pattern.startswith("(?P=", index) or pattern.startswith("(?(", index):
+            raise CsvDataError(
+                f"{location} cannot use regular-expression backreferences"
+            )
+        if pattern.startswith("(?#", index):
+            index = pattern.index(")", index + 3) + 1
+            last_group = None
+            continue
+        if character == "(":
+            groups.append({"repetition": False, "alternation": False})
+            if pattern.startswith(("(?<=", "(?<!"), index):
+                index += 4
+            elif pattern.startswith(("(?:", "(?=", "(?!", "(?>"), index):
+                index += 3
+            elif pattern.startswith("(?P<", index):
+                index = pattern.index(">", index + 4) + 1
+            elif pattern.startswith("(?", index):
+                prefix = re.match(r"\(\?[aiLmsux-]+(?::|\))", pattern[index:])
+                if prefix is not None and prefix.group().endswith(")"):
+                    groups.pop()
+                    index += len(prefix.group())
+                    last_group = None
+                    continue
+                if prefix is not None:
+                    index += len(prefix.group())
+                else:
+                    index += 1
+            else:
+                index += 1
+            last_group = None
+            continue
+        if character == ")":
+            last_group = groups.pop()
+            if groups:
+                groups[-1]["repetition"] |= last_group["repetition"]
+                groups[-1]["alternation"] |= last_group["alternation"]
+            index += 1
+            continue
+        if character == "|":
+            if groups:
+                groups[-1]["alternation"] = True
+            last_group = None
+            index += 1
+            continue
+
+        quantifier_end = None
+        if character in "*+?":
+            quantifier_end = index + 1
+        elif character == "{":
+            quantifier = re.match(r"\{\d+(?:,\d*)?\}", pattern[index:])
+            if quantifier is not None:
+                quantifier_end = index + len(quantifier.group())
+        if quantifier_end is not None:
+            if last_group is not None and (
+                last_group["repetition"] or last_group["alternation"]
+            ):
+                raise CsvDataError(
+                    f"{location} cannot repeat a group that contains another "
+                    "repetition or alternation"
+                )
+            if groups:
+                groups[-1]["repetition"] = True
+            if quantifier_end < len(pattern) and pattern[quantifier_end] in "?+":
+                quantifier_end += 1
+            index = quantifier_end
+            last_group = None
+            continue
+
+        last_group = None
+        index += 1
+
+
 def normalize_classification_updates(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise CsvDataError(f"{location} must be an object")
@@ -501,12 +613,7 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
                 if len(pattern) > 300:
                     raise CsvDataError(f"{rule_location}.{field} cannot exceed 300 characters")
                 if pattern:
-                    try:
-                        re.compile(pattern, re.IGNORECASE)
-                    except re.error as exc:
-                        raise CsvDataError(
-                            f"{rule_location}.{field} is not a valid regular expression: {exc}"
-                        ) from exc
+                    validate_classification_regex(pattern, f"{rule_location}.{field}")
                 rule[field] = pattern
             if not any(rule[field] for field in CLASSIFICATION_MATCHER_FIELDS):
                 raise CsvDataError(f"{rule_location} must include at least one matcher")
