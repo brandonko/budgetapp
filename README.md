@@ -29,6 +29,19 @@ The dashboard includes:
 
 No third-party Python packages are required.
 
+## Development and testing
+
+Read `llm_context.md` before changing behavior; it records Ledger's product,
+financial-correctness, privacy, and persistence invariants. Run the complete
+dependency-free regression suite from the repository root with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Tests must use synthetic data and temporary directories. Never copy private
+contents from `data/` or `raw_data_files/` into tests or commits.
+
 ## Run Ledger
 
 From the repository root:
@@ -363,6 +376,7 @@ ledger_data_importer_extension/
                     Credit Karma-specific collector
   aliexpress_extension/
                     AliExpress signed API client
+  ebay_extension/   eBay purchase-history collector
   venmo_extension/  Venmo statement collector
   apple_card_extension/ Apple Card export-form automation
   shared/           Ledger bridge and import coordinator

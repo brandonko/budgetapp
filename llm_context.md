@@ -350,8 +350,8 @@ with a line-through, while continuing to use a $0 budget amount.
 The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Import data** page at `/import`.
 
-- Show one import card per supported source: `Credit Karma`, `Amazon`, `AliExpress`,
-  `Venmo`, and `Apple Card`.
+- Show one import card per supported source: `Credit Karma`, `Amazon`,
+  `AliExpress`, `eBay`, `Venmo`, and `Apple Card`.
 - Present importer cards as accessible tabs with only one card visible at a time.
   Keep Credit Karma selected initially, support arrow/Home/End keyboard navigation,
   and preserve every importer's form and progress state while switching tabs.
@@ -441,8 +441,8 @@ ingestion belongs in the **Import data** page at `/import`.
   transactions** for the user-selected date range. Only transaction data needed
   by Ledger is required; wealth histories can remain empty.
 - Credit Karma imports expose independent **Ignore Amazon transactions**,
-  **Ignore AliExpress transactions**, and **Ignore Venmo transactions** checkboxes.
-  All default to enabled, and
+  **Ignore AliExpress transactions**, **Ignore Venmo transactions**, and
+  **Ignore eBay transactions** checkboxes. All default to enabled, and
   the chosen values belong to that source-scoped import session.
 - Preserve identical same-day transactions. During browser extraction, collapse
   duplicates only when Credit Karma supplies the same stable transaction ID;

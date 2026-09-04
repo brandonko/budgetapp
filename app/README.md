@@ -13,9 +13,9 @@ python app\server.py
 
 Then visit <http://127.0.0.1:8000>.
 
-Use **Import data** to import Credit Karma and Venmo transactions, Amazon order history, or AliExpress orders
-through the companion Chrome extension, or an official Apple Card transaction
-CSV. Transactions can also be added,
+Use **Import data** to import Credit Karma and Venmo transactions plus Amazon,
+AliExpress, and eBay order history through the companion Chrome extension, or
+an official Apple Card transaction CSV. Transactions can also be added,
 edited, assigned an optional subcategory, annotated with optional freeform notes,
 flagged as refunded so they contribute $0 to totals, and deleted from the dashboard.
 Transactions can also use Automatic, Internal transfer, or Count normally budget
