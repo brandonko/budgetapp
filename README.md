@@ -53,7 +53,9 @@ python app\server.py --csv path\to\transactions.csv --port 8080
 ```
 
 The server binds to `127.0.0.1` by default so the financial data and editing
-endpoints are accessible only from the local machine.
+endpoints are accessible only from the local machine. When bound to loopback,
+Ledger also rejects requests whose HTTP host does not identify a loopback
+address and rejects browser mutations from a different origin.
 
 ## Import data
 
@@ -343,6 +345,8 @@ edited or deleted.
 - Source files and the master CSV are ignored by Git.
 - The server listens only on localhost unless a different host is explicitly
   requested.
+- Loopback requests reject untrusted `Host` values, browser mutations require a
+  matching local origin, and responses prevent framing and MIME sniffing.
 
 ## Project structure
 
