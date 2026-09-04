@@ -116,6 +116,26 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("flex: 0 0 auto", subcategory_style)
         self.assertIn("overflow-y: hidden", subcategory_style)
 
+    def test_import_history_modal_has_shared_search_and_field_filters(self) -> None:
+        html = (ROOT / "app" / "settings.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "settings.js").read_text(encoding="utf-8")
+        dialog_start = html.index('id="import-history-dialog"')
+        for control_id in (
+            "import-history-search", "import-history-filter-button",
+            "import-history-filter-popover", "import-history-category-filter",
+            "import-history-subcategory-filter", "import-history-tag-filter",
+            "import-history-account-filter", "import-history-provider-filter",
+            "import-history-filter-chips", "reset-import-history-filters",
+            "apply-import-history-filters", "clear-import-history-filters",
+        ):
+            self.assertIn(f'id="{control_id}"', html[dialog_start:])
+        self.assertIn("function configureImportHistoryFilters", javascript)
+        self.assertIn("function renderImportHistoryFilterChips", javascript)
+        self.assertIn("function setImportHistoryFilterPopover", javascript)
+        self.assertIn("No transactions match these filters.", javascript)
+        self.assertIn("transaction.description.toLocaleLowerCase().includes(description)", javascript)
+        self.assertIn("tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()", javascript)
+
     def test_reporting_view_is_saved_and_restored_across_navigation(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
         self.assertIn(

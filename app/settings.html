@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/styles.css?v=20260903-classification-help" />
     <script src="/navigation.js" defer></script>
     <script src="/transaction-ui.js" defer></script>
-    <script src="/settings.js?v=20260903-classification-help" defer></script>
+    <script src="/settings.js?v=20260904-import-history-filters" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -114,8 +114,49 @@
             </svg>
           </button>
         </header>
-        <div class="transaction-sort-bar">
+        <div class="transaction-toolbar">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="import-history-search" type="search" autocomplete="off"
+              placeholder="Search descriptions" />
+          </label>
+          <div class="transaction-filter-menu">
+            <button class="transaction-filter-button" id="import-history-filter-button" type="button"
+              aria-expanded="false" aria-haspopup="true" aria-controls="import-history-filter-popover">
+              Filters <span id="import-history-filter-count" hidden></span>
+            </button>
+            <div class="transaction-filter-popover" id="import-history-filter-popover"
+              role="group" aria-label="Imported transaction filters" hidden>
+              <div class="transaction-filter-popover-heading">
+                <strong>Filter transactions</strong>
+                <span>Choose one or more filters.</span>
+              </div>
+              <fieldset>
+                <legend>Classification</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Category</span><select id="import-history-category-filter"><option value="">All categories</option></select></label>
+                  <label><span>Subcategory</span><select id="import-history-subcategory-filter"><option value="">All subcategories</option></select></label>
+                </div>
+                <label class="transaction-filter-wide"><span>Tag</span><select id="import-history-tag-filter"><option value="">All tags</option></select></label>
+              </fieldset>
+              <fieldset>
+                <legend>Account</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Account name</span><select id="import-history-account-filter"><option value="">All accounts</option></select></label>
+                  <label><span>Provider</span><select id="import-history-provider-filter"><option value="">All providers</option></select></label>
+                </div>
+              </fieldset>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-import-history-filters" type="button">Reset</button>
+                <button class="primary-button" id="apply-import-history-filters" type="button">Apply</button>
+              </div>
+            </div>
+          </div>
           <div id="import-history-sort"></div>
+        </div>
+        <div class="transaction-active-filters" id="import-history-active-filters" hidden>
+          <div class="transaction-filter-chips" id="import-history-filter-chips"></div>
+          <button class="text-button" id="clear-import-history-filters" type="button">Clear all</button>
         </div>
         <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
           role="alert" hidden></p>
