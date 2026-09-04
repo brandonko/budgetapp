@@ -47,6 +47,8 @@ a suspended background worker cannot lose a long-running scrape. The copy is
 removed on completion or cancellation and rejected after two hours. The server
 token itself expires after one hour without progress. The extension accepts
 requests only from an `http://127.0.0.1` or `http://localhost` Import data page.
+All permissions for remote source sites require HTTPS; HTTP access is limited to
+that local Ledger bridge.
 
 Closing the source tab ends its import.
 
