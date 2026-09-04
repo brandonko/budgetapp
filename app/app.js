@@ -323,11 +323,55 @@ function calculateSummary(transactions) {
   return { spent, income, net: income - spent };
 }
 
+const COMPACT_CURRENCY_TIERS = [
+  { value: 1e33, suffix: "D" },
+  { value: 1e30, suffix: "N" },
+  { value: 1e27, suffix: "O" },
+  { value: 1e24, suffix: "Sp" },
+  { value: 1e21, suffix: "Sx" },
+  { value: 1e18, suffix: "Qi" },
+  { value: 1e15, suffix: "Q" },
+  { value: 1e12, suffix: "T" },
+  { value: 1e9, suffix: "B" },
+  { value: 1e6, suffix: "M" },
+];
+
+function formatSummaryAmount(amount) {
+  if (!Number.isFinite(amount)) {
+    return "—";
+  }
+  const absAmount = Math.abs(amount);
+  if (absAmount < 999999.995) {
+    return currency.format(amount);
+  }
+
+  const sign = amount < 0 ? "-" : "";
+  for (let i = 0; i < COMPACT_CURRENCY_TIERS.length; i += 1) {
+    const tier = COMPACT_CURRENCY_TIERS[i];
+    if (absAmount >= tier.value) {
+      let scaled = absAmount / tier.value;
+      let formattedNumber = scaled.toFixed(2);
+      if (Number(formattedNumber) >= 1000 && i > 0) {
+        const nextTier = COMPACT_CURRENCY_TIERS[i - 1];
+        scaled = absAmount / nextTier.value;
+        formattedNumber = scaled.toFixed(2);
+        return `${sign}$${formattedNumber}${nextTier.suffix}`;
+      }
+      return `${sign}$${formattedNumber}${tier.suffix}`;
+    }
+  }
+
+  return currency.format(amount);
+}
+
 function renderSummary(transactions) {
   const { spent, income, net } = calculateSummary(transactions);
-  elements.totalSpent.textContent = currency.format(spent);
-  elements.totalIncome.textContent = currency.format(income);
-  elements.netTotal.textContent = currency.format(net);
+  elements.totalSpent.textContent = formatSummaryAmount(spent);
+  elements.totalSpent.title = currency.format(spent);
+  elements.totalIncome.textContent = formatSummaryAmount(income);
+  elements.totalIncome.title = currency.format(income);
+  elements.netTotal.textContent = formatSummaryAmount(net);
+  elements.netTotal.title = currency.format(net);
   elements.netTotalCard.classList.toggle("summary-card--net-positive", net > 0);
   elements.netTotalCard.classList.toggle("summary-card--net-negative", net < 0);
   elements.netTotalNote.textContent =

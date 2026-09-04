@@ -363,6 +363,8 @@ h1 {
 }
 
 .summary-card {
+  min-width: 0;
+  overflow: hidden;
   min-height: 190px;
   padding: 28px;
   border-left: 1px solid var(--line);
@@ -421,6 +423,10 @@ h1 {
   font-size: clamp(32px, 4vw, 46px);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.04em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary-note {
