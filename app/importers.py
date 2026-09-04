@@ -375,6 +375,11 @@ def parse_apple_card(
             amount = abs(amount)
         elif transaction_type in APPLE_CARD_CREDIT_TYPES:
             amount = -abs(amount)
+        else:
+            source_type = record["type"] or "<blank>"
+            raise ImportDataError(
+                f"{location}.Type is not supported: {source_type}"
+            )
 
         description = record["description"] or record.get("merchant", "")
         if not description:

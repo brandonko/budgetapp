@@ -422,6 +422,9 @@ ingestion belongs in the **Import data** page at `/import`.
 - Apply the selected date range to automatic Apple Card imports. Manual Apple
   Card CSV imports must stage every valid row in the selected file because the
   export itself already defines its range.
+- Accept only the explicitly supported Apple Card transaction types: purchase
+  and debit as expenses; credit, refund, and payment as negative amounts. Reject
+  blank or unknown types rather than trusting their source amount sign.
 - Keep the manual Apple Card **Import selected CSV** action disabled until the
   user has selected a file.
 - Use random, expiring, source-scoped server-side import sessions. Do not place
