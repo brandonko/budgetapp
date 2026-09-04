@@ -1195,7 +1195,15 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path
         if path == "/api/transactions/initialize":
-            self.initialize_transaction_file()
+            self.send_json(
+                HTTPStatus.GONE,
+                {
+                    "error": (
+                        "Empty database initialization is no longer supported. "
+                        "Confirm a staged import to create the transaction file."
+                    )
+                },
+            )
         elif path == "/api/classifications/preview":
             self.preview_existing_transaction_classifications()
         elif path == "/api/classifications/apply":
@@ -1270,22 +1278,6 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-
-    def initialize_transaction_file(self) -> None:
-        try:
-            with self.data_lock:
-                created = not self.csv_path.exists()
-                initialize_csv_if_missing(self.csv_path)
-                transactions, revision = read_transaction_state(self.csv_path)
-            status = HTTPStatus.CREATED if created else HTTPStatus.OK
-            self.send_json(status, public_state(transactions, revision))
-        except CsvDataError as exc:
-            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
-        except OSError as exc:
-            self.send_json(
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"error": f"could not create {self.csv_path}: {exc}"},
-            )
 
     def do_PUT(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
         path = urlparse(self.path).path

@@ -254,7 +254,8 @@ If the master CSV does not exist, the dashboard offers a direct link to Import
 data. Confirming at least one staged Credit Karma, Amazon, AliExpress, eBay, Venmo, or
 Apple Card transaction creates the file automatically before appending the selected
 rows. Cancelling a preview does not create or modify the file. An existing file is
-never replaced by initialization.
+never replaced by initialization. The retired initialization API cannot create a
+header-only canonical database outside this confirmed first-import flow.
 
 ```text
 date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,flags,createdAt

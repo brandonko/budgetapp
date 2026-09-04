@@ -479,25 +479,17 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(imported["transactions"][0]["amount"], 4.5)
         self.assertTrue(imported["transactions"][0]["createdAt"].endswith("Z"))
 
-    def test_missing_transaction_file_can_be_initialized_from_api(self) -> None:
+    def test_missing_transaction_file_cannot_be_initialized_without_an_import(self) -> None:
         self.csv_path.unlink()
 
         status, missing = self.request("GET", "/api/transactions")
         self.assertEqual(status, 404)
         self.assertEqual(missing["code"], "transaction_file_missing")
 
-        status, initialized = self.request("POST", "/api/transactions/initialize")
-        self.assertEqual(status, 201)
-        self.assertEqual(initialized["transactions"], [])
-        self.assertTrue(initialized["revision"])
-        self.assertTrue(self.csv_path.exists())
-
-        with self.csv_path.open(encoding="utf-8", newline="") as handle:
-            self.assertEqual(next(csv.reader(handle)), list(COLUMNS))
-
-        status, unchanged = self.request("POST", "/api/transactions/initialize")
-        self.assertEqual(status, 200)
-        self.assertEqual(unchanged["revision"], initialized["revision"])
+        status, rejected = self.request("POST", "/api/transactions/initialize")
+        self.assertEqual(status, 410)
+        self.assertIn("staged import", rejected["error"])
+        self.assertFalse(self.csv_path.exists())
 
     def test_import_page_is_canonical_and_legacy_upload_url_redirects(self) -> None:
         with urlopen(f"{self.base_url}/import", timeout=3) as response:
