@@ -1452,7 +1452,11 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         try:
             with self.data_lock:
                 backups = list_backups(self.csv_path)
-            self.send_json(HTTPStatus.OK, {"backups": backups})
+                if self.csv_path.exists():
+                    _transactions, revision = read_transaction_state(self.csv_path)
+                else:
+                    revision = MISSING_CSV_REVISION
+            self.send_json(HTTPStatus.OK, {"backups": backups, "revision": revision})
         except (CsvDataError, OSError) as exc:
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -1740,6 +1744,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             payload = self.read_json_body()
             if payload.get("confirm") is not True:
                 raise CsvDataError("restore confirmation is required")
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("revision is required")
             if not valid_backup_filename(filename):
                 raise CsvDataError("invalid backup name")
             selected_path = backup_directory(self.csv_path) / filename
@@ -1749,6 +1756,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 raise CsvDataError("backup links cannot be restored")
 
             with self.data_lock:
+                if self.csv_path.exists():
+                    _current_transactions, revision = read_transaction_state(self.csv_path)
+                else:
+                    revision = MISSING_CSV_REVISION
+                if revision != expected_revision:
+                    raise RevisionConflict(
+                        "The transaction file changed after backups loaded. Refresh and try again."
+                    )
                 restored_transactions = read_backup_transactions(selected_path)
                 safety_backup = (
                     create_backup_copy(self.csv_path, require_valid=False)
@@ -1767,6 +1782,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(HTTPStatus.OK, response)
         except CsvFileMissingError:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "Backup not found."})
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
         except CsvDataError as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except OSError as exc:
