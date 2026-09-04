@@ -126,6 +126,9 @@ The review modal uses the same searchable, filterable, and sortable transaction
 toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
 toggles sit immediately below that toolbar.
 
+All file and browser imports use this staged session workflow. The retired
+direct-upload API cannot append transactions without preview and confirmation.
+
 Before duplicate detection and review, Ledger applies classifications saved
 on the dedicated **Classifications** page. If no rule matches, the importer-provided
 category is retained and the subcategory stays blank.
