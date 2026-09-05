@@ -5,6 +5,9 @@ const state = {
   importHistoryRevision: "",
   importHistoryBatch: null,
   importHistoryTransactions: [],
+  importHistoryFilters: {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  },
   editingImportTransactionId: null,
   importHistoryEditBusy: false,
 };
@@ -22,6 +25,20 @@ const elements = {
   importHistoryDialogSubtitle: document.querySelector("#import-history-dialog-subtitle"),
   importHistoryDialogError: document.querySelector("#import-history-dialog-error"),
   importHistoryTransactions: document.querySelector("#import-history-transactions"),
+  importHistorySearch: document.querySelector("#import-history-search"),
+  importHistoryCategory: document.querySelector("#import-history-category-filter"),
+  importHistorySubcategory: document.querySelector("#import-history-subcategory-filter"),
+  importHistoryTag: document.querySelector("#import-history-tag-filter"),
+  importHistoryAccount: document.querySelector("#import-history-account-filter"),
+  importHistoryProvider: document.querySelector("#import-history-provider-filter"),
+  importHistoryFilterButton: document.querySelector("#import-history-filter-button"),
+  importHistoryFilterPopover: document.querySelector("#import-history-filter-popover"),
+  importHistoryFilterCount: document.querySelector("#import-history-filter-count"),
+  resetImportHistoryFilters: document.querySelector("#reset-import-history-filters"),
+  applyImportHistoryFilters: document.querySelector("#apply-import-history-filters"),
+  importHistoryActiveFilters: document.querySelector("#import-history-active-filters"),
+  importHistoryFilterChips: document.querySelector("#import-history-filter-chips"),
+  clearImportHistoryFilters: document.querySelector("#clear-import-history-filters"),
   importHistorySort: document.querySelector("#import-history-sort"),
   closeImportHistoryDialog: document.querySelector("#close-import-history-dialog"),
   importHistoryEditDialog: document.querySelector("#import-history-edit-dialog"),
@@ -263,11 +280,130 @@ function importHistoryTransactionOptions(transaction) {
   };
 }
 
+function importHistoryTags(transaction) {
+  return String(transaction.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function populateImportHistoryFilter(select, values, allLabel, selected = "") {
+  const options = values.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    return option;
+  });
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = allLabel;
+  select.replaceChildren(all, ...options);
+  select.value = values.includes(selected) ? selected : "";
+}
+
+function importHistoryFilterValues(field, transactions = state.importHistoryTransactions) {
+  return [...new Set(transactions.map((transaction) => transaction[field]).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function populateImportHistorySubcategories(category, selected = "") {
+  const matching = category
+    ? state.importHistoryTransactions.filter((transaction) => transaction.category === category)
+    : state.importHistoryTransactions;
+  populateImportHistoryFilter(
+    elements.importHistorySubcategory,
+    importHistoryFilterValues("subcategory", matching),
+    "All subcategories",
+    selected,
+  );
+}
+
+function configureImportHistoryFilters(filters = state.importHistoryFilters) {
+  const tags = new Map();
+  state.importHistoryTransactions.forEach((transaction) => importHistoryTags(transaction).forEach((tag) => {
+    if (!tags.has(tag.toLocaleLowerCase())) tags.set(tag.toLocaleLowerCase(), tag);
+  }));
+  const tagValues = [...tags.values()].sort((left, right) => left.localeCompare(right));
+  const selectedTag = tagValues.find(
+    (tag) => tag.toLocaleLowerCase() === String(filters.tag || "").toLocaleLowerCase(),
+  ) || "";
+  elements.importHistorySearch.value = filters.description || "";
+  populateImportHistoryFilter(elements.importHistoryCategory, importHistoryFilterValues("category"), "All categories", filters.category);
+  populateImportHistorySubcategories(elements.importHistoryCategory.value, filters.subcategory);
+  populateImportHistoryFilter(elements.importHistoryTag, tagValues, "All tags", selectedTag);
+  populateImportHistoryFilter(elements.importHistoryAccount, importHistoryFilterValues("accountName"), "All accounts", filters.accountName);
+  populateImportHistoryFilter(elements.importHistoryProvider, importHistoryFilterValues("provider"), "All providers", filters.provider);
+  state.importHistoryFilters = {
+    description: elements.importHistorySearch.value.trim(),
+    category: elements.importHistoryCategory.value,
+    subcategory: elements.importHistorySubcategory.value,
+    tag: elements.importHistoryTag.value,
+    accountName: elements.importHistoryAccount.value,
+    provider: elements.importHistoryProvider.value,
+  };
+  renderImportHistoryFilterChips();
+}
+
+function importHistoryFilterDraft() {
+  return {
+    category: elements.importHistoryCategory.value,
+    subcategory: elements.importHistorySubcategory.value,
+    tag: elements.importHistoryTag.value,
+    accountName: elements.importHistoryAccount.value,
+    provider: elements.importHistoryProvider.value,
+  };
+}
+
+function renderImportHistoryFilterChips() {
+  const definitions = [
+    ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
+    ["accountName", "Account"], ["provider", "Provider"],
+  ];
+  const active = definitions.filter(([field]) => state.importHistoryFilters[field]);
+  elements.importHistoryFilterCount.textContent = String(active.length);
+  elements.importHistoryFilterCount.hidden = active.length === 0;
+  elements.importHistoryFilterButton.classList.toggle("has-active-filters", active.length > 0);
+  elements.importHistoryActiveFilters.hidden = active.length === 0;
+  elements.importHistoryFilterChips.replaceChildren(...active.map(([field, label]) => {
+    const value = state.importHistoryFilters[field];
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "transaction-filter-chip";
+    chip.textContent = `${label}: ${value} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
+    chip.addEventListener("click", () => {
+      state.importHistoryFilters[field] = "";
+      configureImportHistoryFilters(state.importHistoryFilters);
+      renderImportHistoryTransactions();
+    });
+    return chip;
+  }));
+}
+
+function setImportHistoryFilterPopover(open, restore = true) {
+  if (!open && restore) configureImportHistoryFilters(state.importHistoryFilters);
+  elements.importHistoryFilterPopover.hidden = !open;
+  elements.importHistoryFilterButton.setAttribute("aria-expanded", String(open));
+}
+
 function renderImportHistoryTransactions() {
   const transactions = state.importHistoryTransactions;
-  elements.importHistoryDialogSubtitle.textContent = `${transactions.length} ${
+  state.importHistoryFilters.description = elements.importHistorySearch.value.trim();
+  const filters = state.importHistoryFilters;
+  const description = filters.description.toLocaleLowerCase();
+  const visible = transactionUi.sortTransactions(transactions.filter((transaction) =>
+    (!description || transaction.description.toLocaleLowerCase().includes(description))
+    && (!filters.category || transaction.category === filters.category)
+    && (!filters.subcategory || transaction.subcategory === filters.subcategory)
+    && (!filters.tag || importHistoryTags(transaction).some(
+      (tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase(),
+    ))
+    && (!filters.accountName || transaction.accountName === filters.accountName)
+    && (!filters.provider || transaction.provider === filters.provider)
+  ), importHistorySort.value());
+  const filtered = Object.values(filters).some(Boolean);
+  const count = filtered ? `${visible.length} of ${transactions.length}` : String(transactions.length);
+  elements.importHistoryDialogSubtitle.textContent = `${count} ${
     transactions.length === 1 ? "transaction" : "transactions"
   } imported ${backupDateFormatter.format(new Date(state.importHistoryBatch.createdAt))}`;
+  renderImportHistoryFilterChips();
   if (transactions.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
@@ -275,9 +411,16 @@ function renderImportHistoryTransactions() {
     elements.importHistoryTransactions.replaceChildren(empty);
     return;
   }
+  if (visible.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-transaction-list";
+    empty.textContent = "No transactions match these filters.";
+    elements.importHistoryTransactions.replaceChildren(empty);
+    return;
+  }
   transactionUi.renderTransactionList(
     elements.importHistoryTransactions,
-    transactionUi.sortTransactions(transactions, importHistorySort.value()),
+    visible,
     importHistoryTransactionOptions,
   );
 }
@@ -285,6 +428,11 @@ function renderImportHistoryTransactions() {
 async function openImportHistoryBatch(importBatch) {
   state.importHistoryBatch = importBatch;
   state.importHistoryTransactions = [];
+  state.importHistoryFilters = {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
+  configureImportHistoryFilters();
+  setImportHistoryFilterPopover(false, false);
   elements.importHistoryDialogError.hidden = true;
   elements.importHistoryDialogError.textContent = "";
   elements.importHistoryDialogSubtitle.textContent = "Loading transactions…";
@@ -303,6 +451,7 @@ async function openImportHistoryBatch(importBatch) {
     state.importHistoryTransactions = payload.transactions.sort(
       (left, right) => right.date.localeCompare(left.date) || right._id - left._id,
     );
+    configureImportHistoryFilters();
     renderImportHistoryTransactions();
   } catch (error) {
     elements.importHistoryDialogSubtitle.textContent = "";
@@ -1635,6 +1784,58 @@ if (elements.createBackup) {
   elements.createBackup.addEventListener("click", createBackup);
   elements.refreshBackups.addEventListener("click", loadBackups);
   elements.refreshImportHistory.addEventListener("click", loadImportHistory);
+  elements.importHistorySearch.addEventListener("input", () => {
+    state.importHistoryFilters.description = elements.importHistorySearch.value.trim();
+    renderImportHistoryTransactions();
+  });
+  elements.importHistoryFilterButton.addEventListener("click", () => {
+    const open = elements.importHistoryFilterButton.getAttribute("aria-expanded") !== "true";
+    setImportHistoryFilterPopover(open);
+    if (open) elements.importHistoryCategory.focus();
+  });
+  elements.importHistoryCategory.addEventListener("change", () => {
+    populateImportHistorySubcategories(
+      elements.importHistoryCategory.value,
+      elements.importHistorySubcategory.value,
+    );
+  });
+  elements.resetImportHistoryFilters.addEventListener("click", () => {
+    elements.importHistoryCategory.value = "";
+    populateImportHistorySubcategories("");
+    elements.importHistoryTag.value = "";
+    elements.importHistoryAccount.value = "";
+    elements.importHistoryProvider.value = "";
+    elements.importHistoryCategory.focus();
+  });
+  elements.applyImportHistoryFilters.addEventListener("click", () => {
+    state.importHistoryFilters = { ...state.importHistoryFilters, ...importHistoryFilterDraft() };
+    setImportHistoryFilterPopover(false, false);
+    renderImportHistoryTransactions();
+    elements.importHistoryFilterButton.focus();
+  });
+  elements.clearImportHistoryFilters.addEventListener("click", () => {
+    state.importHistoryFilters = {
+      ...state.importHistoryFilters,
+      category: "", subcategory: "", tag: "", accountName: "", provider: "",
+    };
+    configureImportHistoryFilters(state.importHistoryFilters);
+    renderImportHistoryTransactions();
+    elements.importHistoryFilterButton.focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (
+      elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true"
+      && !event.target.closest(".transaction-filter-menu")
+    ) setImportHistoryFilterPopover(false);
+  });
+  elements.importHistoryDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      event.stopPropagation();
+      setImportHistoryFilterPopover(false);
+      elements.importHistoryFilterButton.focus();
+    }
+  });
   elements.closeImportHistoryDialog.addEventListener("click", closeImportHistoryDialog);
   elements.importHistoryDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
