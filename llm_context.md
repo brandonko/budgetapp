@@ -244,6 +244,8 @@ on it. Translate it for people in the interface:
   match tag names case-insensitively. On narrow screens,
   stack each related pair and keep the popover within the modal.
 - The interface must remain responsive and usable on desktop and mobile.
+- Follow the browser's light or dark color-scheme preference, with canvas and
+  surface tokens that provide genuinely dark backgrounds in dark mode.
 
 ### Shared transaction-modal contract
 

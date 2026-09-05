@@ -16,6 +16,18 @@
   font-synthesis: none;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ink: #e7eee9;
+    --muted: #aab7af;
+    --line: #3b4a42;
+    --canvas: #111713;
+    --surface: #1b241f;
+    --shadow: 0 20px 50px rgb(0 0 0 / 28%);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
