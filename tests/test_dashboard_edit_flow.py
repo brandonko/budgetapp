@@ -115,6 +115,9 @@ class DashboardEditFlowTests(unittest.TestCase):
         subcategory_style = css.split(".subcategory-summary {", 1)[1].split("}", 1)[0]
         self.assertIn("flex: 0 0 auto", subcategory_style)
         self.assertIn("overflow-y: hidden", subcategory_style)
+        self.assertIn("background: var(--surface)", subcategory_style)
+        active_filter_style = css.split(".transaction-active-filters {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--surface)", active_filter_style)
 
     def test_reporting_view_is_saved_and_restored_across_navigation(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
