@@ -1128,7 +1128,7 @@ h1 {
   padding: 10px 12px;
   border: 1px solid #e5e9e6;
   border-radius: 9px;
-  background: white;
+  background: var(--surface);
 }
 
 .classification-action-toggle {
@@ -1154,7 +1154,7 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink);
-  background: white;
+  background: var(--surface);
   font: inherit;
   font-size: 13px;
 }
@@ -1186,7 +1186,7 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--ink);
-  background: white;
+  background: var(--surface);
   font: inherit;
   font-size: 13px;
 }
@@ -1222,7 +1222,7 @@ h1 {
   padding: 14px;
   border: 1px solid #e5e9e6;
   border-radius: 9px;
-  background: white;
+  background: var(--surface);
 }
 
 .classification-rule-title > strong {
@@ -1782,7 +1782,7 @@ h2 {
   justify-content: space-between;
   padding: 10px 32px;
   border-bottom: 1px solid var(--line);
-  background: white;
+  background: var(--surface);
 }
 
 .transaction-filter-chips {
@@ -1866,7 +1866,7 @@ h2 {
   overflow-x: auto;
   overflow-y: hidden;
   border-bottom: 1px solid var(--line);
-  background: white;
+  background: var(--surface);
 }
 
 .subcategory-summary[hidden] {

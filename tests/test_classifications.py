@@ -44,6 +44,18 @@ def transaction(**overrides):
 
 
 class ClassificationEngineTests(unittest.TestCase):
+    def test_classification_controls_use_the_theme_surface(self) -> None:
+        css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
+
+        for selector in (
+            ".classification-action-field {",
+            ".classification-action-field > input,",
+            ".classification-field input,",
+            ".classification-rule {",
+        ):
+            style = css.split(selector, 1)[1].split("}", 1)[0]
+            self.assertIn("background: var(--surface)", style)
+
     def test_transaction_tags_are_trimmed_and_deduplicated_case_insensitively(self) -> None:
         normalized = normalize_transaction(
             transaction(tags=" Travel, travel,  Work   Trip ,"), "transaction"
