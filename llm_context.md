@@ -194,9 +194,12 @@ on it. Translate it for people in the interface:
 - A negative net means spending exceeded income and uses a light-red background.
 - Refunds outside the `Income` category remain negative and reduce the total for
   their spending category.
-- Summary cards show exact currency through six digits. Larger totals drop the
-  decimals and use readable magnitude suffixes from millions (`M`) through
-  decillions (`D`), while retaining the exact currency value in a tooltip.
+- **Settings → Preferences** lets the user choose the first magnitude abbreviated
+  in dashboard summary totals: None, K, M, B, or T. Default to M. Once enabled,
+  use the natural suffix for each larger magnitude through T, then scientific
+  notation above trillions. None keeps exact currency formatting at every
+  magnitude. Preserve the exact value in the summary tooltip regardless of
+  visual formatting.
 
 ## Dashboard periods
 

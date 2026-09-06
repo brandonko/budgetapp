@@ -48,7 +48,9 @@ These rules are persisted beside the transaction CSV in `classifications.json` a
 exported as JSON. The editor shows one classification at a time with pagination.
 Classification and rule inputs appear only in their individual edit modes, and
 each inline Save persists the complete classification document immediately.
-General settings remain a placeholder.
+The **Preferences** tab stores a browser-local slider controlling whether
+dashboard totals begin abbreviating at thousands, millions, billions, or
+trillions. Abbreviations are disabled with None and begin at millions by default.
 
 Use **Review unclassified** to open every blank-subcategory transaction in a
 filterable modal without leaving the Classifications page or disturbing the

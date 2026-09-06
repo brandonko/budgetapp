@@ -76,29 +76,42 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
-const COMPACT_CURRENCY_TIERS = [
-  { value: 1e33, suffix: "D" },
-  { value: 1e30, suffix: "N" },
-  { value: 1e27, suffix: "O" },
-  { value: 1e24, suffix: "Sp" },
-  { value: 1e21, suffix: "Sx" },
-  { value: 1e18, suffix: "Qi" },
-  { value: 1e15, suffix: "Q" },
-  { value: 1e12, suffix: "T" },
-  { value: 1e9, suffix: "B" },
-  { value: 1e6, suffix: "M" },
+const scientificCurrency = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "scientific",
+  maximumFractionDigits: 2,
+});
+
+const SUMMARY_ABBREVIATION_TIERS = [
+  { preference: "t", value: 1e12, suffix: "T" },
+  { preference: "b", value: 1e9, suffix: "B" },
+  { preference: "m", value: 1e6, suffix: "M" },
+  { preference: "k", value: 1e3, suffix: "K" },
 ];
 
 function formatSummaryAmount(amount) {
+  const preference = window.LedgerPreferences?.numberAbbreviation?.() || "m";
   const absoluteAmount = Math.abs(amount);
-  if (absoluteAmount < COMPACT_CURRENCY_TIERS.at(-1).value) {
-    return currency.format(amount);
-  }
+  if (preference === "none") return currency.format(amount);
+  if (absoluteAmount >= 1e15) return scientificCurrency.format(amount);
 
-  const tier = COMPACT_CURRENCY_TIERS.find(({ value }) => absoluteAmount >= value);
-  const roundedAmount = Math.round(absoluteAmount / tier.value);
+  const minimumTierIndex = SUMMARY_ABBREVIATION_TIERS.findIndex(
+    (tier) => tier.preference === preference,
+  );
+  let tierIndex = SUMMARY_ABBREVIATION_TIERS.findIndex(
+    (tier, index) => index <= minimumTierIndex && absoluteAmount >= tier.value,
+  );
+  if (tierIndex < 0) return currency.format(amount);
+
+  let roundedAmount = Math.round(absoluteAmount / SUMMARY_ABBREVIATION_TIERS[tierIndex].value);
+  if (roundedAmount >= 1000) {
+    if (tierIndex === 0) return scientificCurrency.format(amount);
+    tierIndex -= 1;
+    roundedAmount = Math.round(absoluteAmount / SUMMARY_ABBREVIATION_TIERS[tierIndex].value);
+  }
   const sign = amount < 0 ? "-" : "";
-  return `${sign}$${roundedAmount.toLocaleString("en-US")}${tier.suffix}`;
+  return `${sign}$${roundedAmount.toLocaleString("en-US")}${SUMMARY_ABBREVIATION_TIERS[tierIndex].suffix}`;
 }
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
@@ -1521,6 +1534,9 @@ elements.formDialog.addEventListener("click", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
+window.addEventListener("ledger-number-abbreviation-change", () => {
+  renderSummary(transactionsForSelectedPeriod());
+});
 
 
 restoreDashboardView();

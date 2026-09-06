@@ -165,6 +165,7 @@ STATIC_FILES = {
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",
     "/app.js": APP_DIR / "app.js",
+    "/preferences.js": APP_DIR / "preferences.js",
     "/navigation.js": APP_DIR / "navigation.js",
     "/transaction-ui.js": APP_DIR / "transaction-ui.js",
     "/import": APP_DIR / "upload.html",

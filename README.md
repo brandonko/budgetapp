@@ -7,7 +7,7 @@ details.
 
 The dashboard includes:
 
-- Monthly and annual spending, income, and net summaries, with readable suffixes for totals over six digits
+- Monthly and annual spending, income, and net summaries with a configurable large-number abbreviation threshold
 - Monthly and annual spending breakdowns switchable between categories and custom tags
 - Annual category-stacked spending with subcategory drill-down and monthly net charts
 - Top-level category breakdowns with dollar-based subcategory summaries and sortable transaction lists
@@ -194,6 +194,14 @@ Removing an import batch deletes all of its remaining rows after an explicit
 confirmation and revision check. Ledger creates a safety backup of the complete
 transaction file before applying the removal.
 
+## Preferences
+
+Open **Settings → Preferences** to choose when dashboard summary totals use
+magnitude abbreviations. The slider offers None, K, M, B, and T and defaults to
+M. Once enabled, each larger magnitude uses its natural suffix through T, then
+values beyond trillions use scientific notation. None always uses exact currency
+formatting. The choice is stored in the current browser.
+
 ## Classifications
 
 Open **Classifications** from the navigation menu to create reusable transaction rules. Each
@@ -351,7 +359,7 @@ app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
 app/index.html      Monthly and annual dashboard
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed backup, import-history, and general settings
+app/settings.html  Tabbed backup, import-history, and display preferences
 app/classifications.html
                     Dedicated transaction-classification workspace
 app/settings.js    Backup, import-batch, and classification-rule management

@@ -70,7 +70,25 @@ const elements = {
   closePreview: document.querySelector("#close-classification-preview"),
   cancelPreview: document.querySelector("#cancel-classification-preview"),
   confirmPreview: document.querySelector("#confirm-classification-preview"),
+  numberAbbreviationThreshold: document.querySelector("#number-abbreviation-threshold"),
+  numberAbbreviationValue: document.querySelector("#number-abbreviation-value"),
 };
+
+const NUMBER_ABBREVIATION_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "k", label: "Thousands (K)" },
+  { value: "m", label: "Millions (M)" },
+  { value: "b", label: "Billions (B)" },
+  { value: "t", label: "Trillions (T)" },
+];
+
+function renderNumberAbbreviationPreference(value) {
+  if (!elements.numberAbbreviationThreshold || !elements.numberAbbreviationValue) return;
+  const optionIndex = NUMBER_ABBREVIATION_OPTIONS.findIndex((option) => option.value === value);
+  const normalizedIndex = optionIndex >= 0 ? optionIndex : 2;
+  elements.numberAbbreviationThreshold.value = String(normalizedIndex);
+  elements.numberAbbreviationValue.textContent = NUMBER_ABBREVIATION_OPTIONS[normalizedIndex].label;
+}
 
 let classifications = [];
 let classificationsBusy = false;
@@ -1632,6 +1650,16 @@ async function confirmClassificationPreview() {
 }
 
 if (elements.createBackup) {
+  if (elements.numberAbbreviationThreshold && window.LedgerPreferences) {
+    renderNumberAbbreviationPreference(window.LedgerPreferences.numberAbbreviation());
+    elements.numberAbbreviationThreshold.addEventListener("input", () => {
+      const option = NUMBER_ABBREVIATION_OPTIONS[Number(elements.numberAbbreviationThreshold.value)];
+      renderNumberAbbreviationPreference(window.LedgerPreferences.setNumberAbbreviation(option?.value));
+    });
+    window.addEventListener("ledger-number-abbreviation-change", (event) => {
+      renderNumberAbbreviationPreference(event.detail.value);
+    });
+  }
   elements.createBackup.addEventListener("click", createBackup);
   elements.refreshBackups.addEventListener("click", loadBackups);
   elements.refreshImportHistory.addEventListener("click", loadImportHistory);

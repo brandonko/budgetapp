@@ -307,12 +307,12 @@ class SettingsPageTests(unittest.TestCase):
     def test_backup_is_the_first_accessible_settings_tab(self) -> None:
         html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
         javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
-        self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="general-settings-tab"'))
+        self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="preferences-settings-tab"'))
         self.assertNotIn('id="classification-settings-tab"', html)
         self.assertNotIn('id="classification-settings-panel"', html)
         self.assertIn('href="/classifications"', html)
         self.assertIn(
-            '<section class="settings-panel" id="general-settings-panel" role="tabpanel"',
+            '<section class="settings-panel" id="preferences-settings-panel" role="tabpanel"',
             html,
         )
         self.assertIn('aria-selected="true" aria-controls="backup-settings-panel"', html)
@@ -335,6 +335,15 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('method: "DELETE"', javascript)
         self.assertIn('id="create-backup-button"', html)
         self.assertIn('id="backup-list"', html)
+        self.assertIn('tabindex="-1">Preferences</button>', html)
+        self.assertIn('id="number-abbreviation-threshold" type="range"', html)
+        self.assertIn('min="0" max="4" step="1" value="2"', html)
+        for label in ("None", "K", "M", "B", "T"):
+            self.assertIn(f"<span>{label}</span>", html)
+        self.assertIn("const NUMBER_ABBREVIATION_OPTIONS", javascript)
+        self.assertIn("window.LedgerPreferences.numberAbbreviation()", javascript)
+        self.assertIn("window.LedgerPreferences.setNumberAbbreviation(option?.value)", javascript)
+        self.assertIn('<script src="/preferences.js?v=20260905-number-abbreviations" defer>', html)
         self.assertIn("window.confirm", javascript)
         self.assertIn("completely replace transactions.csv", javascript)
         self.assertIn("JSON.stringify({ confirm: true })", javascript)
