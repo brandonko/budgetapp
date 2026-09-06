@@ -517,6 +517,7 @@ async function saveImportHistoryTransaction(event) {
     state.importHistoryTransactions = payload.transactions
       .filter((candidate) => candidate.createdAt === state.importHistoryBatch.createdAt)
       .sort((left, right) => right.date.localeCompare(left.date) || right._id - left._id);
+    configureImportHistoryFilters(state.importHistoryFilters);
     renderImportHistoryTransactions();
     elements.importHistoryEditDialog.close();
     state.editingImportTransactionId = null;

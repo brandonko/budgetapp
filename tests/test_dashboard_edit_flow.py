@@ -136,6 +136,18 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("transaction.description.toLocaleLowerCase().includes(description)", javascript)
         self.assertIn("tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()", javascript)
 
+        save_start = javascript.index("async function saveImportHistoryTransaction")
+        save_end = javascript.index("async function removeImportBatch", save_start)
+        save_transaction = javascript[save_start:save_end]
+        self.assertLess(
+            save_transaction.index("state.importHistoryTransactions = payload.transactions"),
+            save_transaction.index("configureImportHistoryFilters(state.importHistoryFilters)"),
+        )
+        self.assertLess(
+            save_transaction.index("configureImportHistoryFilters(state.importHistoryFilters)"),
+            save_transaction.index("renderImportHistoryTransactions()"),
+        )
+
     def test_reporting_view_is_saved_and_restored_across_navigation(self) -> None:
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
         self.assertIn(
