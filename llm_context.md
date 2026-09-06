@@ -194,6 +194,9 @@ on it. Translate it for people in the interface:
 - A negative net means spending exceeded income and uses a light-red background.
 - Refunds outside the `Income` category remain negative and reduce the total for
   their spending category.
+- Summary cards show exact currency through six digits. Larger totals drop the
+  decimals and use readable magnitude suffixes from millions (`M`) through
+  decillions (`D`), while retaining the exact currency value in a tooltip.
 
 ## Dashboard periods
 

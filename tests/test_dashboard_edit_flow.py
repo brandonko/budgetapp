@@ -140,6 +140,27 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("monthly.set(month, displaySum(", javascript)
         self.assertNotIn("function sum(transactions)", javascript)
 
+    def test_summary_amounts_over_six_digits_use_readable_suffixes(self) -> None:
+        javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
+        expected_tiers = [
+            '{ value: 1e33, suffix: "D" }',
+            '{ value: 1e30, suffix: "N" }',
+            '{ value: 1e27, suffix: "O" }',
+            '{ value: 1e24, suffix: "Sp" }',
+            '{ value: 1e21, suffix: "Sx" }',
+            '{ value: 1e18, suffix: "Qi" }',
+            '{ value: 1e15, suffix: "Q" }',
+            '{ value: 1e12, suffix: "T" }',
+            '{ value: 1e9, suffix: "B" }',
+            '{ value: 1e6, suffix: "M" }',
+        ]
+        for tier in expected_tiers:
+            self.assertIn(tier, javascript)
+        self.assertIn("function formatSummaryAmount(amount)", javascript)
+        self.assertIn("Math.round(absoluteAmount / tier.value)", javascript)
+        self.assertEqual(javascript.count(".textContent = formatSummaryAmount("), 3)
+        self.assertEqual(javascript.count(".title = currency.format("), 3)
+
     def test_internal_transfers_are_excluded_and_available_in_monthly_or_annual_review(self) -> None:
         html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")

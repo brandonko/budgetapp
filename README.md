@@ -7,7 +7,7 @@ details.
 
 The dashboard includes:
 
-- Monthly and annual spending, income, and net summaries
+- Monthly and annual spending, income, and net summaries, with readable suffixes for totals over six digits
 - Monthly and annual spending breakdowns switchable between categories and custom tags
 - Annual category-stacked spending with subcategory drill-down and monthly net charts
 - Top-level category breakdowns with dollar-based subcategory summaries and sortable transaction lists
