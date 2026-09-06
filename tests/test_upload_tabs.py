@@ -16,7 +16,7 @@ class UploadTabsTests(unittest.TestCase):
             r'[^>]*aria-controls="([^"]+)"[^>]*>',
             html,
         )
-        self.assertEqual(len(tabs), 6)
+        self.assertEqual(len(tabs), 7)
         self.assertEqual(sum(selected == "true" for _tab, selected, _panel in tabs), 1)
         for tab_id, _selected, panel_id in tabs:
             with self.subTest(tab_id=tab_id):
@@ -72,6 +72,21 @@ class UploadTabsTests(unittest.TestCase):
             'elements.appleCardFile.addEventListener("change", updateAppleCardFileButton)',
             javascript,
         )
+
+    def test_ledger_csv_import_uses_staged_review_and_reports_invalid_rows(self) -> None:
+        html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
+        self.assertIn('id="csv-import-tab" role="tab"', html)
+        self.assertIn('id="csv-import-panel" role="tabpanel"', html)
+        self.assertIn('id="csv-import-file" type="file" accept=".csv,text/csv"', html)
+        self.assertIn('id="csv-import-button" type="button" disabled', html)
+        self.assertIn('id="csv-apply-classifications" type="checkbox" checked', html)
+        self.assertIn('id="import-review-invalid-note" hidden', html)
+        self.assertIn("/api/csv-import-sessions", javascript)
+        self.assertIn('renderResult(payload.import, "csv", payload.token)', javascript)
+        self.assertIn('source === "csv"', javascript)
+        self.assertIn("invalid CSV", javascript)
+        self.assertIn("applyClassifications: elements.csvApplyClassifications.checked", javascript)
 
     def test_import_guide_explains_review_dates_accounts_and_classification(self) -> None:
         html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")

@@ -3,15 +3,27 @@
 const DASHBOARD_VIEW_STORAGE_KEY = "ledger.dashboardView.v1";
 const UNCLASSIFIED_SUBCATEGORY = "__ledger_unclassified_subcategory__";
 const UNTAGGED = "__ledger_untagged__";
+const UNCATEGORIZED = "__ledger_uncategorized__";
 const transactionUi = window.LedgerTransactionUI;
 
 const state = {
   transactions: [],
+  taxonomyCategories: [],
   revision: "",
   viewMode: "monthly",
   selectedYear: "",
   selectedMonth: "",
+  comparisonStartYear: "",
+  selectedComparisonYears: [],
+  comparisonMetric: "spending",
+  comparisonChartMode: "cumulative",
+  comparisonPeriodMode: "comparable",
+  comparisonAnimationFrame: null,
+  annualSpendingAnimationFrame: null,
+  annualNetAnimationFrame: null,
   breakdownDimension: "category",
+  selectedTags: [],
+  tagMatchMode: "any",
   annualCategoryFilter: "",
   annualSubcategoryFilter: "",
   annualExpandedCategories: new Set(),
@@ -38,7 +50,14 @@ function saveDashboardView() {
         viewMode: state.viewMode,
         selectedYear: state.selectedYear,
         selectedMonth: state.selectedMonth,
+        comparisonStartYear: state.comparisonStartYear,
+        selectedComparisonYears: state.selectedComparisonYears,
+        comparisonMetric: state.comparisonMetric,
+        comparisonChartMode: state.comparisonChartMode,
+        comparisonPeriodMode: state.comparisonPeriodMode,
         breakdownDimension: state.breakdownDimension,
+        selectedTags: state.selectedTags,
+        tagMatchMode: state.tagMatchMode,
         annualCategoryFilter: state.annualCategoryFilter,
         annualSubcategoryFilter: state.annualSubcategoryFilter,
       }),
@@ -52,14 +71,39 @@ function restoreDashboardView() {
   try {
     const saved = JSON.parse(window.localStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY) || "null");
     if (!saved || typeof saved !== "object") return;
-    if (["monthly", "annual"].includes(saved.viewMode)) state.viewMode = saved.viewMode;
+    if (["monthly", "annual", "year-over-year"].includes(saved.viewMode)) {
+      state.viewMode = saved.viewMode;
+    }
     if (/^\d{4}$/.test(saved.selectedYear || "")) state.selectedYear = saved.selectedYear;
     if (/^(0[1-9]|1[0-2])$/.test(saved.selectedMonth || "")) {
       state.selectedMonth = saved.selectedMonth;
     }
+    if (/^\d{4}$/.test(saved.comparisonStartYear || "")) {
+      state.comparisonStartYear = saved.comparisonStartYear;
+    }
+    if (Array.isArray(saved.selectedComparisonYears)) {
+      state.selectedComparisonYears = saved.selectedComparisonYears
+        .filter((year) => /^\d{4}$/.test(year))
+        .slice(0, 20);
+    }
+    if (["spending", "income", "net"].includes(saved.comparisonMetric)) {
+      state.comparisonMetric = saved.comparisonMetric;
+    }
+    if (["cumulative", "monthly"].includes(saved.comparisonChartMode)) {
+      state.comparisonChartMode = saved.comparisonChartMode;
+    }
+    if (["comparable", "full"].includes(saved.comparisonPeriodMode)) {
+      state.comparisonPeriodMode = saved.comparisonPeriodMode;
+    }
     if (["category", "tag"].includes(saved.breakdownDimension)) {
       state.breakdownDimension = saved.breakdownDimension;
     }
+    if (Array.isArray(saved.selectedTags)) {
+      state.selectedTags = saved.selectedTags
+        .filter((tag) => typeof tag === "string" && tag.length <= 200)
+        .slice(0, 50);
+    }
+    if (["any", "all"].includes(saved.tagMatchMode)) state.tagMatchMode = saved.tagMatchMode;
     if (typeof saved.annualCategoryFilter === "string") {
       state.annualCategoryFilter = saved.annualCategoryFilter.slice(0, 200);
     }
@@ -76,13 +120,47 @@ const currency = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 
-const formatter = new Intl.NumberFormat("en-US", {
+const scientificCurrency = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
-  notation: "compact",
-  compactDisplay: "short",
+  notation: "scientific",
   maximumFractionDigits: 2,
 });
+
+const SUMMARY_ABBREVIATION_TIERS = [
+  { preference: "t", value: 1e12, suffix: "T" },
+  { preference: "b", value: 1e9, suffix: "B" },
+  { preference: "m", value: 1e6, suffix: "M" },
+  { preference: "k", value: 1e3, suffix: "K" },
+];
+
+function numberAbbreviationPreference() {
+  return window.LedgerPreferences?.numberAbbreviation?.() || "m";
+}
+
+function formatSummaryAmount(amount) {
+  const preference = numberAbbreviationPreference();
+  const absoluteAmount = Math.abs(amount);
+  if (preference === "none") return currency.format(amount);
+  if (absoluteAmount >= 1e15) return scientificCurrency.format(amount);
+
+  const minimumTierIndex = SUMMARY_ABBREVIATION_TIERS.findIndex(
+    (tier) => tier.preference === preference,
+  );
+  let tierIndex = SUMMARY_ABBREVIATION_TIERS.findIndex(
+    (tier, index) => index <= minimumTierIndex && absoluteAmount >= tier.value,
+  );
+  if (tierIndex < 0) return currency.format(amount);
+
+  let roundedAmount = Math.round(absoluteAmount / SUMMARY_ABBREVIATION_TIERS[tierIndex].value);
+  if (roundedAmount >= 1000) {
+    if (tierIndex === 0) return scientificCurrency.format(amount);
+    tierIndex -= 1;
+    roundedAmount = Math.round(absoluteAmount / SUMMARY_ABBREVIATION_TIERS[tierIndex].value);
+  }
+  const sign = amount < 0 ? "-" : "";
+  return `${sign}$${roundedAmount.toLocaleString("en-US")}${SUMMARY_ABBREVIATION_TIERS[tierIndex].suffix}`;
+}
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
   month: "long",
@@ -95,20 +173,32 @@ const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 });
 
-const categoryColors = [
-  "#4f755f",
-  "#b87945",
-  "#63789a",
-  "#927056",
-  "#7b6d99",
-  "#a55c59",
-  "#667c7a",
-  "#8a854e",
+const VISUALIZATION_COLOR_COUNT = 12;
+const visualizationFallbackColors = [
+  "#2563b8", "#c45a14", "#16805c", "#b33c86",
+  "#6f49b5", "#087e96", "#c53f3f", "#746b00",
+  "#5d83c4", "#d17a3d", "#4a9277", "#c46a9d",
 ];
+
+function visualizationColors() {
+  const styles = window.getComputedStyle(document.documentElement);
+  return Array.from({ length: VISUALIZATION_COLOR_COUNT }, (_, index) => (
+    styles.getPropertyValue(`--viz-${index + 1}`).trim() || visualizationFallbackColors[index]
+  ));
+}
+
+function visualizationColor(index) {
+  const colors = visualizationColors();
+  const normalizedIndex = ((index % colors.length) + colors.length) % colors.length;
+  return colors[normalizedIndex];
+}
 
 const elements = {
   viewModeSelect: document.querySelector("#view-mode-select"),
   yearSelect: document.querySelector("#year-select"),
+  yearControlLabel: document.querySelector("#year-control-label"),
+  comparisonStartYearControl: document.querySelector("#comparison-start-year-control"),
+  comparisonStartYear: document.querySelector("#comparison-start-year"),
   monthSelect: document.querySelector("#month-select"),
   monthControl: document.querySelector("#month-control"),
   overviewEyebrow: document.querySelector("#overview-eyebrow"),
@@ -121,11 +211,46 @@ const elements = {
   netTotalCard: document.querySelector("#net-total-card"),
   netTotalNote: document.querySelector("#net-total-note"),
   categoryGrid: document.querySelector("#category-grid"),
+  categoriesSection: document.querySelector(".categories-section"),
   categoriesHeading: document.querySelector("#categories-heading"),
   breakdownDimensionButtons: [...document.querySelectorAll("[data-breakdown-dimension]")],
   monthlyBreakdownTabs: document.querySelector("#monthly-breakdown-tabs"),
+  tagExplorer: document.querySelector("#tag-explorer"),
+  monthlyTagExplorerSlot: document.querySelector("#monthly-tag-explorer-slot"),
+  annualTagExplorerSlot: document.querySelector("#annual-tag-explorer-slot"),
+  tagSearch: document.querySelector("#tag-search"),
+  tagOptions: document.querySelector("#tag-options"),
+  tagMatchModeButtons: [...document.querySelectorAll("[data-tag-match-mode]")],
+  clearTagSelection: document.querySelector("#clear-tag-selection"),
+  tagQueryExpression: document.querySelector("#tag-query-expression"),
+  tagQueryResult: document.querySelector("#tag-query-result"),
+  viewTagQueryTransactions: document.querySelector("#view-tag-query-transactions"),
   categoryTemplate: document.querySelector("#category-template"),
   annualInsights: document.querySelector("#annual-insights"),
+  yearComparison: document.querySelector("#year-comparison"),
+  yearComparisonDescription: document.querySelector("#year-comparison-description"),
+  comparisonMetricButtons: [...document.querySelectorAll("[data-comparison-metric]")],
+  comparisonChartModeButtons: [...document.querySelectorAll("[data-comparison-chart-mode]")],
+  comparisonPeriodMode: document.querySelector("#comparison-period-mode"),
+  comparisonYearPicker: document.querySelector("#comparison-year-picker"),
+  comparisonChart: document.querySelector("#comparison-chart"),
+  comparisonChartTooltip: document.querySelector("#comparison-chart-tooltip"),
+  comparisonTooltipLabel: document.querySelector("#comparison-tooltip-label"),
+  comparisonTooltipValue: document.querySelector("#comparison-tooltip-value"),
+  comparisonChartTitle: document.querySelector("#comparison-chart-title"),
+  comparisonChartSubtitle: document.querySelector("#comparison-chart-subtitle"),
+  comparisonChartHelp: document.querySelector(".comparison-chart-help"),
+  comparisonTableHead: document.querySelector("#comparison-table-head"),
+  comparisonTableBody: document.querySelector("#comparison-table-body"),
+  comparisonTableDescription: document.querySelector("#comparison-table-description"),
+  comparisonPrimaryLabel: document.querySelector("#comparison-primary-label"),
+  comparisonPrimaryValue: document.querySelector("#comparison-primary-value"),
+  comparisonChangeLabel: document.querySelector("#comparison-change-label"),
+  comparisonChangeValue: document.querySelector("#comparison-change-value"),
+  comparisonAverageLabel: document.querySelector("#comparison-average-label"),
+  comparisonAverageValue: document.querySelector("#comparison-average-value"),
+  viewComparisonExcludedButton: document.querySelector("#view-comparison-excluded-button"),
+  comparisonExcludedButtonLabel: document.querySelector("#comparison-excluded-button-label"),
   annualCategoryLegend: document.querySelector("#annual-category-legend"),
   annualSpendingChart: document.querySelector("#annual-spending-chart"),
   spendingChartSubtitle: document.querySelector("#spending-chart-subtitle"),
@@ -134,6 +259,7 @@ const elements = {
   annualBreakdownHead: document.querySelector("#annual-breakdown-head"),
   annualBreakdownBody: document.querySelector("#annual-breakdown-body"),
   annualBreakdownDescription: document.querySelector("#annual-breakdown-description"),
+  annualBreakdownTable: document.querySelector("#annual-breakdown-table"),
   annualNetChart: document.querySelector("#annual-net-chart"),
   viewExcludedButton: document.querySelector("#view-excluded-button"),
   excludedButtonLabel: document.querySelector("#excluded-button-label"),
@@ -179,7 +305,7 @@ const elements = {
   errorMessage: document.querySelector("#error-message"),
   importDataButton: document.querySelector("#import-data-button"),
   retryButton: document.querySelector("#retry-button"),
-  dashboardSections: document.querySelectorAll(".hero, .summary-grid, .annual-insights, .categories-section"),
+  dashboardSections: document.querySelectorAll(".hero, .summary-grid, .tag-explorer, .annual-insights, .year-comparison, .categories-section"),
   datalists: {
     category: document.querySelector("#category-options"),
     subcategory: document.querySelector("#subcategory-options"),
@@ -216,7 +342,13 @@ function selectedMonthKey() {
 }
 
 function selectedPeriodLabel() {
-  return state.viewMode === "annual" ? state.selectedYear : monthLabel(selectedMonthKey());
+  if (state.viewMode === "annual") return state.selectedYear;
+  if (state.viewMode === "year-over-year") {
+    return state.comparisonStartYear === state.selectedYear
+      ? state.selectedYear
+      : `${state.comparisonStartYear}\u2013${state.selectedYear}`;
+  }
+  return monthLabel(selectedMonthKey());
 }
 
 function isInternalTransfer(transaction) {
@@ -245,9 +377,11 @@ function compareLatestFirst(left, right) {
 function transactionsForSelectedPeriod() {
   return state.transactions
     .filter((transaction) => {
-      const inPeriod =
-        state.viewMode === "annual"
-          ? yearKey(transaction) === state.selectedYear
+      const transactionYear = yearKey(transaction);
+      const inPeriod = state.viewMode === "annual"
+        ? transactionYear === state.selectedYear
+        : state.viewMode === "year-over-year"
+          ? transactionYear >= state.comparisonStartYear && transactionYear <= state.selectedYear
           : monthKey(transaction) === selectedMonthKey();
       return inPeriod && !isInternalTransfer(transaction);
     })
@@ -257,9 +391,11 @@ function transactionsForSelectedPeriod() {
 function excludedInternalTransfersForSelectedPeriod() {
   return state.transactions
     .filter((transaction) => {
-      const inPeriod =
-        state.viewMode === "annual"
-          ? yearKey(transaction) === state.selectedYear
+      const transactionYear = yearKey(transaction);
+      const inPeriod = state.viewMode === "annual"
+        ? transactionYear === state.selectedYear
+        : state.viewMode === "year-over-year"
+          ? transactionYear >= state.comparisonStartYear && transactionYear <= state.selectedYear
           : monthKey(transaction) === selectedMonthKey();
       return inPeriod && isInternalTransfer(transaction);
     })
@@ -291,6 +427,29 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
   state.selectedYear = years.includes(preferredYear) ? preferredYear : (latestMonth.slice(0, 4) || years[0]);
   elements.yearSelect.value = state.selectedYear;
 
+  const ascendingYears = [...years].sort();
+  elements.comparisonStartYear.replaceChildren();
+  for (const year of ascendingYears) {
+    const option = document.createElement("option");
+    option.value = year;
+    option.textContent = year;
+    elements.comparisonStartYear.append(option);
+  }
+  const eligibleStartYears = ascendingYears.filter((year) => year <= state.selectedYear);
+  state.comparisonStartYear = eligibleStartYears.includes(state.comparisonStartYear)
+    ? state.comparisonStartYear
+    : (eligibleStartYears[0] || state.selectedYear);
+  elements.comparisonStartYear.value = state.comparisonStartYear;
+  const yearsInRange = ascendingYears.filter(
+    (year) => year >= state.comparisonStartYear && year <= state.selectedYear,
+  );
+  state.selectedComparisonYears = state.selectedComparisonYears.filter(
+    (year) => yearsInRange.includes(year),
+  );
+  if (state.selectedComparisonYears.length === 0) {
+    state.selectedComparisonYears = yearsInRange.slice(-3);
+  }
+
   elements.monthSelect.replaceChildren();
   for (let monthNumber = 1; monthNumber <= 12; monthNumber += 1) {
     const month = String(monthNumber).padStart(2, "0");
@@ -310,7 +469,17 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
 
 function populateDatalists() {
   for (const [field, datalist] of Object.entries(elements.datalists)) {
-    const values = [...new Set(state.transactions.map((transaction) => transaction[field]))]
+    const taxonomyValues = field === "category"
+      ? state.taxonomyCategories.map((category) => category.name)
+      : field === "subcategory"
+        ? state.taxonomyCategories.flatMap(
+            (category) => category.subcategories.map((subcategory) => subcategory.name),
+          )
+        : [];
+    const values = [...new Set([
+      ...state.transactions.map((transaction) => transaction[field]),
+      ...taxonomyValues,
+    ])]
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b));
     datalist.replaceChildren(
@@ -331,14 +500,106 @@ function calculateSummary(transactions) {
   return { spent, income, net: income - spent };
 }
 
+function odometerDigitSequence(startDigit, targetDigit, direction, extraTurns) {
+  const sequence = [startDigit];
+  const distance = direction > 0
+    ? (targetDigit - startDigit + 10) % 10
+    : (startDigit - targetDigit + 10) % 10;
+  const steps = distance + (extraTurns * 10);
+  for (let step = 1; step <= steps; step += 1) {
+    sequence.push((startDigit + (direction * step) + 1000) % 10);
+  }
+  return sequence;
+}
+
+function renderOdometerValue(element, value) {
+  const formattedValue = formatSummaryAmount(value);
+  const accessibleValue = currency.format(value);
+  const previousValue = Number(element.dataset.summaryValue);
+  const hasPreviousValue = Number.isFinite(previousValue);
+  const previousDigits = [...formatSummaryAmount(hasPreviousValue ? previousValue : 0)]
+    .filter((character) => /\d/.test(character))
+    .map(Number);
+  const targetDigits = [...formattedValue]
+    .filter((character) => /\d/.test(character))
+    .map(Number);
+  const direction = !hasPreviousValue || value >= previousValue ? 1 : -1;
+  const digitOffset = previousDigits.length - targetDigits.length;
+  let targetDigitIndex = 0;
+  const visualValue = document.createElement("span");
+  visualValue.className = "summary-odometer";
+  visualValue.setAttribute("aria-hidden", "true");
+
+  for (const character of formattedValue) {
+    if (!/\d/.test(character)) {
+      const fixedCharacter = document.createElement("span");
+      fixedCharacter.className = "summary-odometer-character";
+      fixedCharacter.textContent = character;
+      visualValue.append(fixedCharacter);
+      continue;
+    }
+
+    const targetDigit = Number(character);
+    const previousDigitIndex = targetDigitIndex + digitOffset;
+    const startDigit = previousDigitIndex >= 0
+      ? previousDigits[previousDigitIndex]
+      : 0;
+    const extraTurns = 1 + Math.min(targetDigitIndex, 2);
+    const sequence = odometerDigitSequence(startDigit, targetDigit, direction, extraTurns);
+    const digitWindow = document.createElement("span");
+    digitWindow.className = "summary-odometer-digit";
+    const reel = document.createElement("span");
+    reel.className = "summary-odometer-reel";
+    reel.replaceChildren(...sequence.map((digit) => {
+      const item = document.createElement("span");
+      item.className = "summary-odometer-reel-item";
+      item.textContent = String(digit);
+      return item;
+    }));
+    digitWindow.append(reel);
+    visualValue.append(digitWindow);
+
+    const distance = sequence.length - 1;
+    const animation = reel.animate(
+      [
+        { transform: "translateY(0)" },
+        { transform: `translateY(-${distance * 1.05}em)` },
+      ],
+      {
+        duration: 500 + (targetDigitIndex * 75),
+        easing: "cubic-bezier(0.22, 0.75, 0.2, 1)",
+        fill: "forwards",
+      },
+    );
+    animation.finished.then(() => {
+      // Remove the forwards-filled transform before collapsing the reel. If the
+      // finished animation stays active, it translates the single final digit
+      // outside the clipped digit window.
+      animation.cancel();
+      const finalItem = document.createElement("span");
+      finalItem.className = "summary-odometer-reel-item";
+      finalItem.textContent = String(targetDigit);
+      reel.replaceChildren(finalItem);
+      reel.style.transform = "translateY(0)";
+    }).catch(() => {
+      // A subsequent dashboard render can remove a reel before it finishes.
+    });
+    targetDigitIndex += 1;
+  }
+
+  const accessibleText = document.createElement("span");
+  accessibleText.className = "sr-only";
+  accessibleText.textContent = accessibleValue;
+  element.replaceChildren(visualValue, accessibleText);
+  element.dataset.summaryValue = String(value);
+  element.title = accessibleValue;
+}
+
 function renderSummary(transactions) {
   const { spent, income, net } = calculateSummary(transactions);
-  elements.totalSpent.textContent = formatter.format(spent);
-  elements.totalSpent.title = currency.format(spent);
-  elements.totalIncome.textContent = formatter.format(income);
-  elements.totalIncome.title = currency.format(income);
-  elements.netTotal.textContent = formatter.format(net);
-  elements.netTotal.title = currency.format(net);
+  renderOdometerValue(elements.totalSpent, spent);
+  renderOdometerValue(elements.totalIncome, income);
+  renderOdometerValue(elements.netTotal, net);
   elements.netTotalCard.classList.toggle("summary-card--net-positive", net > 0);
   elements.netTotalCard.classList.toggle("summary-card--net-negative", net < 0);
   elements.netTotalNote.textContent =
@@ -375,12 +636,149 @@ function transactionTags(transaction) {
   return tags;
 }
 
+async function loadTaxonomySuggestions() {
+  try {
+    const response = await fetch("/api/taxonomy", { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (!Array.isArray(payload.categories)) return;
+    state.taxonomyCategories = payload.categories;
+    populateDatalists();
+  } catch {
+    // Taxonomy suggestions are optional; transaction data remains usable without them.
+  }
+}
+
+function normalizeTagKey(tag) {
+  return tag === UNTAGGED ? UNTAGGED : String(tag).toLocaleLowerCase();
+}
+
+function availableTagKeys() {
+  const tags = new Map();
+  let hasUntagged = false;
+  for (const transaction of state.transactions) {
+    if (isInternalTransfer(transaction)) continue;
+    const transactionTagList = transactionTags(transaction);
+    if (transactionTagList.length === 0) hasUntagged = true;
+    for (const tag of transactionTagList) {
+      const normalized = normalizeTagKey(tag);
+      if (!tags.has(normalized)) tags.set(normalized, tag);
+    }
+  }
+  const values = [...tags.values()].sort((left, right) => left.localeCompare(right));
+  if (hasUntagged) values.push(UNTAGGED);
+  return values;
+}
+
+function selectedTagSet() {
+  return new Set(state.selectedTags.map(normalizeTagKey));
+}
+
+function transactionMatchesTag(transaction, selectedTag) {
+  const tags = transactionTags(transaction);
+  if (selectedTag === UNTAGGED) return tags.length === 0;
+  const normalized = normalizeTagKey(selectedTag);
+  return tags.some((tag) => normalizeTagKey(tag) === normalized);
+}
+
+function transactionMatchesTagSelection(transaction) {
+  if (state.selectedTags.length === 0) return false;
+  const matches = state.selectedTags.map((tag) => transactionMatchesTag(transaction, tag));
+  return state.tagMatchMode === "all" ? matches.every(Boolean) : matches.some(Boolean);
+}
+
+function matchingTagTransactions(transactions) {
+  return transactions.filter(transactionMatchesTagSelection);
+}
+
+function tagQueryLabel() {
+  if (state.selectedTags.length === 0) return "Select one or more tags";
+  const separator = state.tagMatchMode === "all" ? " AND " : " OR ";
+  return state.selectedTags.map(breakdownLabel).join(separator);
+}
+
+function toggleTagSelection(tag) {
+  const normalized = normalizeTagKey(tag);
+  const selected = selectedTagSet();
+  state.selectedTags = selected.has(normalized)
+    ? state.selectedTags.filter((candidate) => normalizeTagKey(candidate) !== normalized)
+    : [...state.selectedTags, tag];
+  if (
+    state.tagMatchMode === "all"
+    && state.selectedTags.length > 1
+    && state.selectedTags.some((candidate) => candidate === UNTAGGED)
+  ) state.tagMatchMode = "any";
+  saveDashboardView();
+  renderDashboard();
+}
+
+function renderTagExplorer(transactions) {
+  const tagMode = state.breakdownDimension === "tag";
+  const target = state.viewMode === "annual"
+    ? elements.annualTagExplorerSlot
+    : elements.monthlyTagExplorerSlot;
+  if (elements.tagExplorer.parentElement !== target) target.append(elements.tagExplorer);
+  elements.tagExplorer.hidden = !tagMode;
+  if (!tagMode) return;
+
+  const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
+  const selected = selectedTagSet();
+  const queryTransactions = matchingTagTransactions(spendingTransactions);
+  const impossibleAll = state.selectedTags.length > 1
+    && state.selectedTags.some((tag) => tag === UNTAGGED);
+  if (impossibleAll && state.tagMatchMode === "all") state.tagMatchMode = "any";
+
+  elements.tagMatchModeButtons.forEach((button) => {
+    const mode = button.dataset.tagMatchMode;
+    button.setAttribute("aria-pressed", String(mode === state.tagMatchMode));
+    button.disabled = mode === "all" && impossibleAll;
+    button.title = button.disabled
+      ? "Untagged cannot be combined with another tag using Match all."
+      : "";
+  });
+
+  const search = elements.tagSearch.value.trim().toLocaleLowerCase();
+  const buttons = availableTagKeys()
+    .filter((tag) => !search || breakdownLabel(tag).toLocaleLowerCase().includes(search))
+    .map((tag) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tag-option";
+      const count = spendingTransactions.filter(
+        (transaction) => transactionMatchesTag(transaction, tag),
+      ).length;
+      button.textContent = `${breakdownLabel(tag)} · ${count}`;
+      button.setAttribute("aria-pressed", String(selected.has(normalizeTagKey(tag))));
+      button.addEventListener("click", () => toggleTagSelection(tag));
+      return button;
+    });
+  if (buttons.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "tag-options-empty";
+    empty.textContent = availableTagKeys().length === 0 ? "No tags are available yet." : "No tags match this search.";
+    elements.tagOptions.replaceChildren(empty);
+  } else {
+    elements.tagOptions.replaceChildren(...buttons);
+  }
+
+  elements.tagQueryExpression.textContent = tagQueryLabel();
+  elements.tagQueryResult.textContent = state.selectedTags.length === 0
+    ? "Choose tags to build a combined spending view. Tag counts can overlap when transactions have multiple tags."
+    : `${queryTransactions.length} ${queryTransactions.length === 1 ? "transaction" : "transactions"} · ${currency.format(displaySum(queryTransactions))} unique spending`;
+  elements.clearTagSelection.hidden = state.selectedTags.length === 0;
+  elements.viewTagQueryTransactions.disabled = state.selectedTags.length === 0;
+}
+
 function breakdownLabel(key) {
-  return key === UNTAGGED ? "Untagged" : key;
+  if (key === UNTAGGED) return "Untagged";
+  if (key === UNCATEGORIZED || !String(key).trim()) return "Uncategorized";
+  return key;
 }
 
 function transactionMatchesBreakdown(transaction, key) {
-  if (state.breakdownDimension === "category") return transaction.category === key;
+  if (state.breakdownDimension === "category") {
+    return key === UNCATEGORIZED ? !transaction.category : transaction.category === key;
+  }
   const tags = transactionTags(transaction);
   const normalizedKey = key.toLocaleLowerCase();
   return key === UNTAGGED
@@ -390,7 +788,9 @@ function transactionMatchesBreakdown(transaction, key) {
 
 function groupByBreakdownDimension(transactions) {
   if (state.breakdownDimension === "category") {
-    return groupByCategory(transactions).map((group) => ({ ...group, key: group.category }));
+    return groupByCategory(transactions).map(
+      (group) => ({ ...group, key: group.category || UNCATEGORIZED }),
+    );
   }
   const groups = new Map();
   for (const transaction of transactions) {
@@ -414,8 +814,13 @@ function groupByBreakdownDimension(transactions) {
 }
 
 function renderCategories(transactions) {
-  const groups = groupByBreakdownDimension(transactions);
+  const tagMode = state.breakdownDimension === "tag";
+  elements.categoriesHeading.textContent = tagMode ? "Spending by tags" : "Spending by category";
   elements.categoryGrid.replaceChildren();
+  elements.categoryGrid.hidden = tagMode;
+  if (tagMode) return;
+
+  const groups = groupByBreakdownDimension(transactions);
   if (groups.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
@@ -427,13 +832,14 @@ function renderCategories(transactions) {
   const maximum = Math.max(...groups.map((group) => Math.abs(group.total)), 1);
   groups.forEach((group, index) => {
     const card = elements.categoryTemplate.content.firstElementChild.cloneNode(true);
-    const color = categoryColors[index % categoryColors.length];
+    const color = visualizationColor(index);
     card.style.setProperty("--category-color", color);
     card.style.setProperty("--bar-width", `${Math.max((Math.abs(group.total) / maximum) * 100, 3)}%`);
     card.querySelector(".category-count").textContent = `${group.transactions.length} ${
       group.transactions.length === 1 ? "transaction" : "transactions"
     }`;
-    card.querySelector(".category-name").textContent = group.category;
+    const groupLabel = breakdownLabel(group.key);
+    card.querySelector(".category-name").textContent = groupLabel;
     const totalElement = card.querySelector(".category-total");
     totalElement.textContent = currency.format(group.total);
     totalElement.classList.toggle(
@@ -443,11 +849,11 @@ function renderCategories(transactions) {
         group.category.trim().toLocaleLowerCase() === "income"
       ),
     );
-    card.setAttribute("aria-label", `View ${group.category} transactions`);
+    card.setAttribute("aria-label", `View ${groupLabel} transactions`);
     card.addEventListener("click", () =>
-      openTransactionDialog(group.category, group.transactions, {
+      openTransactionDialog(groupLabel, group.transactions, {
         type: state.breakdownDimension,
-        title: group.category,
+        title: groupLabel,
         key: group.key,
       }),
     );
@@ -466,8 +872,89 @@ function annualTransactionsByMonth(transactions) {
   return byMonth;
 }
 
+function captureAnnualBarHeights(container, columnSelector, barSelector) {
+  return new Map([...container.querySelectorAll(columnSelector)].map((column) => {
+    const bars = [...column.querySelectorAll(barSelector)];
+    const representative = bars.at(-1);
+    return [column.dataset.month, {
+      height: bars.reduce(
+        (total, bar) => total + (Number.parseFloat(bar.style.height) || 0),
+        0,
+      ),
+      backgroundColor: representative
+        ? window.getComputedStyle(representative).backgroundColor
+        : "",
+      className: representative?.className || "",
+    }];
+  }));
+}
+
+function animateAnnualBars(updates, frameProperty, enabled) {
+  if (state[frameProperty] !== null) {
+    window.cancelAnimationFrame(state[frameProperty]);
+    state[frameProperty] = null;
+  }
+  if (!enabled) {
+    updates.forEach((update) => update(1));
+    return;
+  }
+  const duration = 650;
+  updates.forEach((update) => update(0));
+  state[frameProperty] = window.requestAnimationFrame(() => {
+    const startedAt = window.performance.now();
+    const step = (timestamp) => {
+      const progress = Math.min((timestamp - startedAt) / duration, 1);
+      const easedProgress = 1 - ((1 - progress) ** 3);
+      updates.forEach((update) => update(easedProgress));
+      if (progress < 1) {
+        state[frameProperty] = window.requestAnimationFrame(step);
+      } else {
+        state[frameProperty] = null;
+      }
+    };
+    state[frameProperty] = window.requestAnimationFrame(step);
+  });
+}
+
+function animateStackedMonthBars(container, previousHeights) {
+  const updates = [];
+  for (const track of container.querySelectorAll(".stacked-bar-track[data-month]")) {
+    const previous = previousHeights.get(track.dataset.month);
+    const segments = [...track.querySelectorAll(".stacked-bar-segment")];
+    if (segments.length === 0 && previous?.height > 0) {
+      const exitBar = document.createElement("span");
+      exitBar.className = "stacked-bar-segment annual-bar-exit";
+      exitBar.style.height = `${previous.height}%`;
+      exitBar.style.backgroundColor = previous.backgroundColor;
+      track.append(exitBar);
+      updates.push((progress) => {
+        exitBar.style.height = `${previous.height * (1 - progress)}%`;
+        exitBar.style.opacity = String(1 - progress);
+        if (progress === 1) exitBar.remove();
+      });
+      continue;
+    }
+    const targets = segments.map((segment) => Number.parseFloat(segment.style.height) || 0);
+    const targetTotal = targets.reduce((total, height) => total + height, 0);
+    const previousTotal = previous?.height || 0;
+    const startScale = targetTotal > 0 ? previousTotal / targetTotal : 0;
+    segments.forEach((segment, index) => {
+      const target = targets[index];
+      const start = target * startScale;
+      updates.push((progress) => {
+        segment.style.height = `${start + ((target - start) * progress)}%`;
+      });
+    });
+  }
+  animateAnnualBars(
+    updates,
+    "annualSpendingAnimationFrame",
+    previousHeights.size > 0 && updates.length > 0,
+  );
+}
+
 function colorForCategory(category, categories) {
-  return categoryColors[categories.indexOf(category) % categoryColors.length];
+  return visualizationColor(categories.indexOf(category));
 }
 
 function subcategoryKey(transaction) {
@@ -555,9 +1042,82 @@ function clearAnnualSpendingFilter() {
   renderAnnualSpendingChart(transactionsForSelectedPeriod());
 }
 
+function renderAnnualTagSpendingChart(spendingTransactions) {
+  const previousHeights = captureAnnualBarHeights(
+    elements.annualSpendingChart,
+    ".stacked-bar-track[data-month]",
+    ".stacked-bar-segment",
+  );
+  const matching = matchingTagTransactions(spendingTransactions);
+  elements.annualCategoryLegend.replaceChildren();
+  elements.annualCategoryLegend.hidden = true;
+  elements.clearCategoryFilter.hidden = true;
+  elements.spendingChartTitle.textContent = state.selectedTags.length > 0
+    ? `Monthly spending matching ${tagQueryLabel()}`
+    : "Monthly spending by tag";
+  elements.spendingChartSubtitle.textContent = state.selectedTags.length > 0
+    ? `${matching.length} ${matching.length === 1 ? "transaction" : "transactions"} · ${currency.format(displaySum(matching))} unique spending`
+    : "Select tags above to chart a combined result without double-counting.";
+  elements.annualSpendingChart.replaceChildren();
+  if (state.selectedTags.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chart-empty";
+    empty.textContent = "Select one or more tags to chart unique monthly spending.";
+    elements.annualSpendingChart.append(empty);
+    return;
+  }
+
+  const byMonth = annualTransactionsByMonth(matching);
+  const months = [...byMonth.entries()].map(([month, monthTransactions]) => ({
+    month,
+    transactions: monthTransactions,
+    total: Math.max(displaySum(monthTransactions), 0),
+  }));
+  const maximum = Math.max(...months.map((month) => month.total), 1);
+  for (const monthData of months) {
+    const column = document.createElement("div");
+    column.className = "stacked-month";
+    const value = document.createElement("span");
+    value.className = "chart-value";
+    value.textContent = monthData.total > 0 ? currency.format(monthData.total) : "—";
+    const track = document.createElement("div");
+    track.className = "stacked-bar-track";
+    track.dataset.month = monthData.month;
+    track.setAttribute(
+      "aria-label",
+      `${monthLabel(`${state.selectedYear}-${monthData.month}`)} matching spending: ${currency.format(monthData.total)}`,
+    );
+    if (monthData.total > 0) {
+      const bar = document.createElement("span");
+      bar.className = "stacked-bar-segment tag-query-bar";
+      bar.style.height = `${(monthData.total / maximum) * 100}%`;
+      bar.title = `${currency.format(monthData.total)} · ${monthData.transactions.length} ${monthData.transactions.length === 1 ? "transaction" : "transactions"}`;
+      track.append(bar);
+    }
+    const label = document.createElement("span");
+    label.className = "chart-month-label";
+    label.textContent = shortMonthFormatter.format(
+      parseLocalDate(`${state.selectedYear}-${monthData.month}-01`),
+    );
+    column.append(value, track, label);
+    elements.annualSpendingChart.append(column);
+  }
+  animateStackedMonthBars(elements.annualSpendingChart, previousHeights);
+}
+
 function renderAnnualSpendingChart(transactions) {
+  const previousHeights = captureAnnualBarHeights(
+    elements.annualSpendingChart,
+    ".stacked-bar-track[data-month]",
+    ".stacked-bar-segment",
+  );
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
   const categoryMode = state.breakdownDimension === "category";
+  if (!categoryMode) {
+    renderAnnualTagSpendingChart(spendingTransactions);
+    return;
+  }
+  elements.annualCategoryLegend.hidden = false;
   const groups = annualSpendingKeys(spendingTransactions);
   if (state.annualCategoryFilter && !groups.includes(state.annualCategoryFilter)) {
     state.annualCategoryFilter = "";
@@ -605,7 +1165,8 @@ function renderAnnualSpendingChart(transactions) {
     : colorForCategory(key, groups);
   const seriesTransactions = (key, candidates) => candidates.filter((transaction) => (
     categoryMode && state.annualCategoryFilter
-      ? transaction.category === state.annualCategoryFilter && subcategoryKey(transaction) === key
+      ? transactionMatchesBreakdown(transaction, state.annualCategoryFilter)
+        && subcategoryKey(transaction) === key
       : transactionMatchesBreakdown(transaction, key)
   ));
 
@@ -637,7 +1198,7 @@ function renderAnnualSpendingChart(transactions) {
   }
 
   elements.spendingChartTitle.textContent = categoryMode && state.annualCategoryFilter
-    ? `Monthly ${state.annualCategoryFilter} spending by subcategory`
+    ? `Monthly ${breakdownLabel(state.annualCategoryFilter)} spending by subcategory`
     : `Monthly spending by ${state.breakdownDimension}`;
   renderSpendingBreadcrumb();
   elements.clearCategoryFilter.hidden = !state.annualCategoryFilter;
@@ -679,6 +1240,7 @@ function renderAnnualSpendingChart(transactions) {
     value.textContent = monthData.total > 0 ? currency.format(monthData.total) : "—";
     const track = document.createElement("div");
     track.className = "stacked-bar-track";
+    track.dataset.month = monthData.month;
     track.setAttribute(
       "aria-label",
       `${monthLabel(`${state.selectedYear}-${monthData.month}`)} spending: ${currency.format(monthData.total)}`,
@@ -699,6 +1261,7 @@ function renderAnnualSpendingChart(transactions) {
     column.append(value, track, label);
     elements.annualSpendingChart.append(column);
   }
+  animateStackedMonthBars(elements.annualSpendingChart, previousHeights);
 }
 
 function annualTotals(transactions) {
@@ -727,9 +1290,63 @@ function appendAnnualAmounts(row, transactions) {
   row.append(annual);
 }
 
+function renderAnnualTagBreakdown(spendingTransactions) {
+  elements.annualBreakdownTable.classList.add("annual-breakdown-table--tag-results");
+  const headerRow = document.createElement("tr");
+  for (const label of ["Month", "Matching transactions", "Unique spending"]) {
+    const header = document.createElement("th");
+    header.scope = "col";
+    header.textContent = label;
+    headerRow.append(header);
+  }
+  elements.annualBreakdownHead.replaceChildren(headerRow);
+
+  if (state.selectedTags.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 3;
+    cell.className = "annual-breakdown-empty";
+    cell.textContent = "Select one or more tags to compare unique monthly totals.";
+    row.append(cell);
+    elements.annualBreakdownBody.replaceChildren(row);
+    return;
+  }
+
+  const matching = matchingTagTransactions(spendingTransactions);
+  const byMonth = annualTransactionsByMonth(matching);
+  const rows = [...byMonth.entries()].map(([month, monthTransactions]) => {
+    const row = document.createElement("tr");
+    const monthCell = document.createElement("th");
+    monthCell.scope = "row";
+    monthCell.textContent = monthLabel(`${state.selectedYear}-${month}`);
+    const countCell = document.createElement("td");
+    countCell.textContent = String(monthTransactions.length);
+    const amountCell = annualAmountCell(displaySum(monthTransactions));
+    row.append(monthCell, countCell, amountCell);
+    return row;
+  });
+  const totalRow = document.createElement("tr");
+  totalRow.className = "annual-category-row tag-query-total-row";
+  const totalLabel = document.createElement("th");
+  totalLabel.scope = "row";
+  totalLabel.textContent = "Annual total";
+  const totalCount = document.createElement("td");
+  totalCount.textContent = String(matching.length);
+  const totalAmount = annualAmountCell(displaySum(matching));
+  totalAmount.classList.add("annual-total-cell");
+  totalRow.append(totalLabel, totalCount, totalAmount);
+  rows.push(totalRow);
+  elements.annualBreakdownBody.replaceChildren(...rows);
+}
+
 function renderAnnualBreakdown(transactions) {
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
   const categoryMode = state.breakdownDimension === "category";
+  if (!categoryMode) {
+    renderAnnualTagBreakdown(spendingTransactions);
+    return;
+  }
+  elements.annualBreakdownTable.classList.remove("annual-breakdown-table--tag-results");
   const groups = groupByBreakdownDimension(spendingTransactions);
   const headerRow = document.createElement("tr");
   const categoryHeader = document.createElement("th");
@@ -778,12 +1395,15 @@ function renderAnnualBreakdown(transactions) {
     expandButton.type = "button";
     expandButton.className = "annual-category-expand";
     expandButton.setAttribute("aria-expanded", String(expanded));
-    expandButton.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${group.category} subcategories`);
+    expandButton.setAttribute(
+      "aria-label",
+      `${expanded ? "Collapse" : "Expand"} ${breakdownLabel(group.key)} subcategories`,
+    );
     const arrow = document.createElement("span");
     arrow.setAttribute("aria-hidden", "true");
     arrow.textContent = "›";
     const label = document.createElement("span");
-    label.textContent = group.category;
+    label.textContent = breakdownLabel(group.key);
     expandButton.append(arrow, label);
     expandButton.addEventListener("click", () => {
       if (expanded) state.annualExpandedCategories.delete(group.key);
@@ -821,6 +1441,11 @@ function renderAnnualBreakdown(transactions) {
 }
 
 function renderAnnualNetChart(transactions) {
+  const previousHeights = captureAnnualBarHeights(
+    elements.annualNetChart,
+    ".net-bar-area[data-month]",
+    ".net-bar",
+  );
   const byMonth = annualTransactionsByMonth(transactions);
   const months = [...byMonth.entries()].map(([month, monthTransactions]) => ({
     month,
@@ -837,15 +1462,31 @@ function renderAnnualNetChart(transactions) {
     value.textContent = monthData.net === 0 ? "—" : currency.format(monthData.net);
     const area = document.createElement("div");
     area.className = "net-bar-area";
+    area.dataset.month = monthData.month;
     const axis = document.createElement("span");
     axis.className = "net-zero-axis";
     area.append(axis);
     if (monthData.net !== 0) {
       const bar = document.createElement("span");
       bar.className = `net-bar ${monthData.net > 0 ? "is-positive" : "is-negative"}`;
-      bar.style.height = `${Math.max((Math.abs(monthData.net) / maximum) * 46, 2)}%`;
+      const targetHeight = Math.max((Math.abs(monthData.net) / maximum) * 46, 2);
+      const startHeight = previousHeights.get(monthData.month)?.height || 0;
+      bar.style.height = `${targetHeight}%`;
+      bar.dataset.startHeight = String(startHeight);
+      bar.dataset.targetHeight = String(targetHeight);
       bar.title = `${monthLabel(`${state.selectedYear}-${monthData.month}`)}: ${currency.format(monthData.net)}`;
       area.append(bar);
+    } else {
+      const previous = previousHeights.get(monthData.month);
+      if (previous?.height > 0) {
+        const exitBar = document.createElement("span");
+        exitBar.className = `${previous.className} annual-bar-exit`;
+        exitBar.style.height = "0%";
+        exitBar.style.backgroundColor = previous.backgroundColor;
+        exitBar.dataset.startHeight = String(previous.height);
+        exitBar.dataset.targetHeight = "0";
+        area.append(exitBar);
+      }
     }
     const label = document.createElement("span");
     label.className = "chart-month-label";
@@ -853,6 +1494,22 @@ function renderAnnualNetChart(transactions) {
     column.append(value, area, label);
     elements.annualNetChart.append(column);
   }
+  const updates = [...elements.annualNetChart.querySelectorAll(".net-bar")].map((bar) => {
+    const start = Number(bar.dataset.startHeight) || 0;
+    const target = Number(bar.dataset.targetHeight) || 0;
+    return (progress) => {
+      bar.style.height = `${start + ((target - start) * progress)}%`;
+      if (target === 0) {
+        bar.style.opacity = String(1 - progress);
+        if (progress === 1) bar.remove();
+      }
+    };
+  });
+  animateAnnualBars(
+    updates,
+    "annualNetAnimationFrame",
+    previousHeights.size > 0 && updates.length > 0,
+  );
 }
 
 function renderAnnualCharts(transactions) {
@@ -864,6 +1521,411 @@ function renderAnnualCharts(transactions) {
   renderAnnualNetChart(transactions);
 }
 
+function comparisonMetricLabel(metric = state.comparisonMetric) {
+  return { spending: "spending", income: "income", net: "net total" }[metric];
+}
+
+function comparisonValueLabel() {
+  const prefix = state.comparisonChartMode === "cumulative" ? "cumulative" : "monthly";
+  return `${prefix} ${comparisonMetricLabel()}`;
+}
+
+function comparisonAmount(transaction, metric = state.comparisonMetric) {
+  const amount = displayAmount(transaction);
+  if (metric === "spending") return isIncome(transaction) ? 0 : amount;
+  if (metric === "income") return isIncome(transaction) ? Math.abs(amount) : 0;
+  return isIncome(transaction) ? Math.abs(amount) : -amount;
+}
+
+function comparisonTransactionsForMonth(year, month, metric = state.comparisonMetric) {
+  return state.transactions
+    .filter((transaction) => (
+      yearKey(transaction) === year
+      && transaction.date.slice(5, 7) === month
+      && !isInternalTransfer(transaction)
+      && (metric === "net" || (metric === "income") === isIncome(transaction))
+    ))
+    .sort(compareLatestFirst);
+}
+
+function lastObservedMonth(year) {
+  return state.transactions.reduce((latest, transaction) => {
+    if (yearKey(transaction) !== year || isInternalTransfer(transaction)) return latest;
+    return Math.max(latest, Number(transaction.date.slice(5, 7)));
+  }, 0);
+}
+
+function selectedComparisonYears() {
+  return [...state.selectedComparisonYears].sort();
+}
+
+function comparisonCutoffForYear(year, newestYear) {
+  if (state.comparisonPeriodMode === "comparable") {
+    return lastObservedMonth(newestYear);
+  }
+  return lastObservedMonth(year);
+}
+
+function comparisonSeries() {
+  const years = selectedComparisonYears();
+  const newestYear = years.at(-1) || state.selectedYear;
+  return years.map((year) => {
+    const cutoff = comparisonCutoffForYear(year, newestYear);
+    let runningTotal = 0;
+    const points = [];
+    for (let monthNumber = 1; monthNumber <= cutoff; monthNumber += 1) {
+      const month = String(monthNumber).padStart(2, "0");
+      const transactions = comparisonTransactionsForMonth(year, month);
+      const monthlyTotal = transactions.reduce(
+        (total, transaction) => total + comparisonAmount(transaction),
+        0,
+      );
+      runningTotal += monthlyTotal;
+      points.push({
+        month,
+        value: state.comparisonChartMode === "cumulative" ? runningTotal : monthlyTotal,
+        transactions,
+      });
+    }
+    return { year, cutoff, points, total: runningTotal };
+  });
+}
+
+function compactCurrency(value) {
+  const absolute = Math.abs(value);
+  if (absolute >= 1000000) return `${value < 0 ? "-" : ""}$${(absolute / 1000000).toFixed(1)}m`;
+  if (absolute >= 1000) return `${value < 0 ? "-" : ""}$${(absolute / 1000).toFixed(0)}k`;
+  return currency.format(value);
+}
+
+function svgElement(name, attributes = {}, textContent = "") {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
+  if (textContent) element.textContent = textContent;
+  return element;
+}
+
+function openComparisonMonthTransactions(year, month) {
+  hideComparisonTooltip();
+  const metric = comparisonMetricLabel();
+  const title = `${monthLabel(`${year}-${month}`)} ${metric}`;
+  openTransactionDialog(title, comparisonTransactionsForMonth(year, month), {
+    type: "comparison-month",
+    title,
+    year,
+    month,
+    metric: state.comparisonMetric,
+    eyebrow: "Year-over-year comparison",
+  });
+}
+
+function showComparisonTooltip(point, year, clientX, clientY) {
+  elements.comparisonTooltipLabel.textContent = `${monthLabel(`${year}-${point.month}`)} - ${comparisonValueLabel()}`;
+  elements.comparisonTooltipValue.textContent = currency.format(point.value);
+  elements.comparisonChartTooltip.hidden = false;
+  const tooltipRect = elements.comparisonChartTooltip.getBoundingClientRect();
+  const gap = 14;
+  const left = Math.min(
+    Math.max(clientX + gap, 8),
+    window.innerWidth - tooltipRect.width - 8,
+  );
+  const above = clientY - tooltipRect.height - gap;
+  const top = above >= 8 ? above : Math.min(clientY + gap, window.innerHeight - tooltipRect.height - 8);
+  elements.comparisonChartTooltip.style.left = `${left}px`;
+  elements.comparisonChartTooltip.style.top = `${top}px`;
+}
+
+function hideComparisonTooltip() {
+  elements.comparisonChartTooltip.hidden = true;
+}
+
+function renderComparisonYearPicker() {
+  const years = [...elements.comparisonStartYear.options]
+    .map((option) => option.value)
+    .filter((year) => year >= state.comparisonStartYear && year <= state.selectedYear);
+  const selected = new Set(state.selectedComparisonYears);
+  const buttons = years.map((year) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "comparison-year-button";
+    const selectedIndex = selectedComparisonYears().indexOf(year);
+    button.style.setProperty("--year-color", visualizationColor(Math.max(selectedIndex, 0)));
+    button.textContent = year;
+    button.setAttribute("aria-pressed", String(selected.has(year)));
+    button.addEventListener("click", () => {
+      if (selected.has(year) && selected.size === 1) return;
+      state.selectedComparisonYears = selected.has(year)
+        ? state.selectedComparisonYears.filter((candidate) => candidate !== year)
+        : [...state.selectedComparisonYears, year];
+      saveDashboardView();
+      renderYearComparison();
+    });
+    return button;
+  });
+  elements.comparisonYearPicker.replaceChildren(...buttons);
+}
+
+function animateComparisonChart(updates, enabled) {
+  if (!enabled) {
+    updates.forEach((update) => update(1));
+    state.comparisonAnimationFrame = null;
+    return;
+  }
+  const duration = 700;
+  updates.forEach((update) => update(0));
+  // The first frame paints the old coordinates. Starting on the following frame
+  // prevents browsers from coalescing the old and new SVG states into one redraw.
+  state.comparisonAnimationFrame = window.requestAnimationFrame(() => {
+    const startedAt = window.performance.now();
+    const step = (timestamp) => {
+      const progress = Math.min((timestamp - startedAt) / duration, 1);
+      const easedProgress = 1 - ((1 - progress) ** 3);
+      updates.forEach((update) => update(easedProgress));
+      if (progress < 1) {
+        state.comparisonAnimationFrame = window.requestAnimationFrame(step);
+      } else {
+        state.comparisonAnimationFrame = null;
+      }
+    };
+    state.comparisonAnimationFrame = window.requestAnimationFrame(step);
+  });
+}
+
+function renderComparisonChart(series) {
+  const svg = elements.comparisonChart;
+  const previousCoordinates = new Map(
+    [...svg.querySelectorAll(".comparison-point[data-point-key]")].map((point) => [
+      point.dataset.pointKey,
+      Number(point.getAttribute("cy")),
+    ]),
+  );
+  if (state.comparisonAnimationFrame !== null) {
+    window.cancelAnimationFrame(state.comparisonAnimationFrame);
+    state.comparisonAnimationFrame = null;
+  }
+  hideComparisonTooltip();
+  svg.replaceChildren();
+  if (series.length === 0 || series.every((item) => item.points.length === 0)) {
+    const message = series.length === 0
+      ? "Select at least one year to compare."
+      : "No transactions are available for the selected years.";
+    svg.append(svgElement("text", { x: 500, y: 210, class: "comparison-empty" }, message));
+    return;
+  }
+  const plot = { left: 88, top: 24, width: 874, height: 342 };
+  const values = [0, ...series.flatMap((item) => item.points.map((point) => point.value))];
+  let minimum = Math.min(...values);
+  let maximum = Math.max(...values);
+  if (minimum === maximum) maximum = minimum + 1;
+  const padding = (maximum - minimum) * 0.08;
+  minimum = Math.min(0, minimum - padding);
+  maximum = Math.max(0, maximum + padding);
+  const yFor = (value) => plot.top + ((maximum - value) / (maximum - minimum)) * plot.height;
+  const xFor = (monthIndex) => plot.left + (monthIndex / 11) * plot.width;
+  const zeroY = yFor(0);
+  const animationUpdates = [];
+
+  for (let tick = 0; tick <= 4; tick += 1) {
+    const value = maximum - ((maximum - minimum) * tick) / 4;
+    const y = yFor(value);
+    svg.append(
+      svgElement("line", { x1: plot.left, y1: y, x2: plot.left + plot.width, y2: y, class: "comparison-grid-line" }),
+      svgElement("text", { x: plot.left - 12, y: y + 4, class: "comparison-axis-value", "text-anchor": "end" }, compactCurrency(value)),
+    );
+  }
+  if (minimum < 0 && maximum > 0) {
+    svg.append(svgElement("line", { x1: plot.left, y1: zeroY, x2: plot.left + plot.width, y2: zeroY, class: "comparison-zero-line" }));
+  }
+  for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
+    const month = String(monthIndex + 1).padStart(2, "0");
+    svg.append(svgElement("text", {
+      x: xFor(monthIndex),
+      y: 405,
+      class: "comparison-axis-month",
+      "text-anchor": "middle",
+    }, shortMonthFormatter.format(parseLocalDate(`2000-${month}-01`))));
+  }
+
+  series.forEach((yearSeries, seriesIndex) => {
+    const color = visualizationColor(seriesIndex);
+    const coordinates = yearSeries.points.map((point, index) => {
+      const key = `${yearSeries.year}-${point.month}`;
+      return {
+        x: xFor(index),
+        fromY: previousCoordinates.get(key) ?? zeroY,
+        toY: yFor(point.value),
+      };
+    });
+    const line = svgElement("polyline", {
+      points: coordinates.map(({ x, fromY }) => `${x},${fromY}`).join(" "),
+      fill: "none",
+      stroke: color,
+      "stroke-width": 4,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: "comparison-line",
+    });
+    animationUpdates.push((progress) => {
+      line.setAttribute("points", coordinates.map(({ x, fromY, toY }) => (
+        `${x},${fromY + ((toY - fromY) * progress)}`
+      )).join(" "));
+    });
+    svg.append(line);
+    yearSeries.points.forEach((point, index) => {
+      const pointKey = `${yearSeries.year}-${point.month}`;
+      const fromY = previousCoordinates.get(pointKey) ?? zeroY;
+      const toY = yFor(point.value);
+      const circle = svgElement("circle", {
+        cx: xFor(index),
+        cy: fromY,
+        r: 6,
+        fill: color,
+        class: "comparison-point",
+        "data-point-key": pointKey,
+        tabindex: 0,
+        role: "button",
+        "aria-label": `${monthLabel(`${yearSeries.year}-${point.month}`)}: ${currency.format(point.value)} ${comparisonValueLabel()}. Review ${point.transactions.length} monthly transactions.`,
+      });
+      animationUpdates.push((progress) => {
+        circle.setAttribute("cy", String(fromY + ((toY - fromY) * progress)));
+      });
+      circle.addEventListener("pointerenter", (event) => {
+        showComparisonTooltip(point, yearSeries.year, event.clientX, event.clientY);
+      });
+      circle.addEventListener("pointermove", (event) => {
+        showComparisonTooltip(point, yearSeries.year, event.clientX, event.clientY);
+      });
+      circle.addEventListener("pointerleave", hideComparisonTooltip);
+      circle.addEventListener("focus", () => {
+        const bounds = circle.getBoundingClientRect();
+        showComparisonTooltip(point, yearSeries.year, bounds.left + bounds.width / 2, bounds.top);
+      });
+      circle.addEventListener("blur", hideComparisonTooltip);
+      circle.addEventListener("click", () => openComparisonMonthTransactions(yearSeries.year, point.month));
+      circle.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openComparisonMonthTransactions(yearSeries.year, point.month);
+      });
+      svg.append(circle);
+    });
+  });
+  animateComparisonChart(animationUpdates, previousCoordinates.size > 0);
+}
+
+function renderComparisonTable(series) {
+  const metricLabel = comparisonMetricLabel();
+  const header = document.createElement("tr");
+  const labels = ["Year", ...Array.from({ length: 12 }, (_, index) => (
+    shortMonthFormatter.format(parseLocalDate(`2000-${String(index + 1).padStart(2, "0")}-01`))
+  )), "Period total", "Change"];
+  header.replaceChildren(...labels.map((label) => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    return cell;
+  }));
+  elements.comparisonTableHead.replaceChildren(header);
+
+  const ascending = [...series].sort((left, right) => left.year.localeCompare(right.year));
+  const priorByYear = new Map(ascending.map((item, index) => [item.year, ascending[index - 1]]));
+  const rows = [...series].sort((left, right) => right.year.localeCompare(left.year)).map((item) => {
+    const row = document.createElement("tr");
+    const yearCell = document.createElement("th");
+    yearCell.scope = "row";
+    yearCell.textContent = item.year;
+    yearCell.style.setProperty("--year-color", visualizationColor(ascending.indexOf(item)));
+    row.append(yearCell);
+    for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
+      const cell = document.createElement("td");
+      const point = item.points[monthIndex];
+      cell.textContent = point ? currency.format(point.value) : "\u2014";
+      if (point) {
+        const valueType = state.comparisonChartMode === "cumulative" ? "Cumulative" : "Monthly";
+        const datePreposition = state.comparisonChartMode === "cumulative" ? "through" : "for";
+        cell.title = `${valueType} ${metricLabel} ${datePreposition} ${monthLabel(`${item.year}-${point.month}`)}`;
+      }
+      row.append(cell);
+    }
+    const totalCell = document.createElement("td");
+    totalCell.className = "comparison-total-cell";
+    totalCell.textContent = currency.format(item.total);
+    row.append(totalCell);
+    const changeCell = document.createElement("td");
+    const prior = priorByYear.get(item.year);
+    if (!prior) {
+      changeCell.textContent = "\u2014";
+    } else {
+      const change = item.total - prior.total;
+      const percent = prior.total === 0 ? "" : ` (${Math.abs((change / prior.total) * 100).toFixed(1)}%)`;
+      changeCell.textContent = `${change > 0 ? "+" : ""}${currency.format(change)}${percent}`;
+      changeCell.classList.toggle("is-positive", state.comparisonMetric === "net" ? change > 0 : change < 0);
+      changeCell.classList.toggle("is-negative", state.comparisonMetric === "net" ? change < 0 : change > 0);
+    }
+    row.append(changeCell);
+    return row;
+  });
+  elements.comparisonTableBody.replaceChildren(...rows);
+}
+
+function renderYearComparison() {
+  renderComparisonYearPicker();
+  elements.comparisonMetricButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.comparisonMetric === state.comparisonMetric));
+  });
+  elements.comparisonChartModeButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.comparisonChartMode === state.comparisonChartMode));
+  });
+  elements.comparisonPeriodMode.value = state.comparisonPeriodMode;
+  const label = comparisonMetricLabel();
+  const valueType = state.comparisonChartMode === "cumulative" ? "Cumulative" : "Monthly";
+  elements.yearComparisonDescription.textContent = state.comparisonChartMode === "cumulative"
+    ? "Running totals make it easy to compare each year's financial pace month by month."
+    : "Monthly totals make seasonal changes and one-off spikes easy to compare across years.";
+  elements.comparisonChartTitle.textContent = `${valueType} ${label}`;
+  const selected = selectedComparisonYears();
+  const newestYear = selected.at(-1);
+  const cutoff = newestYear ? comparisonCutoffForYear(newestYear, newestYear) : 0;
+  const cutoffLabel = cutoff
+    ? shortMonthFormatter.format(parseLocalDate(`2000-${String(cutoff).padStart(2, "0")}-01`))
+    : "the latest imported month";
+  elements.comparisonChartSubtitle.textContent = state.comparisonPeriodMode === "comparable"
+    ? cutoff
+      ? `Every line is compared through ${cutoffLabel}, the latest month available in ${newestYear}.`
+      : "Import transactions from more than one year to build a comparison."
+    : "Each line continues through the latest month available in that year.";
+  elements.comparisonTableDescription.textContent = `${valueType} ${label} values and year-over-year changes use the same time span as the chart.`;
+  const series = comparisonSeries();
+  const latest = series.at(-1);
+  const prior = series.at(-2);
+  elements.comparisonPrimaryLabel.textContent = latest ? `${latest.year} ${label}` : "Latest period";
+  elements.comparisonPrimaryValue.textContent = latest ? currency.format(latest.total) : "\u2014";
+  elements.comparisonChangeLabel.textContent = prior
+    ? `Change from ${prior.year}`
+    : "Change from prior year";
+  elements.comparisonChangeValue.classList.remove("is-positive", "is-negative");
+  if (latest && prior) {
+    const change = latest.total - prior.total;
+    elements.comparisonChangeValue.textContent = `${change > 0 ? "+" : ""}${currency.format(change)}`;
+    elements.comparisonChangeValue.classList.toggle(
+      "is-positive", state.comparisonMetric === "net" ? change > 0 : change < 0,
+    );
+    elements.comparisonChangeValue.classList.toggle(
+      "is-negative", state.comparisonMetric === "net" ? change < 0 : change > 0,
+    );
+  } else {
+    elements.comparisonChangeValue.textContent = "\u2014";
+  }
+  elements.comparisonAverageLabel.textContent = latest
+    ? `${latest.year} monthly average`
+    : "Monthly average";
+  elements.comparisonAverageValue.textContent = latest && latest.cutoff
+    ? currency.format(latest.total / latest.cutoff)
+    : "\u2014";
+  renderComparisonChart(series);
+  renderComparisonTable(series);
+}
+
 function transactionRowOptions(transaction) {
   return {
     currency,
@@ -872,6 +1934,20 @@ function transactionRowOptions(transaction) {
     onEdit: () => openTransactionForm(transaction),
   };
 }
+
+const dashboardBulk = window.LedgerTransactionBulk.create({
+  container: elements.transactionList,
+  getTransactions: () => state.transactionDialogTransactions,
+  getAllTransactions: () => state.transactions,
+  getRevision: () => state.revision,
+  render: () => renderTransactionDialogTransactions(),
+  onSaved: (payload) => {
+    const context = state.transactionDialogContext;
+    elements.dialog.close();
+    applyPayload(payload);
+    reopenTransactionDialog(context);
+  },
+});
 
 function currentTransactionDialogFilters() {
   return {
@@ -1101,34 +2177,32 @@ function renderTransactionDialogTransactions() {
     )),
     transactionDialogSort.value(),
   );
+  const groupFiltered = dashboardBulk.filter(visibleTransactions);
   const total = state.transactionDialogTransactions.length;
-  const filtered = Object.values(filters).some(Boolean);
+  const filtered = Object.values(filters).some(Boolean) || groupFiltered.length !== total;
   elements.dialogSubtitle.textContent = filtered
-    ? `${visibleTransactions.length} of ${total} transactions`
+    ? `${groupFiltered.length} of ${total} transactions`
     : `${total} ${total === 1 ? "transaction" : "transactions"}`;
   renderActiveTransactionFilters();
   renderSubcategorySummary();
-  if (visibleTransactions.length === 0) {
+  dashboardBulk.render(visibleTransactions, transactionRowOptions);
+  if (groupFiltered.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
     empty.textContent = "No transactions match these filters.";
     elements.transactionList.replaceChildren(empty);
     return;
   }
-  transactionUi.renderTransactionList(
-    elements.transactionList,
-    visibleTransactions,
-    transactionRowOptions,
-  );
 }
 
 function openTransactionDialog(title, transactions, context, { preserveFilters = false } = {}) {
+  if (!preserveFilters) dashboardBulk.reset();
   const filters = preserveFilters
     ? state.transactionDialogFilters
     : { description: "", category: "", tag: "", accountName: "", provider: "", subcategory: "" };
   state.transactionDialogContext = context;
   state.transactionDialogTransactions = [...transactions].sort(compareLatestFirst);
-  elements.dialogEyebrow.textContent = selectedPeriodLabel();
+  elements.dialogEyebrow.textContent = context?.eyebrow || selectedPeriodLabel();
   elements.dialogTitle.textContent = title;
   elements.internalTransferInfo.hidden = context.type !== "excluded";
   configureTransactionFilters(state.transactionDialogTransactions, filters);
@@ -1143,13 +2217,23 @@ function reopenTransactionDialog(context) {
   if (context.type === "category" || context.type === "tag") {
     transactions = transactionsForSelectedPeriod().filter(
       (transaction) => {
-        if (context.type === "category") return transaction.category === context.key;
+        if (context.type === "category") {
+          return context.key === UNCATEGORIZED
+            ? !transaction.category
+            : transaction.category === context.key;
+        }
         const tags = transactionTags(transaction);
         return context.key === UNTAGGED ? tags.length === 0 : tags.includes(context.key);
       },
     );
+  } else if (context.type === "tag-query") {
+    transactions = matchingTagTransactions(
+      transactionsForSelectedPeriod().filter((transaction) => !isIncome(transaction)),
+    );
   } else if (context.type === "excluded") {
     transactions = excludedInternalTransfersForSelectedPeriod();
+  } else if (context.type === "comparison-month") {
+    transactions = comparisonTransactionsForMonth(context.year, context.month, context.metric);
   } else {
     transactions = transactionsForSelectedPeriod();
   }
@@ -1166,7 +2250,7 @@ function defaultNewTransactionDate() {
     today.getDate(),
   ).padStart(2, "0")}`;
   const periodMonth = selectedMonthKey();
-  if (state.viewMode === "annual") {
+  if (state.viewMode === "annual" || state.viewMode === "year-over-year") {
     return todayIso.startsWith(state.selectedYear) ? todayIso : `${state.selectedYear}-01-01`;
   }
   if (!periodMonth || todayIso.startsWith(periodMonth)) {
@@ -1190,6 +2274,7 @@ function setFormBusy(isBusy) {
   elements.form.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = isBusy;
   });
+  if (!isBusy) transactionUi.refreshTransactionTagPicker(elements.form);
   elements.saveTransactionButton.textContent = isBusy ? "Saving…" : "Save transaction";
 }
 
@@ -1206,6 +2291,10 @@ function openTransactionForm(transaction = null) {
   elements.formTitle.textContent = editing ? "Update transaction" : "Add transaction";
   elements.deleteTransactionButton.hidden = !editing;
 
+  transactionUi.configureTransactionTagPicker(
+    elements.form,
+    transactionUi.tagsFromTransactions(state.transactions),
+  );
   transactionUi.populateTransactionEditor(elements.form, transaction, {
     date: defaultNewTransactionDate(),
   });
@@ -1250,7 +2339,10 @@ async function mutationRequest(url, method, transaction = undefined) {
 function applyPayload(payload, preferredMonth = selectedMonthKey()) {
   state.transactions = payload.transactions;
   state.revision = payload.revision;
-  populatePeriodSelects(preferredMonth);
+  const stablePreferredMonth = state.viewMode === "year-over-year"
+    ? `${state.selectedYear}-${state.selectedMonth}`
+    : preferredMonth;
+  populatePeriodSelects(stablePreferredMonth);
   populateDatalists();
   renderDashboard();
 }
@@ -1305,40 +2397,60 @@ function renderDashboard() {
   const transactions = transactionsForSelectedPeriod();
   const excludedInternalTransfers = excludedInternalTransfersForSelectedPeriod();
   const annual = state.viewMode === "annual";
-  elements.monthControl.hidden = annual;
-  elements.monthlyBreakdownTabs.hidden = annual;
+  const comparison = state.viewMode === "year-over-year";
+  elements.monthControl.hidden = annual || comparison;
+  elements.comparisonStartYearControl.hidden = !comparison;
+  elements.yearControlLabel.textContent = comparison ? "End year" : "Year";
+  elements.monthlyBreakdownTabs.hidden = annual || comparison;
+  elements.categoriesSection.hidden = annual || comparison;
+  elements.summaryGrid.hidden = comparison;
   elements.breakdownDimensionButtons.forEach((button) => {
     button.setAttribute(
       "aria-pressed",
       String(button.dataset.breakdownDimension === state.breakdownDimension),
     );
   });
-  elements.categoriesHeading.textContent = `Spending by ${state.breakdownDimension}`;
   elements.annualBreakdownDescription.textContent = state.breakdownDimension === "category"
     ? "Expand a category to compare exact subcategory totals across months."
-    : "Compare exact tag totals across months. Transactions with multiple tags appear in each tag total.";
-  elements.overviewEyebrow.textContent = annual ? "Annual overview" : "Monthly overview";
+    : state.selectedTags.length > 0
+      ? `Unique monthly results for ${tagQueryLabel()}. Each matching transaction is counted once.`
+      : "Select tags to compare unique monthly totals without double-counting overlaps.";
+  elements.overviewEyebrow.textContent = comparison
+    ? "Year-over-year overview"
+    : annual ? "Annual overview" : "Monthly overview";
   elements.summaryGrid.setAttribute("aria-label", annual ? "Annual summary" : "Monthly summary");
   elements.incomeSummaryNote.textContent = annual ? "Income received this year" : "Income received this month";
   elements.periodDescription.textContent = state.selectedYear
-    ? annual
+    ? comparison
+      ? `Compare financial progress from ${state.comparisonStartYear} through ${state.selectedYear}.`
+      : annual
       ? `A full-year view of where your money went in ${state.selectedYear}.`
       : `A clear view of where your money went in ${monthLabel(selectedMonthKey())}.`
     : "No transaction data is available yet.";
-  renderSummary(transactions);
-  renderCategories(transactions);
+  if (!comparison) renderSummary(transactions);
+  if (!comparison) {
+    renderTagExplorer(transactions);
+  } else {
+    elements.tagExplorer.hidden = true;
+  }
+  if (!annual && !comparison) renderCategories(transactions);
   elements.annualInsights.hidden = !annual;
   if (annual) {
     renderAnnualCharts(transactions);
   }
+  elements.yearComparison.hidden = !comparison;
+  if (comparison) renderYearComparison();
   elements.viewAllButton.disabled = transactions.length === 0;
   const excludedLabel =
     `View ${excludedInternalTransfers.length} excluded internal transfer transactions`;
   elements.excludedButtonLabel.textContent = excludedLabel;
   elements.annualExcludedButtonLabel.textContent = excludedLabel;
-  elements.viewExcludedButton.hidden = annual || excludedInternalTransfers.length === 0;
+  elements.viewExcludedButton.hidden = annual || comparison || excludedInternalTransfers.length === 0;
   elements.viewAnnualExcludedButton.hidden = !annual;
   elements.viewAnnualExcludedButton.disabled = excludedInternalTransfers.length === 0;
+  elements.comparisonExcludedButtonLabel.textContent = excludedLabel;
+  elements.viewComparisonExcludedButton.hidden = !comparison;
+  elements.viewComparisonExcludedButton.disabled = excludedInternalTransfers.length === 0;
 }
 
 function setError(message, code = "") {
@@ -1378,6 +2490,7 @@ async function loadTransactions() {
       throw new Error(payload.error || `Request failed with status ${response.status}`);
     }
     applyPayload(payload);
+    loadTaxonomySuggestions();
   } catch (error) {
     setError(error instanceof Error ? error.message : "The transaction data could not be loaded.");
   }
@@ -1401,6 +2514,29 @@ elements.breakdownDimensionButtons.forEach((button) => {
 });
 elements.yearSelect.addEventListener("change", (event) => {
   state.selectedYear = event.target.value;
+  if (state.comparisonStartYear > state.selectedYear) {
+    state.comparisonStartYear = state.selectedYear;
+    elements.comparisonStartYear.value = state.comparisonStartYear;
+  }
+  const validYears = [...elements.comparisonStartYear.options]
+    .map((option) => option.value)
+    .filter((year) => year >= state.comparisonStartYear && year <= state.selectedYear);
+  state.selectedComparisonYears = state.selectedComparisonYears.filter((year) => validYears.includes(year));
+  if (state.selectedComparisonYears.length === 0) state.selectedComparisonYears = validYears.slice(-3);
+  saveDashboardView();
+  renderDashboard();
+});
+elements.comparisonStartYear.addEventListener("change", (event) => {
+  state.comparisonStartYear = event.target.value;
+  if (state.comparisonStartYear > state.selectedYear) {
+    state.selectedYear = state.comparisonStartYear;
+    elements.yearSelect.value = state.selectedYear;
+  }
+  const validYears = [...elements.comparisonStartYear.options]
+    .map((option) => option.value)
+    .filter((year) => year >= state.comparisonStartYear && year <= state.selectedYear);
+  state.selectedComparisonYears = state.selectedComparisonYears.filter((year) => validYears.includes(year));
+  if (state.selectedComparisonYears.length === 0) state.selectedComparisonYears = validYears.slice(-3);
   saveDashboardView();
   renderDashboard();
 });
@@ -1411,6 +2547,36 @@ elements.monthSelect.addEventListener("change", (event) => {
 });
 elements.clearCategoryFilter.addEventListener("click", () => {
   clearAnnualSpendingFilter();
+});
+elements.tagSearch.addEventListener("input", () => {
+  renderTagExplorer(transactionsForSelectedPeriod());
+});
+elements.tagMatchModeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.tagMatchMode;
+    if (!["any", "all"].includes(mode) || button.disabled || mode === state.tagMatchMode) return;
+    state.tagMatchMode = mode;
+    saveDashboardView();
+    renderDashboard();
+  });
+});
+elements.clearTagSelection.addEventListener("click", () => {
+  state.selectedTags = [];
+  saveDashboardView();
+  renderDashboard();
+});
+elements.viewTagQueryTransactions.addEventListener("click", () => {
+  if (state.selectedTags.length === 0) return;
+  const transactions = matchingTagTransactions(
+    transactionsForSelectedPeriod().filter((transaction) => !isIncome(transaction)),
+  );
+  const title = tagQueryLabel();
+  openTransactionDialog(title, transactions, {
+    type: "tag-query",
+    title,
+    selectedTags: [...state.selectedTags],
+    tagMatchMode: state.tagMatchMode,
+  });
 });
 elements.addTransactionButton.addEventListener("click", () => openTransactionForm());
 elements.viewAllButton.addEventListener("click", () => {
@@ -1428,6 +2594,30 @@ function openExcludedInternalTransfers() {
 
 elements.viewExcludedButton.addEventListener("click", openExcludedInternalTransfers);
 elements.viewAnnualExcludedButton.addEventListener("click", openExcludedInternalTransfers);
+elements.viewComparisonExcludedButton.addEventListener("click", openExcludedInternalTransfers);
+elements.comparisonMetricButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const metric = button.dataset.comparisonMetric;
+    if (!["spending", "income", "net"].includes(metric) || metric === state.comparisonMetric) return;
+    state.comparisonMetric = metric;
+    saveDashboardView();
+    renderYearComparison();
+  });
+});
+elements.comparisonChartModeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.comparisonChartMode;
+    if (!["cumulative", "monthly"].includes(mode) || mode === state.comparisonChartMode) return;
+    state.comparisonChartMode = mode;
+    saveDashboardView();
+    renderYearComparison();
+  });
+});
+elements.comparisonPeriodMode.addEventListener("change", (event) => {
+  state.comparisonPeriodMode = event.target.value;
+  saveDashboardView();
+  renderYearComparison();
+});
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
 elements.transactionFilterButton.addEventListener("click", () => {
@@ -1504,6 +2694,7 @@ elements.formDialog.addEventListener("click", (event) => {
   }
 });
 elements.retryButton.addEventListener("click", loadTransactions);
+window.addEventListener("ledger-number-abbreviation-change", renderDashboard);
 
 
 restoreDashboardView();
