@@ -3,12 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
     <meta name="description" content="Create reusable rules that classify and update Ledger transactions." />
     <title>Classifications — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260903-classification-files" />
+    <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/settings.js?v=20260903-classification-files" defer></script>
+    <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260906-1" defer></script>
+    <script src="/settings.js?v=20260905-taxonomy-delete-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -24,6 +27,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import">Import data</a>
           <a href="/classifications" aria-current="page">Classifications</a>
           <a href="/settings">Settings</a>
@@ -216,6 +220,12 @@
         <div class="transaction-active-filters" id="unclassified-active-filters" hidden>
           <div class="transaction-filter-chips" id="unclassified-filter-chips"></div>
           <button class="text-button" id="clear-unclassified-filters" type="button">Clear all</button>
+        </div>
+        <div class="import-review-filters unclassified-review-filters" role="group"
+          aria-label="Visible unclassified transaction types">
+          <span>Show</span>
+          <button class="import-review-filter" id="unclassified-internal-transfer-filter" type="button"
+            aria-pressed="false">Internal transfer</button>
         </div>
         <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
         <div class="transaction-list" id="unclassified-list"></div>

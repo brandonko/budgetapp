@@ -3,13 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
     <meta name="description" content="Configure Ledger preferences." />
     <title>Settings — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260903-classification-help" />
+    <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/preferences.js?v=20260905-number-abbreviations" defer></script>
-    <script src="/settings.js?v=20260903-classification-help" defer></script>
+    <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260906-1" defer></script>
+    <script src="/settings.js?v=20260905-taxonomy-delete-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -25,6 +27,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import">Import data</a>
           <a href="/classifications">Classifications</a>
           <a href="/settings" aria-current="page">Settings</a>
@@ -40,31 +43,49 @@
       </section>
 
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-        <button class="settings-tab" id="backup-settings-tab" role="tab" type="button"
-          aria-selected="true" aria-controls="backup-settings-panel">Backup</button>
+        <button class="settings-tab" id="exports-settings-tab" role="tab" type="button"
+          aria-selected="true" aria-controls="exports-settings-panel">Exports</button>
         <button class="settings-tab" id="import-history-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="import-history-settings-panel" tabindex="-1">Imports</button>
+        <button class="settings-tab" id="taxonomy-settings-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="taxonomy-settings-panel" tabindex="-1">Taxonomy</button>
         <button class="settings-tab" id="preferences-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="preferences-settings-panel" tabindex="-1">Preferences</button>
       </div>
 
-      <section class="settings-panel" id="backup-settings-panel" role="tabpanel"
-        aria-labelledby="backup-settings-tab">
-        <article class="settings-card backup-settings-card">
+      <section class="settings-panel" id="exports-settings-panel" role="tabpanel"
+        aria-labelledby="exports-settings-tab">
+        <article class="settings-card export-settings-card">
           <div class="settings-card-heading">
             <div>
-              <p class="eyebrow">Transaction database</p>
-              <h2>Backups</h2>
-              <p>Create a snapshot of your current transaction file or restore an earlier version.</p>
+              <p class="eyebrow">Portable transaction data</p>
+              <h2>Export transactions</h2>
+              <p>Download transactions from a selected date range as a Ledger-compatible CSV.</p>
             </div>
-            <button class="primary-button" id="create-backup-button" type="button">Create backup</button>
           </div>
-          <p class="settings-status" id="backup-status" role="status" hidden></p>
-          <div class="backup-list-heading">
-            <h3>Available backups</h3>
-            <button class="text-button" id="refresh-backups-button" type="button">Refresh</button>
-          </div>
-          <div class="backup-list" id="backup-list" aria-live="polite"></div>
+          <form class="export-settings-form" id="transaction-export-form">
+            <div class="date-range-fields">
+              <label>
+                <span>Start date</span>
+                <input id="export-start-date" name="startDate" type="date" required />
+              </label>
+              <label>
+                <span>End date</span>
+                <input id="export-end-date" name="endDate" type="date" required />
+              </label>
+            </div>
+            <div class="export-settings-actions">
+              <p id="export-transaction-summary" aria-live="polite">Loading transactions&hellip;</p>
+              <button class="primary-button" id="export-transactions-button" type="submit" disabled>
+                Export CSV
+              </button>
+            </div>
+          </form>
+          <p class="settings-status" id="export-status" role="status" hidden></p>
+          <p class="export-settings-note">
+            Exports omit the system-managed import timestamp, so they can be reviewed and imported again
+            through the CSV importer.
+          </p>
         </article>
       </section>
 
@@ -84,6 +105,38 @@
             <h3>Completed imports</h3>
           </div>
           <div class="backup-list" id="import-history-list" aria-live="polite"></div>
+          <nav class="classification-pagination" id="import-history-pagination"
+            aria-label="Import history pages" hidden>
+            <button class="secondary-button" id="previous-import-history-page" type="button">Previous</button>
+            <span id="import-history-page-indicator" aria-live="polite">Page 1 of 1</span>
+            <button class="secondary-button" id="next-import-history-page" type="button">Next</button>
+          </nav>
+        </article>
+      </section>
+
+      <section class="settings-panel" id="taxonomy-settings-panel" role="tabpanel"
+        aria-labelledby="taxonomy-settings-tab" hidden>
+        <article class="settings-card taxonomy-settings-card">
+          <div class="settings-card-heading taxonomy-heading">
+            <div>
+              <p class="eyebrow">Category structure</p>
+              <h2>Taxonomy</h2>
+              <p>See the categories currently used by your transactions and maintain values for future entries.</p>
+            </div>
+          </div>
+          <p class="settings-status" id="taxonomy-status" role="status" hidden></p>
+          <div class="taxonomy-toolbar">
+            <label class="taxonomy-search">
+              <span class="sr-only">Search taxonomy</span>
+              <input id="taxonomy-search" type="search" placeholder="Search categories or subcategories" autocomplete="off" />
+            </label>
+            <div class="taxonomy-toolbar-actions">
+              <button class="taxonomy-filter-toggle" id="taxonomy-subcategory-filter" type="button"
+                aria-pressed="true">Hide empty categories</button>
+              <p id="taxonomy-summary" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="taxonomy-tree" id="taxonomy-tree" aria-live="polite"></div>
         </article>
       </section>
 
@@ -92,10 +145,23 @@
         <article class="settings-card" aria-labelledby="preferences-settings-title">
           <div class="settings-card-heading">
             <div>
-              <p class="eyebrow">Display</p>
+              <p class="eyebrow">Your experience</p>
               <h2 id="preferences-settings-title">Preferences</h2>
-              <p>Choose how Ledger displays values in this browser.</p>
+              <p>Choose how Ledger looks and displays values in this browser.</p>
             </div>
+          </div>
+          <div class="settings-preference-row">
+            <div>
+              <strong>Dark mode</strong>
+              <p>Use a low-glare dark palette across the dashboard, imports, classifications, and settings.</p>
+            </div>
+            <label class="theme-switch" for="dark-mode-toggle">
+              <span class="sr-only">Dark mode</span>
+              <input id="dark-mode-toggle" type="checkbox" role="switch" />
+              <span class="theme-switch-track" aria-hidden="true">
+                <span class="theme-switch-thumb"></span>
+              </span>
+            </label>
           </div>
           <div class="settings-preference-row settings-preference-row--stacked">
             <div>
@@ -136,8 +202,49 @@
             </svg>
           </button>
         </header>
-        <div class="transaction-sort-bar">
+        <div class="transaction-toolbar">
+          <label class="transaction-search-field">
+            <span>Description</span>
+            <input id="import-history-search" type="search" autocomplete="off"
+              placeholder="Search descriptions" />
+          </label>
+          <div class="transaction-filter-menu">
+            <button class="transaction-filter-button" id="import-history-filter-button" type="button"
+              aria-expanded="false" aria-haspopup="true" aria-controls="import-history-filter-popover">
+              Filters <span id="import-history-filter-count" hidden></span>
+            </button>
+            <div class="transaction-filter-popover" id="import-history-filter-popover"
+              role="group" aria-label="Imported transaction filters" hidden>
+              <div class="transaction-filter-popover-heading">
+                <strong>Filter transactions</strong>
+                <span>Choose one or more filters.</span>
+              </div>
+              <fieldset>
+                <legend>Classification</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Category</span><select id="import-history-category-filter"><option value="">All categories</option></select></label>
+                  <label><span>Subcategory</span><select id="import-history-subcategory-filter"><option value="">All subcategories</option></select></label>
+                </div>
+                <label class="transaction-filter-wide"><span>Tag</span><select id="import-history-tag-filter"><option value="">All tags</option></select></label>
+              </fieldset>
+              <fieldset>
+                <legend>Account</legend>
+                <div class="transaction-filter-pair">
+                  <label><span>Account name</span><select id="import-history-account-filter"><option value="">All accounts</option></select></label>
+                  <label><span>Provider</span><select id="import-history-provider-filter"><option value="">All providers</option></select></label>
+                </div>
+              </fieldset>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-import-history-filters" type="button">Reset</button>
+                <button class="primary-button" id="apply-import-history-filters" type="button">Apply</button>
+              </div>
+            </div>
+          </div>
           <div id="import-history-sort"></div>
+        </div>
+        <div class="transaction-active-filters" id="import-history-active-filters" hidden>
+          <div class="transaction-filter-chips" id="import-history-filter-chips"></div>
+          <button class="text-button" id="clear-import-history-filters" type="button">Clear all</button>
         </div>
         <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
           role="alert" hidden></p>
@@ -180,7 +287,7 @@
             </label>
             <label class="form-field">
               <span>Category</span>
-              <input name="category" type="text" autocomplete="off" required />
+              <input name="category" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Subcategory</span>
@@ -188,21 +295,34 @@
             </label>
             <label class="form-field">
               <span>Account name</span>
-              <input name="accountName" type="text" autocomplete="off" required />
+              <input name="accountName" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Account type</span>
-              <input name="accountType" type="text" autocomplete="off" required />
+              <input name="accountType" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Provider</span>
-              <input name="provider" type="text" autocomplete="off" required />
+              <input name="provider" type="text" autocomplete="off" />
             </label>
-            <label class="form-field form-field--wide">
-              <span>Tags</span>
-              <input name="tags" type="text" autocomplete="off" />
-              <small>Separate multiple tags with commas.</small>
-            </label>
+            <div class="form-field">
+              <span>Group</span>
+              <input type="hidden" name="group" />
+              <div data-transaction-group-picker></div>
+            </div>
+            <fieldset class="form-field form-field--wide transaction-tag-field" data-transaction-tag-picker>
+              <legend>Tags</legend>
+              <input name="tags" type="hidden" />
+              <div class="transaction-tag-controls" data-tag-controls>
+                <span class="transaction-tag-empty" data-tag-empty>No existing tags yet.</span>
+                <span class="transaction-tag-create">
+                  <input type="text" data-new-tag-input maxlength="100" placeholder="New tag"
+                    aria-label="New tag name" autocomplete="off" />
+                  <button type="button" data-new-tag-button aria-label="Add new tag" disabled>+</button>
+                </span>
+              </div>
+              <small>Select existing tags or create a new one. Selected tags are highlighted.</small>
+            </fieldset>
             <label class="form-field form-field--wide">
               <span>Notes</span>
               <textarea name="notes" rows="4"></textarea>

@@ -3,12 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Import Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card data into Ledger." />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <meta name="description" content="Import CSV, Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card data into Ledger." />
     <title>Import data — Ledger</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/upload.js" defer></script>
+    <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260906-1" defer></script>
+    <script src="/upload.js?v=20260904-csv-rules" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -24,6 +27,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import" aria-current="page">Import data</a>
           <a href="/classifications">Classifications</a>
           <a href="/settings">Settings</a>
@@ -60,6 +64,11 @@
               from the same day are still preserved when they represent separate occurrences.
             </p>
             <p>
+              The CSV tab accepts Ledger-shaped transaction files without a <code>createdAt</code>
+              column. Date, description, and amount are required per row; other fields may be blank.
+              Valid rows continue to review even when other rows are invalid.
+            </p>
+            <p>
               Transactions that match no saved classification rule are highlighted with a
               <strong>No rule matched</strong> badge. Review them manually or use them to identify
               a classification rule you may want to add.
@@ -68,7 +77,8 @@
               Credit Karma and Apple Card retain their source categories. Amazon, AliExpress, and
               eBay start as Shopping, while Venmo starts as Venmo. Saved classification rules can
               then assign a matching category and subcategory; otherwise, the initial category is
-              kept and the subcategory remains blank.
+              kept and the subcategory remains blank. Generic CSV imports retain the values supplied
+              in each row, including intentionally blank optional fields, before rules are applied.
             </p>
           </section>
           <section>
@@ -135,6 +145,10 @@
         <button id="applecard-import-tab" role="tab" type="button"
           aria-selected="false" aria-controls="applecard-import-panel" tabindex="-1">
           Apple Card
+        </button>
+        <button id="csv-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="csv-import-panel" tabindex="-1">
+          CSV
         </button>
       </div>
 
@@ -477,6 +491,42 @@
             <p class="upload-error amazon-direct-error" id="ebay-error" role="alert" hidden></p>
           </div>
         </section>
+
+        <section class="amazon-direct" id="csv-import-panel" role="tabpanel"
+          aria-labelledby="csv-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Ledger CSV</h2>
+            <p>
+              Imports transactions from Ledger's CSV format. Every valid row is staged for review,
+              and invalid rows are counted without preventing other rows from being imported.
+            </p>
+            <p class="csv-import-schema">
+              Use this header, without <code>createdAt</code>:<br />
+              <code>date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags</code>
+            </p>
+            <p>Older Ledger CSV exports without the group column are also supported.</p>
+            <p>Every row requires a date, description, and amount. All other values may be blank.</p>
+          </div>
+          <div class="amazon-direct-controls">
+            <label class="apple-card-file-field">
+              <span>Transaction CSV</span>
+              <input id="csv-import-file" type="file" accept=".csv,text/csv" required />
+            </label>
+            <label class="csv-classification-option">
+              <input id="csv-apply-classifications" type="checkbox" checked />
+              <span>
+                <strong>Apply classification rules</strong>
+                <small>Turn this off to keep category, subcategory, and other supplied CSV values unchanged.</small>
+              </span>
+            </label>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="csv-import-button" type="button" disabled>
+                Import selected CSV <span aria-hidden="true">&rarr;</span>
+              </button>
+            </div>
+            <p class="upload-error amazon-direct-error" id="csv-import-error" role="alert" hidden></p>
+          </div>
+        </section>
       </div>
     </main>
 
@@ -547,6 +597,7 @@
           <button class="import-review-filter" type="button" data-review-filter="new"
             aria-pressed="true">New</button>
         </div>
+        <aside class="import-invalid-note" id="import-review-invalid-note" hidden></aside>
         <p class="upload-error import-review-error" id="import-review-error" hidden></p>
         <div class="transaction-list" id="import-review-list"></div>
         <footer class="import-review-actions">
@@ -594,7 +645,7 @@
             </label>
             <label class="form-field">
               <span>Category</span>
-              <input name="category" type="text" autocomplete="off" required />
+              <input name="category" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Subcategory</span>
@@ -602,21 +653,34 @@
             </label>
             <label class="form-field">
               <span>Account name</span>
-              <input name="accountName" type="text" autocomplete="off" required />
+              <input name="accountName" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Account type</span>
-              <input name="accountType" type="text" autocomplete="off" required />
+              <input name="accountType" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Provider</span>
-              <input name="provider" type="text" autocomplete="off" required />
+              <input name="provider" type="text" autocomplete="off" />
             </label>
-            <label class="form-field form-field--wide">
-              <span>Tags</span>
-              <input name="tags" type="text" autocomplete="off" />
-              <small>Separate multiple tags with commas.</small>
-            </label>
+            <div class="form-field">
+              <span>Group</span>
+              <input type="hidden" name="group" />
+              <div data-transaction-group-picker></div>
+            </div>
+            <fieldset class="form-field form-field--wide transaction-tag-field" data-transaction-tag-picker>
+              <legend>Tags</legend>
+              <input name="tags" type="hidden" />
+              <div class="transaction-tag-controls" data-tag-controls>
+                <span class="transaction-tag-empty" data-tag-empty>No existing tags yet.</span>
+                <span class="transaction-tag-create">
+                  <input type="text" data-new-tag-input maxlength="100" placeholder="New tag"
+                    aria-label="New tag name" autocomplete="off" />
+                  <button type="button" data-new-tag-button aria-label="Add new tag" disabled>+</button>
+                </span>
+              </div>
+              <small>Select existing tags or create a new one. Selected tags are highlighted.</small>
+            </fieldset>
             <label class="form-field form-field--wide">
               <span>Notes</span>
               <textarea name="notes" rows="4"

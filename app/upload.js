@@ -25,6 +25,7 @@ const state = {
   appleCardSessionToken: "",
   appleCardPollTimer: null,
   appleCardStartedAt: 0,
+  csvImportBusy: false,
   revision: "",
   importedTransactions: [],
   reviewSession: null,
@@ -39,9 +40,11 @@ const state = {
   },
   editingImportedIndex: null,
   editBusy: false,
+  availableTransactionTags: [],
+  availableTransactions: [],
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", applecard: "Apple Card" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", applecard: "Apple Card", csv: "CSV" };
 const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
 const MIN_VENMO_EXTENSION_VERSION = "0.5.0";
 const MIN_APPLE_CARD_EXTENSION_VERSION = "0.6.2";
@@ -126,12 +129,17 @@ const elements = {
   appleCardProgressBar: document.querySelector("#applecard-progress-bar"),
   appleCardProgressMessage: document.querySelector("#applecard-progress-message"),
   appleCardError: document.querySelector("#applecard-error"),
+  csvImportFile: document.querySelector("#csv-import-file"),
+  csvApplyClassifications: document.querySelector("#csv-apply-classifications"),
+  csvImportButton: document.querySelector("#csv-import-button"),
+  csvImportError: document.querySelector("#csv-import-error"),
   importerTabs: [...document.querySelectorAll('[role="tab"][aria-controls]')],
   reviewDialog: document.querySelector("#import-review-dialog"),
   reviewEyebrow: document.querySelector("#import-review-eyebrow"),
   reviewTitle: document.querySelector("#import-review-title"),
   reviewSubtitle: document.querySelector("#import-review-subtitle"),
   reviewError: document.querySelector("#import-review-error"),
+  reviewInvalidNote: document.querySelector("#import-review-invalid-note"),
   reviewList: document.querySelector("#import-review-list"),
   reviewSort: document.querySelector("#import-review-sort"),
   reviewSearch: document.querySelector("#import-review-search"),
@@ -1263,6 +1271,55 @@ async function importAppleCardFile() {
   }
 }
 
+function updateCsvImportButton() {
+  elements.csvImportButton.disabled =
+    state.csvImportBusy || !elements.csvImportFile.files?.length;
+}
+
+function showCsvImportError(message) {
+  elements.csvImportError.textContent = message;
+  elements.csvImportError.hidden = false;
+}
+
+async function importLedgerCsv() {
+  if (state.csvImportBusy) return;
+  elements.csvImportError.hidden = true;
+  elements.csvImportError.textContent = "";
+  const file = elements.csvImportFile.files?.[0];
+  if (!file) return showCsvImportError("Choose a Ledger transaction CSV.");
+  if (!file.name.toLocaleLowerCase().endsWith(".csv")) {
+    return showCsvImportError("Ledger transaction imports must use a CSV file.");
+  }
+  if (file.size > 40_000_000) return showCsvImportError("The transaction CSV cannot exceed 40 MB.");
+
+  state.csvImportBusy = true;
+  updateCsvImportButton();
+  elements.csvImportButton.textContent = "Validating CSV…";
+  try {
+    const content = await file.text();
+    if (!content.trim()) throw new Error("The selected CSV is empty.");
+    const response = await fetch("/api/csv-import-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content,
+        applyClassifications: elements.csvApplyClassifications.checked,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `CSV import failed (${response.status}).`);
+    }
+    renderResult(payload.import, "csv", payload.token);
+  } catch (error) {
+    showCsvImportError(error instanceof Error ? error.message : "Could not import the transaction CSV.");
+  } finally {
+    state.csvImportBusy = false;
+    elements.csvImportButton.innerHTML = 'Import selected CSV <span aria-hidden="true">&rarr;</span>';
+    updateCsvImportButton();
+  }
+}
+
 function importedTransactionRowOptions(transaction, index) {
   const selection = document.createElement("label");
   selection.className = "import-selection";
@@ -1288,10 +1345,41 @@ function importedTransactionRowOptions(transaction, index) {
   };
 }
 
+const importBulk = window.LedgerTransactionBulk.create({
+  container: elements.reviewList, staged: true, importSelection: true,
+  getTransactions: () => state.importedTransactions,
+  getAllTransactions: () => [...state.availableTransactions, ...state.importedTransactions],
+  getKey: (row) => row._stagedId,
+  getRevision: () => state.reviewSession?.token,
+  render: () => renderImportedTransactions(),
+  onModeChange: () => updateReviewSelection(),
+  onStage: async (ids, proposed) => {
+    const replacements = new Map(proposed.map((row) => [row._stagedId, row]));
+    const updated = state.importedTransactions.map((row) => replacements.get(row._stagedId) || row);
+    await refreshEditedImport(updated);
+    // Import inclusion and duplicate markers are not bulk-edit selections.
+    configureReviewFieldFilters(state.reviewFieldFilters);
+  },
+});
+
+async function refreshEditedImport(transactions) {
+  const response = await fetch("/api/transactions/staged-preview", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ revision: state.revision, transactions }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Could not validate the edited import.");
+  const checked = new Map(payload.transactions.map((row) => [row._stagedId, row]));
+  state.importedTransactions = transactions.map((row) => ({ ...row, ...checked.get(row._stagedId), _selected: row._selected }));
+  const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
+  const transfers = state.importedTransactions.filter((row) => !row._isDuplicate && transactionUi.isInternalTransfer(row)).length;
+  elements.reviewSubtitle.textContent = `${transactions.length} parsed · ${payload.new} new (${unmatched} no rule matched, ${transfers} internal transfers) · ${payload.duplicates} duplicates`;
+}
+
 function updateReviewSelection() {
   const selected = state.importedTransactions.filter((transaction) => transaction._selected).length;
   elements.confirmReview.textContent = `Import selected (${selected})`;
-  elements.confirmReview.disabled = state.reviewCommitted || selected === 0;
+  elements.confirmReview.disabled = state.reviewCommitted || selected === 0 || importBulk.isActive();
 }
 
 function importReviewType(transaction) {
@@ -1320,9 +1408,10 @@ function renderImportedTransactions() {
   updateReviewSelection();
   updateImportReviewFilters();
   if (count === 0) {
+    importBulk.render([], importedTransactionRowOptions);
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
-    empty.textContent = "No transactions were found in the selected date range.";
+    empty.textContent = "No valid transactions were found in this import.";
     elements.reviewList.replaceChildren(empty);
     return;
   }
@@ -1333,6 +1422,7 @@ function renderImportedTransactions() {
       && importedTransactionMatchesFieldFilters(state.importedTransactions[index])
     ));
   if (visibleIndexes.length === 0) {
+    importBulk.render([], importedTransactionRowOptions);
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
     empty.textContent = "No transactions match the enabled filters.";
@@ -1343,8 +1433,7 @@ function renderImportedTransactions() {
     visibleIndexes.map((index) => state.importedTransactions[index]),
     importReviewSort.value(),
   );
-  transactionUi.renderTransactionList(
-    elements.reviewList,
+  importBulk.render(
     visibleTransactions,
     (transaction) => importedTransactionRowOptions(
       transaction,
@@ -1372,6 +1461,7 @@ function setEditBusy(busy) {
   elements.editForm.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = busy;
   });
+  if (!busy) transactionUi.refreshTransactionTagPicker(elements.editForm);
   elements.saveEdit.textContent = busy ? "Saving…" : "Save transaction";
 }
 
@@ -1380,6 +1470,12 @@ function openImportedTransactionEditor(index) {
   if (!transaction) return;
   state.editingImportedIndex = index;
   clearEditError();
+  transactionUi.configureTransactionTagPicker(
+    elements.editForm,
+    transactionUi.tagsFromTransactions(state.importedTransactions).concat(
+      state.availableTransactionTags,
+    ),
+  );
   transactionUi.populateTransactionEditor(elements.editForm, transaction);
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   elements.editDialog.showModal();
@@ -1406,19 +1502,27 @@ async function saveImportedTransaction(event) {
   if (!current) return;
   const transaction = transactionFromEditForm();
   clearEditError();
-  state.importedTransactions[index] = {
+  const updated = [...state.importedTransactions];
+  updated[index] = {
     ...current,
     ...transaction,
     amount: Number(transaction.amount),
     _selected: true,
   };
-  configureReviewFieldFilters(state.reviewFieldFilters);
-  renderImportedTransactions();
-  elements.editDialog.close();
-  elements.reviewDialog.showModal();
+  setEditBusy(true);
+  try {
+    await refreshEditedImport(updated);
+    configureReviewFieldFilters(state.reviewFieldFilters);
+    renderImportedTransactions();
+    elements.editDialog.close();
+    elements.reviewDialog.showModal();
+  } catch (error) {
+    showEditError(error.message || "Could not validate the edited transaction.");
+  } finally { setEditBusy(false); }
 }
 
 function renderResult(result, source, token) {
+  importBulk.reset();
   if (
     !result ||
     !Number.isInteger(result.parsed) ||
@@ -1438,10 +1542,19 @@ function renderResult(result, source, token) {
   const internalTransfers = result.transactions.filter(
     (transaction) => !transaction._isDuplicate && transactionUi.isInternalTransfer(transaction),
   ).length;
-  elements.reviewSubtitle.textContent =
-    `${result.parsed} parsed · ${result.new} new (` +
-    `${unmatched} no rule matched, ${internalTransfers} internal transfers) · ` +
-    `${result.duplicates} duplicates`;
+  const invalid = Number.isInteger(result.invalid) ? result.invalid : 0;
+  elements.reviewSubtitle.textContent = source === "csv"
+    ? `${result.rowCount ?? result.parsed + invalid} rows · ${result.parsed} valid (` +
+      `${result.new} new, ${result.duplicates} duplicates) · ${invalid} invalid · ` +
+      `${unmatched} no rule matched · ${internalTransfers} internal transfers`
+    : `${result.parsed} parsed · ${result.new} new (` +
+      `${unmatched} no rule matched, ${internalTransfers} internal transfers) · ` +
+      `${result.duplicates} duplicates`;
+  elements.reviewInvalidNote.hidden = invalid === 0;
+  elements.reviewInvalidNote.textContent = invalid === 0
+    ? ""
+    : `${invalid} invalid CSV ${invalid === 1 ? "row was" : "rows were"} skipped. ` +
+      "Every row needs a valid date, description, and amount.";
   elements.reviewError.hidden = true;
   elements.reviewError.textContent = "";
   state.revision = result.revision;
@@ -1476,6 +1589,7 @@ function reviewSessionUrl(action) {
 }
 
 function clearReviewState() {
+  importBulk.reset();
   state.reviewSession = null;
   state.reviewCommitted = false;
   state.importedTransactions = [];
@@ -1483,6 +1597,20 @@ function clearReviewState() {
   state.reviewFieldFilters = {
     description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
+  elements.reviewInvalidNote.hidden = true;
+  elements.reviewInvalidNote.textContent = "";
+}
+
+async function loadAvailableTransactionTags() {
+  try {
+    const response = await fetch("/api/transactions", { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    state.availableTransactions = payload.transactions;
+  } catch {
+    // A missing or temporarily unavailable database simply means there are no existing tags yet.
+  }
 }
 
 async function cancelImportReview() {
@@ -1561,6 +1689,8 @@ elements.appleCardImportButton.addEventListener("click", startAppleCardImport);
 elements.appleCardCancelButton.addEventListener("click", cancelAppleCardImport);
 elements.appleCardFileImportButton.addEventListener("click", importAppleCardFile);
 elements.appleCardFile.addEventListener("change", updateAppleCardFileButton);
+elements.csvImportFile.addEventListener("change", updateCsvImportButton);
+elements.csvImportButton.addEventListener("click", importLedgerCsv);
 elements.closeReview.addEventListener("click", cancelImportReview);
 elements.cancelReview.addEventListener("click", cancelImportReview);
 elements.confirmReview.addEventListener("click", confirmImportReview);
@@ -1734,6 +1864,7 @@ window.addEventListener("message", (event) => {
 
 initializeImporterTabs();
 initializeDirectImportDates();
+loadAvailableTransactionTags();
 setExtensionReady(false);
 for (const delay of [0, 400, 1200]) {
   window.setTimeout(
