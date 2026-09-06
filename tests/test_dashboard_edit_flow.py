@@ -156,6 +156,10 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('return "m";', preferences)
         self.assertIn("globalObject.LedgerPreferences", preferences)
         self.assertIn('new globalObject.CustomEvent("ledger-number-abbreviation-change"', preferences)
+        self.assertLess(
+            preferences.index("numberAbbreviation = normalized;"),
+            preferences.index("globalObject.dispatchEvent"),
+        )
         self.assertIn("function formatSummaryAmount(amount)", javascript)
         self.assertIn('if (preference === "none") return currency.format(amount);', javascript)
         self.assertIn("if (absoluteAmount >= 1e15) return scientificCurrency.format(amount);", javascript)
