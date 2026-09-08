@@ -9,10 +9,12 @@
   <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
   <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
   <link rel="stylesheet" href="/transactions.css?v=20260905-1" />
+  <link rel="stylesheet" href="/saved-views.css" />
   <script src="/navigation.js" defer></script>
   <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
   <script src="/transaction-bulk.js?v=20260906-1" defer></script>
   <script src="/transactions-model.js?v=20260905-1" defer></script>
+  <script src="/saved-views.js" defer></script>
   <script src="/transactions.js?v=20260905-1" defer></script>
 </head>
 <body>
@@ -38,6 +40,7 @@
       <button class="secondary-button" id="refresh-transactions" type="button">Refresh</button>
     </header>
     <p id="page-status" class="settings-status" role="status" hidden></p>
+    <section id="saved-views" class="saved-views" aria-label="Saved transaction views"></section>
     <section class="transactions-query" aria-label="Search all transactions">
       <div class="transaction-toolbar">
         <label class="transaction-search-field"><span>Description</span>

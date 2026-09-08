@@ -39,7 +39,7 @@
     if (filters.tags.includes(UNTAGGED)) filters.tagMode = "any";
   }
   byId("alltime-search").value = filters.description;
-  const sortControl = transactionUi.createTransactionSortControls(byId("alltime-sort"), {
+  let sortControl = transactionUi.createTransactionSortControls(byId("alltime-sort"), {
     initial: saved.sort || {}, onChange: () => updateResults(),
   });
   transactionUi.configureTransactionTagPicker(editor, []);
@@ -432,6 +432,21 @@
   byId("delete-transaction-button").addEventListener("click", () => {
     if (!state.editing || state.busy) return;
     if (window.confirm(`Permanently delete “${state.editing.description}” for ${currency.format(state.editing.amount)}?\n\nThis removes the transaction from the master CSV.`)) void mutate("DELETE");
+  });
+  window.LedgerSavedViews?.mount({
+    container: byId("saved-views"),
+    getView: () => ({ filters, sort: sortControl.value() }),
+    applyView: (view) => {
+      if (dialog.open || state.busy) throw new Error("Close the transaction editor before changing views.");
+      filters = { ...defaults(), ...view.filters };
+      byId("alltime-search").value = filters.description;
+      sortControl = transactionUi.createTransactionSortControls(byId("alltime-sort"), {
+        initial: view.sort, onChange: () => updateResults(),
+      });
+      populateFilterForm();
+      closeFilters();
+      updateResults();
+    },
   });
   populateFilterForm();
   renderTagOptions();

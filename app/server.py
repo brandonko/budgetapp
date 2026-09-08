@@ -169,6 +169,8 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "ebay": EBAY_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
+    "/saved-views.js": APP_DIR / "saved-views.js",
+    "/saved-views.css": APP_DIR / "saved-views.css",
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",

@@ -202,10 +202,10 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
     return { ok: true, status: 200, json: async () => ({ transactions: currentRows, revision: currentRevision }) };
   };
   const window = { confirm: () => false };
-  const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
+  const context = { window, document, localStorage, fetch, crypto: require("node:crypto"), HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
-  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
+  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "saved-views.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
   await flush();
   const el = (id) => document.getElementById(id);
   const field = (name) => el("transaction-form").elements.namedItem(name);
@@ -213,6 +213,31 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
   const edits = () => el("alltime-list").querySelectorAll("button");
   return { document, el, field, writes, edits, requests, window, storage, shared: window.LedgerTransactionUI };
 }
+
+test("named views restore applied filters and sort without CSV writes; deletion can be cancelled", async () => {
+  const app = await start([tx(), tx({ _id: 2, description: "Groceries", amount: 20 })]);
+  app.el("alltime-search").value = "Bike";
+  app.el("alltime-search").dispatch("input");
+  const sort = app.el("alltime-sort").querySelector("select");
+  sort.value = "cost:asc"; sort.dispatch("change");
+  app.el("saved-view-name").value = "Bike spending";
+  app.el("saved-view-create").click();
+  const id = app.el("saved-view-select").value;
+  assert.ok(id);
+  app.el("clear-alltime-filters").click();
+  assert.equal(app.el("matching-spent").textContent, "$70.00");
+  app.el("saved-view-select").value = id;
+  app.el("saved-view-select").dispatch("change");
+  assert.equal(app.el("matching-spent").textContent, "$50.00");
+  assert.equal(app.el("alltime-search").value, "Bike");
+  assert.equal(app.el("alltime-sort").querySelector("select").value, "cost:asc");
+  app.el("saved-view-delete").click();
+  assert.equal(app.el("saved-view-select").value, id);
+  app.window.confirm = () => true;
+  app.el("saved-view-delete").click();
+  assert.equal(app.el("saved-view-select").value, "");
+  assert.equal(app.writes().length, 0);
+});
 
 test("Edit uses the clicked transaction and shared editor; save includes original revision and preserved fields", async () => {
   const original = tx({ _id: 7, flags: "include-in-budget", tags: "bike, tools" });

@@ -1,5 +1,7 @@
 # Ledger project context
 
+Experimental feature contract: see [Saved transaction views](docs/features/saved-views.md).
+
 This document records the product and implementation preferences that should
 guide future work on Ledger. Update it whenever a decision changes.
 
