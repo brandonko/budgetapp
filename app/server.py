@@ -169,6 +169,10 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "ebay": EBAY_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
+    "/coverage": APP_DIR / "coverage.html",
+    "/coverage-model.js": APP_DIR / "coverage-model.js",
+    "/coverage.js": APP_DIR / "coverage.js",
+    "/coverage.css": APP_DIR / "coverage.css",
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",

@@ -82,6 +82,12 @@ third-party Python dependency unless a future requirement clearly justifies it.
 
 ## Import history
 
+- Experimental **Data coverage** at `/coverage` is a read-only inventory by
+  provider/account-type/account-name identity. Count every stored occurrence,
+  including excluded transactions. Empty months are no recorded activity, never
+  proof of incomplete or complete bank data. Use calendar-day freshness relative
+  to an explicit local as-of date and identify unknown import timestamps.
+
 - Settings includes an **Import history** tab that groups persisted imported
   rows by `createdAt`, newest first, and displays each batch's remaining row
   count. Paginate this list at exactly five import batches per page with

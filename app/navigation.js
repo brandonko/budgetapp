@@ -3,6 +3,11 @@
 const siteMenus = document.querySelectorAll(".site-menu");
 
 for (const menu of siteMenus) {
+  const coverageLink = document.createElement("a");
+  coverageLink.href = "/coverage";
+  coverageLink.textContent = "Data coverage";
+  if (window.location.pathname === "/coverage") coverageLink.setAttribute("aria-current", "page");
+  menu.querySelector(".menu-panel").append(coverageLink);
   const button = menu.querySelector(".menu-button");
 
   menu.addEventListener("toggle", () => {

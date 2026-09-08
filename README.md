@@ -260,6 +260,9 @@ exports are the user-facing recovery and transfer workflow.
 
 ## Import history
 
+Experimental: **Data coverage** (`/coverage`) shows per-account monthly activity,
+recorded date spans, and import freshness. See [the feature guide](docs/features/import-coverage.md).
+
 Every transaction committed by one import receives the same UTC `createdAt`
 timestamp. Open **Settings → Import history** to see those batches ordered newest
 first, five imports per page, and the number of rows still associated with each import. Legacy and
