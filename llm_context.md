@@ -234,6 +234,14 @@ on it. Translate it for people in the interface:
 
 ## Dashboard periods
 
+- Experimental **Compare periods** (`/compare-periods`) compares arbitrary
+  inclusive date ranges using the existing cent-based transaction summary model.
+  Keep prior-period/prior-year presets, explicit unequal-range/overlap context,
+  exact category and headline differences, and per-calendar-day averages. Omit
+  percentages for a zero or negative denominator; preserve no-activity versus
+  genuine zero. Drill down via scoped URL filters into the existing Transactions
+  page and honor the server's internal-transfer-review gate before showing totals.
+
 - The home page supports `Monthly`, `Annual`, and `Year over year` views.
 - Default to the latest month containing a budget-visible transaction.
 - Monthly view has independent month and year selectors. Annual view has a year

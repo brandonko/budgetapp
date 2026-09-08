@@ -3,6 +3,11 @@
 const siteMenus = document.querySelectorAll(".site-menu");
 
 for (const menu of siteMenus) {
+  const periodLink = document.createElement("a");
+  periodLink.href = "/compare-periods";
+  periodLink.textContent = "Compare periods";
+  if (window.location.pathname === "/compare-periods") periodLink.setAttribute("aria-current", "page");
+  menu.querySelector(".menu-panel").append(periodLink);
   const button = menu.querySelector(".menu-button");
 
   menu.addEventListener("toggle", () => {

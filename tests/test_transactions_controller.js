@@ -182,7 +182,7 @@ function tx(overrides = {}) {
 
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 
-async function start(rows, { stored = null, mutationStatus = 200, missingCsv = false } = {}) {
+async function start(rows, { stored = null, mutationStatus = 200, missingCsv = false, query = "" } = {}) {
   const document = parseDocument(read("transactions.html"));
   const requests = []; let currentRows = rows; let currentRevision = "revision-1";
   const storage = new Map(stored ? [["ledger.transactions-view.v1", JSON.stringify(stored)]] : []);
@@ -201,11 +201,11 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
     }
     return { ok: true, status: 200, json: async () => ({ transactions: currentRows, revision: currentRevision }) };
   };
-  const window = { confirm: () => false };
-  const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
+  const window = { confirm: () => false, location: { search: query } };
+  const context = { window, document, localStorage, fetch, URLSearchParams, HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
-  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
+  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "period-comparison-model.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
   await flush();
   const el = (id) => document.getElementById(id);
   const field = (name) => el("transaction-form").elements.namedItem(name);
@@ -213,6 +213,18 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
   const edits = () => el("alltime-list").querySelectorAll("button");
   return { document, el, field, writes, edits, requests, window, storage, shared: window.LedgerTransactionUI };
 }
+
+test("period-report links replace stale browse filters and show only the linked spending scope", async () => {
+  const app = await start([tx({ category: "Food", amount: 12 }), tx({ category: "Food", date: "2023-05-12", amount: 99 }),
+    tx({ category: "Food", amount: 100, flags: "refunded" }), tx({ category: "Income", amount: -500 })], {
+    stored: { filters: { description: "old search", provider: "Other bank", tags: ["missing"] } },
+    query: "?report=period-comparison&startDate=2024-05-01&endDate=2024-05-31&category=Food&type=spending",
+  });
+  assert.equal(app.el("matching-spent").textContent, "$12.00");
+  assert.equal(app.el("matching-income").textContent, "$0.00");
+  assert.equal(app.el("alltime-search").value, "");
+  assert.equal(app.edits().length, 1); assert.equal(app.writes().length, 0);
+});
 
 test("Edit uses the clicked transaction and shared editor; save includes original revision and preserved fields", async () => {
   const original = tx({ _id: 7, flags: "include-in-budget", tags: "bike, tools" });

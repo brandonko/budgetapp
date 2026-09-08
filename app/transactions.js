@@ -38,6 +38,8 @@
     filters.showExcluded = saved.filters.showExcluded !== false;
     if (filters.tags.includes(UNTAGGED)) filters.tagMode = "any";
   }
+  const periodFilters = window.LedgerPeriodComparisonModel?.parseDrilldown(window.location?.search || "");
+  if (periodFilters) filters = { ...defaults(), ...periodFilters };
   byId("alltime-search").value = filters.description;
   const sortControl = transactionUi.createTransactionSortControls(byId("alltime-sort"), {
     initial: saved.sort || {}, onChange: () => updateResults(),

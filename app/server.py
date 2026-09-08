@@ -169,6 +169,10 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "ebay": EBAY_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
+    "/compare-periods": APP_DIR / "period-comparison.html",
+    "/period-comparison-model.js": APP_DIR / "period-comparison-model.js",
+    "/period-comparison.js": APP_DIR / "period-comparison.js",
+    "/period-comparison.css": APP_DIR / "period-comparison.css",
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",
