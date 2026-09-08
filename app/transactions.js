@@ -38,6 +38,15 @@
     filters.showExcluded = saved.filters.showExcluded !== false;
     if (filters.tags.includes(UNTAGGED)) filters.tagMode = "any";
   }
+  if (typeof URLSearchParams === "function" && window.location?.search) {
+    const query = new URLSearchParams(window.location.search);
+    if (query.has("description")) {
+      filters = defaults();
+      for (const name of ["description", "category", "startDate", "endDate"]) {
+        filters[name] = (query.get(name) || "").slice(0, 200);
+      }
+    }
+  }
   byId("alltime-search").value = filters.description;
   const sortControl = transactionUi.createTransactionSortControls(byId("alltime-sort"), {
     initial: saved.sort || {}, onChange: () => updateResults(),

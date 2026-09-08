@@ -1,5 +1,7 @@
 # Ledger
 
+Experimental feature: [Merchant insights](docs/features/merchant-insights.md).
+
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
 It imports Credit Karma and Venmo transactions plus Amazon, AliExpress, and eBay order history, avoids duplicate
 imports, and provides monthly and annual summaries with editable transaction

@@ -182,7 +182,7 @@ function tx(overrides = {}) {
 
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 
-async function start(rows, { stored = null, mutationStatus = 200, missingCsv = false } = {}) {
+async function start(rows, { stored = null, mutationStatus = 200, missingCsv = false, search = "" } = {}) {
   const document = parseDocument(read("transactions.html"));
   const requests = []; let currentRows = rows; let currentRevision = "revision-1";
   const storage = new Map(stored ? [["ledger.transactions-view.v1", JSON.stringify(stored)]] : []);
@@ -201,8 +201,8 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
     }
     return { ok: true, status: 200, json: async () => ({ transactions: currentRows, revision: currentRevision }) };
   };
-  const window = { confirm: () => false };
-  const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
+  const window = { confirm: () => false, location: { search } };
+  const context = { window, document, localStorage, fetch, URLSearchParams, HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
   for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
@@ -213,6 +213,16 @@ async function start(rows, { stored = null, mutationStatus = 200, missingCsv = f
   const edits = () => el("alltime-list").querySelectorAll("button");
   return { document, el, field, writes, edits, requests, window, storage, shared: window.LedgerTransactionUI };
 }
+
+test("merchant drilldown restores its scope instead of unrelated remembered filters without writing transactions", async () => {
+  const app = await start([tx(), tx({ _id: 2, description: "Other shop" }), tx({ _id: 3, date: "2024-06-12" })], {
+    stored: { filters: { provider: "Unrelated bank", description: "Old search" } },
+    search: "?description=Bike+purchase&startDate=2024-05-01&endDate=2024-05-31&category=Shopping",
+  });
+  assert.equal(app.el("alltime-search").value, "Bike purchase");
+  assert.equal(app.edits().length, 1);
+  assert.equal(app.writes().length, 0);
+});
 
 test("Edit uses the clicked transaction and shared editor; save includes original revision and preserved fields", async () => {
   const original = tx({ _id: 7, flags: "include-in-budget", tags: "bike, tools" });

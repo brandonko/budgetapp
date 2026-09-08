@@ -3,6 +3,16 @@
 const siteMenus = document.querySelectorAll(".site-menu");
 
 for (const menu of siteMenus) {
+  const panel = menu.querySelector(".menu-panel");
+  if (panel && !panel.querySelector('a[href="/merchants"]')) {
+    const link = document.createElement("a");
+    link.href = "/merchants"; link.textContent = "Merchant insights";
+    if (window.location.pathname === "/merchants") link.setAttribute("aria-current", "page");
+    panel.append(link);
+  }
+}
+
+for (const menu of siteMenus) {
   const button = menu.querySelector(".menu-button");
 
   menu.addEventListener("toggle", () => {

@@ -1,5 +1,7 @@
 # Ledger project context
 
+Experimental feature contract: see [Merchant insights](docs/features/merchant-insights.md).
+
 This document records the product and implementation preferences that should
 guide future work on Ledger. Update it whenever a decision changes.
 

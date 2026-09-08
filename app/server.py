@@ -169,6 +169,11 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "ebay": EBAY_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
+    "/merchants": APP_DIR / "merchants.html",
+    "/merchants.html": APP_DIR / "merchants.html",
+    "/merchants.js": APP_DIR / "merchants.js",
+    "/merchants-model.js": APP_DIR / "merchants-model.js",
+    "/merchants.css": APP_DIR / "merchants.css",
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",

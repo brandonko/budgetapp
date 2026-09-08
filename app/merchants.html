@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="/theme.js?v=20260905-display-preferences-1"></script>
+<title>Merchant insights — Ledger</title>
+<link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+<link rel="stylesheet" href="/merchants.css" />
+<script src="/navigation.js" defer></script>
+<script src="/transactions-model.js" defer></script><script src="/merchants-model.js" defer></script><script src="/merchants.js" defer></script>
+</head>
+<body>
+<header class="site-header">
+<a class="brand" href="/" aria-label="Ledger home"><span class="brand-mark">L</span><span>Ledger</span></a>
+<details class="site-menu"><summary class="menu-button" aria-label="Open navigation menu" aria-expanded="false"><span></span><span></span><span></span></summary>
+<nav class="menu-panel" aria-label="Main navigation"><a href="/">Dashboard</a><a href="/transactions">Transactions</a><a href="/import">Import data</a><a href="/classifications">Classifications</a><a href="/settings">Settings</a></nav></details>
+</header>
+<main class="merchant-workspace">
+<p class="eyebrow">Follow the pattern</p><h1>Merchant insights.</h1>
+<p class="merchant-intro">Find your frequent stops, larger purchases, and the descriptions that add up over time.</p>
+<div id="merchant-status" role="status" hidden></div>
+<form id="merchant-filters" class="merchant-controls">
+<label>From<input type="date" id="merchant-start" /></label><label>Through<input type="date" id="merchant-end" /></label>
+<label>Category<select id="merchant-category"><option value="">All spending categories</option></select></label>
+<button class="primary-button" type="submit">Update insights</button><button class="secondary-button" type="button" id="merchant-alltime">All time</button>
+</form>
+<p id="merchant-scope" class="merchant-hint">Loading recorded transactions…</p>
+<div class="merchant-summary" id="merchant-summary" hidden>
+<article><span>Net spending</span><strong id="merchant-spent"></strong><small>Charges less credits</small></article>
+<article><span>Gross purchases</span><strong id="merchant-charges"></strong><small>Before credits</small></article>
+<article><span>Description groups</span><strong id="merchant-count"></strong><small>Matching the controls below</small></article>
+</div>
+<section class="merchant-results">
+<div class="merchant-controls merchant-controls--secondary">
+<label>Find a description<input id="merchant-search" type="search" placeholder="Coffee, market, bookstore…" /></label>
+<label>At least this many purchases<select id="merchant-minimum"><option value="0">Any activity</option><option value="2">2 purchases</option><option value="5">5 purchases</option><option value="10">10 purchases</option></select></label>
+<label>Rank by<select id="merchant-sort"><option value="spending">Net spending</option><option value="count">Purchase frequency</option><option value="name">Description A–Z</option></select></label>
+</div>
+<div class="merchant-layout"><div><div id="merchant-list"></div><button id="merchant-more" class="secondary-button" type="button" hidden>Show more</button></div>
+<aside id="merchant-detail"><h2>Select a description</h2><p>See its monthly totals, typical purchase, and recorded activity span.</p></aside></div>
+</section>
+<details class="merchant-explanation"><summary>How these insights are calculated</summary>
+<p>Ledger does not store a separate merchant name. Descriptions are grouped only when they match after ignoring case and repeated spaces. Different store IDs and descriptions stay separate; nothing in your CSV is renamed.</p>
+<p>Refunded rows and internal transfers contribute nothing. Ordinary negative expense credits reduce spending. The purchase share uses positive charges, and typical purchase is the median positive charge. No activity is different from a zero-dollar net total. Description search and minimum purchase count narrow the ranked list, while headline spending retains the selected dates and category.</p>
+</details>
+</main></body></html>
