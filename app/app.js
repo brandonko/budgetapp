@@ -17,7 +17,6 @@ const state = {
   selectedComparisonYears: [],
   comparisonMetric: "spending",
   comparisonChartMode: "cumulative",
-  comparisonPeriodMode: "comparable",
   comparisonAnimationFrame: null,
   annualSpendingAnimationFrame: null,
   annualNetAnimationFrame: null,
@@ -54,7 +53,6 @@ function saveDashboardView() {
         selectedComparisonYears: state.selectedComparisonYears,
         comparisonMetric: state.comparisonMetric,
         comparisonChartMode: state.comparisonChartMode,
-        comparisonPeriodMode: state.comparisonPeriodMode,
         breakdownDimension: state.breakdownDimension,
         selectedTags: state.selectedTags,
         tagMatchMode: state.tagMatchMode,
@@ -91,9 +89,6 @@ function restoreDashboardView() {
     }
     if (["cumulative", "monthly"].includes(saved.comparisonChartMode)) {
       state.comparisonChartMode = saved.comparisonChartMode;
-    }
-    if (["comparable", "full"].includes(saved.comparisonPeriodMode)) {
-      state.comparisonPeriodMode = saved.comparisonPeriodMode;
     }
     if (["category", "tag"].includes(saved.breakdownDimension)) {
       state.breakdownDimension = saved.breakdownDimension;
@@ -193,6 +188,31 @@ function visualizationColor(index) {
   return colors[normalizedIndex];
 }
 
+const dashboardColorAssignments = new Map();
+
+function dashboardSeriesColors(scope, keys, size = VISUALIZATION_COLOR_COUNT) {
+  const storageKey = `ledger.series-colors.v1.${scope}`;
+  if (!dashboardColorAssignments.has(scope)) {
+    let initial = [];
+    try { initial = JSON.parse(window.localStorage.getItem(storageKey) || "[]"); } catch { /* Optional preferences. */ }
+    dashboardColorAssignments.set(scope, { slots: transactionUi.createSeriesColorSlots({ size, initial }), serialized: "" });
+  }
+  const entry = dashboardColorAssignments.get(scope);
+  entry.slots.sync(keys);
+  const serialized = JSON.stringify(entry.slots.snapshot());
+  if (entry.serialized !== serialized) {
+    entry.serialized = serialized;
+    try { window.localStorage.setItem(storageKey, serialized); } catch { /* In-memory assignments still work. */ }
+  }
+  return entry.slots;
+}
+
+function colorForComparisonYear(year) {
+  // Use selection order for new colors, while the chart/table remain chronological.
+  const slots = dashboardSeriesColors("years", state.selectedComparisonYears);
+  return slots.slot(year) === undefined ? "var(--muted)" : visualizationColor(slots.slot(year));
+}
+
 const elements = {
   viewModeSelect: document.querySelector("#view-mode-select"),
   yearSelect: document.querySelector("#year-select"),
@@ -200,11 +220,13 @@ const elements = {
   comparisonStartYearControl: document.querySelector("#comparison-start-year-control"),
   comparisonStartYear: document.querySelector("#comparison-start-year"),
   monthSelect: document.querySelector("#month-select"),
+  todayButton: document.querySelector("#today-button"),
   monthControl: document.querySelector("#month-control"),
   overviewEyebrow: document.querySelector("#overview-eyebrow"),
   periodDescription: document.querySelector("#period-description"),
   summaryGrid: document.querySelector("#summary-grid"),
   totalSpent: document.querySelector("#total-spent"),
+  spendingSummaryNote: document.querySelector("#spending-summary-note"),
   totalIncome: document.querySelector("#total-income"),
   incomeSummaryNote: document.querySelector("#income-summary-note"),
   netTotal: document.querySelector("#net-total"),
@@ -231,7 +253,6 @@ const elements = {
   yearComparisonDescription: document.querySelector("#year-comparison-description"),
   comparisonMetricButtons: [...document.querySelectorAll("[data-comparison-metric]")],
   comparisonChartModeButtons: [...document.querySelectorAll("[data-comparison-chart-mode]")],
-  comparisonPeriodMode: document.querySelector("#comparison-period-mode"),
   comparisonYearPicker: document.querySelector("#comparison-year-picker"),
   comparisonChart: document.querySelector("#comparison-chart"),
   comparisonChartTooltip: document.querySelector("#comparison-chart-tooltip"),
@@ -281,9 +302,9 @@ const elements = {
   transactionTagFilter: document.querySelector("#transaction-tag-filter"),
   transactionFilterButton: document.querySelector("#transaction-filter-button"),
   transactionFilterPopover: document.querySelector("#transaction-filter-popover"),
+  transactionGroupFilter: document.querySelector("#transaction-group-filter"),
   transactionFilterCount: document.querySelector("#transaction-filter-count"),
   resetTransactionFilters: document.querySelector("#reset-transaction-filters"),
-  applyTransactionFilters: document.querySelector("#apply-transaction-filters"),
   transactionActiveFilters: document.querySelector("#transaction-active-filters"),
   transactionFilterChips: document.querySelector("#transaction-filter-chips"),
   transactionDialogSort: document.querySelector("#transaction-dialog-sort"),
@@ -413,8 +434,12 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
   const latestMonth = months[0] ?? "";
   const preferredYear = preferredMonth.slice(0, 4) || state.selectedYear;
   const years = [...new Set(months.map((month) => month.slice(0, 4)))];
-  if (years.length === 0) {
-    years.push(String(new Date().getFullYear()));
+  const currentYear = String(new Date().getFullYear());
+  // Today (and its restored view) can select a year with no imported data.
+  // Merely opening Ledger still defaults to the latest available month.
+  if (years.length === 0 || (preferredYear === currentYear && !years.includes(currentYear))) {
+    years.push(currentYear);
+    years.sort().reverse();
   }
 
   elements.yearSelect.replaceChildren();
@@ -465,6 +490,15 @@ function populatePeriodSelects(preferredMonth = selectedMonthKey()) {
   elements.monthSelect.value = state.selectedMonth;
   elements.viewModeSelect.value = state.viewMode;
   saveDashboardView();
+}
+
+function goToToday() {
+  if (elements.todayButton.disabled) return;
+  const today = new Date();
+  const month = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  state.viewMode = "monthly";
+  populatePeriodSelects(month);
+  renderDashboard();
 }
 
 function populateDatalists() {
@@ -643,6 +677,7 @@ async function loadTaxonomySuggestions() {
     const payload = await response.json();
     if (!Array.isArray(payload.categories)) return;
     state.taxonomyCategories = payload.categories;
+    transactionUi.setEditorTaxonomy(payload.categories);
     populateDatalists();
   } catch {
     // Taxonomy suggestions are optional; transaction data remains usable without them.
@@ -723,10 +758,10 @@ function renderTagExplorer(transactions) {
 
   const spendingTransactions = transactions.filter((transaction) => !isIncome(transaction));
   const selected = selectedTagSet();
-  const queryTransactions = matchingTagTransactions(spendingTransactions);
   const impossibleAll = state.selectedTags.length > 1
     && state.selectedTags.some((tag) => tag === UNTAGGED);
   if (impossibleAll && state.tagMatchMode === "all") state.tagMatchMode = "any";
+  const queryTransactions = matchingTagTransactions(spendingTransactions);
 
   elements.tagMatchModeButtons.forEach((button) => {
     const mode = button.dataset.tagMatchMode;
@@ -830,9 +865,10 @@ function renderCategories(transactions) {
   }
 
   const maximum = Math.max(...groups.map((group) => Math.abs(group.total)), 1);
-  groups.forEach((group, index) => {
+  const colors = dashboardSeriesColors("categories", groups.map((group) => group.key));
+  groups.forEach((group) => {
     const card = elements.categoryTemplate.content.firstElementChild.cloneNode(true);
-    const color = visualizationColor(index);
+    const color = visualizationColor(colors.slot(group.key));
     card.style.setProperty("--category-color", color);
     card.style.setProperty("--bar-width", `${Math.max((Math.abs(group.total) / maximum) * 100, 3)}%`);
     card.querySelector(".category-count").textContent = `${group.transactions.length} ${
@@ -954,7 +990,7 @@ function animateStackedMonthBars(container, previousHeights) {
 }
 
 function colorForCategory(category, categories) {
-  return visualizationColor(categories.indexOf(category));
+  return visualizationColor(dashboardSeriesColors("categories", categories).slot(category));
 }
 
 function subcategoryKey(transaction) {
@@ -971,7 +1007,8 @@ function mixHexColor(color, whiteRatio) {
 }
 
 function colorForSubcategory(subcategory, subcategories, categoryColor) {
-  const index = subcategories.indexOf(subcategory);
+  const scope = `subcategories.${String(state.annualCategoryFilter).trim().toLocaleLowerCase()}`;
+  const index = dashboardSeriesColors(scope, subcategories, 6).slot(subcategory);
   return mixHexColor(categoryColor, Math.min(0.08 + (index % 6) * 0.12, 0.68));
 }
 
@@ -1559,18 +1596,14 @@ function selectedComparisonYears() {
   return [...state.selectedComparisonYears].sort();
 }
 
-function comparisonCutoffForYear(year, newestYear) {
-  if (state.comparisonPeriodMode === "comparable") {
-    return lastObservedMonth(newestYear);
-  }
+function comparisonCutoffForYear(year) {
   return lastObservedMonth(year);
 }
 
 function comparisonSeries() {
   const years = selectedComparisonYears();
-  const newestYear = years.at(-1) || state.selectedYear;
   return years.map((year) => {
-    const cutoff = comparisonCutoffForYear(year, newestYear);
+    const cutoff = comparisonCutoffForYear(year);
     let runningTotal = 0;
     const points = [];
     for (let monthNumber = 1; monthNumber <= cutoff; monthNumber += 1) {
@@ -1648,8 +1681,7 @@ function renderComparisonYearPicker() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "comparison-year-button";
-    const selectedIndex = selectedComparisonYears().indexOf(year);
-    button.style.setProperty("--year-color", visualizationColor(Math.max(selectedIndex, 0)));
+    button.style.setProperty("--year-color", colorForComparisonYear(year));
     button.textContent = year;
     button.setAttribute("aria-pressed", String(selected.has(year)));
     button.addEventListener("click", () => {
@@ -1746,8 +1778,8 @@ function renderComparisonChart(series) {
     }, shortMonthFormatter.format(parseLocalDate(`2000-${month}-01`))));
   }
 
-  series.forEach((yearSeries, seriesIndex) => {
-    const color = visualizationColor(seriesIndex);
+  series.forEach((yearSeries) => {
+    const color = colorForComparisonYear(yearSeries.year);
     const coordinates = yearSeries.points.map((point, index) => {
       const key = `${yearSeries.year}-${point.month}`;
       return {
@@ -1834,7 +1866,7 @@ function renderComparisonTable(series) {
     const yearCell = document.createElement("th");
     yearCell.scope = "row";
     yearCell.textContent = item.year;
-    yearCell.style.setProperty("--year-color", visualizationColor(ascending.indexOf(item)));
+    yearCell.style.setProperty("--year-color", colorForComparisonYear(item.year));
     row.append(yearCell);
     for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
       const cell = document.createElement("td");
@@ -1876,25 +1908,14 @@ function renderYearComparison() {
   elements.comparisonChartModeButtons.forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.comparisonChartMode === state.comparisonChartMode));
   });
-  elements.comparisonPeriodMode.value = state.comparisonPeriodMode;
   const label = comparisonMetricLabel();
   const valueType = state.comparisonChartMode === "cumulative" ? "Cumulative" : "Monthly";
   elements.yearComparisonDescription.textContent = state.comparisonChartMode === "cumulative"
     ? "Running totals make it easy to compare each year's financial pace month by month."
     : "Monthly totals make seasonal changes and one-off spikes easy to compare across years.";
   elements.comparisonChartTitle.textContent = `${valueType} ${label}`;
-  const selected = selectedComparisonYears();
-  const newestYear = selected.at(-1);
-  const cutoff = newestYear ? comparisonCutoffForYear(newestYear, newestYear) : 0;
-  const cutoffLabel = cutoff
-    ? shortMonthFormatter.format(parseLocalDate(`2000-${String(cutoff).padStart(2, "0")}-01`))
-    : "the latest imported month";
-  elements.comparisonChartSubtitle.textContent = state.comparisonPeriodMode === "comparable"
-    ? cutoff
-      ? `Every line is compared through ${cutoffLabel}, the latest month available in ${newestYear}.`
-      : "Import transactions from more than one year to build a comparison."
-    : "Each line continues through the latest month available in that year.";
-  elements.comparisonTableDescription.textContent = `${valueType} ${label} values and year-over-year changes use the same time span as the chart.`;
+  elements.comparisonChartSubtitle.textContent = "Each line continues through the latest month available in that year.";
+  elements.comparisonTableDescription.textContent = `${valueType} ${label} values and year-over-year changes include every available month.`;
   const series = comparisonSeries();
   const latest = series.at(-1);
   const prior = series.at(-2);
@@ -1937,6 +1958,7 @@ function transactionRowOptions(transaction) {
 
 const dashboardBulk = window.LedgerTransactionBulk.create({
   container: elements.transactionList,
+  getGroupFilter: () => state.transactionDialogFilters.group,
   getTransactions: () => state.transactionDialogTransactions,
   getAllTransactions: () => state.transactions,
   getRevision: () => state.revision,
@@ -1951,6 +1973,7 @@ const dashboardBulk = window.LedgerTransactionBulk.create({
 
 function currentTransactionDialogFilters() {
   return {
+    group: state.transactionDialogFilters.group || "",
     description: elements.transactionSearch.value.trim(),
     category: state.transactionDialogFilters.category || "",
     tag: state.transactionDialogFilters.tag || "",
@@ -1962,6 +1985,7 @@ function currentTransactionDialogFilters() {
 
 function transactionFilterDraft() {
   return {
+    group: elements.transactionGroupFilter.value,
     category: elements.transactionCategoryFilter.value,
     subcategory: elements.transactionSubcategoryFilter.value,
     tag: elements.transactionTagFilter.value,
@@ -1985,6 +2009,7 @@ function populateTransactionFilter(select, values, allLabel, selectedValue) {
 }
 
 function configureTransactionFilters(transactions, filters) {
+  transactionUi.populateGroupFilter(elements.transactionGroupFilter, transactions, filters.group);
   elements.transactionSearch.value = filters.description || "";
   const categories = [...new Set(transactions.map((transaction) => transaction.category))]
     .sort((left, right) => left.localeCompare(right));
@@ -2017,6 +2042,7 @@ function configureTransactionFilters(transactions, filters) {
   );
   populateTransactionSubcategoryFilter(filters.category, filters.subcategory);
   state.transactionDialogFilters = {
+    group: elements.transactionGroupFilter.value,
     description: filters.description || "",
     category: elements.transactionCategoryFilter.value,
     subcategory: elements.transactionSubcategoryFilter.value,
@@ -2051,12 +2077,14 @@ function populateTransactionSubcategoryFilter(category, selectedValue = "") {
 }
 
 function transactionFilterLabel(field, value) {
+  if (field === "group") return transactionUi.groupFilterLabel(value);
   if (field === "subcategory" && value === UNCLASSIFIED_SUBCATEGORY) return "Unclassified";
   return value;
 }
 
 function renderActiveTransactionFilters() {
   const definitions = [
+    ["group", "Group"],
     ["category", "Category"],
     ["subcategory", "Subcategory"],
     ["tag", "Tag"],
@@ -2082,6 +2110,7 @@ function renderActiveTransactionFilters() {
         populateTransactionSubcategoryFilter("", state.transactionDialogFilters.subcategory);
       } else {
         const select = {
+          group: elements.transactionGroupFilter,
           subcategory: elements.transactionSubcategoryFilter,
           tag: elements.transactionTagFilter,
           accountName: elements.transactionAccountFilter,
@@ -2098,6 +2127,7 @@ function renderActiveTransactionFilters() {
 
 function syncTransactionFilterDraft() {
   const filters = state.transactionDialogFilters;
+  elements.transactionGroupFilter.value = filters.group || "";
   elements.transactionCategoryFilter.value = filters.category || "";
   populateTransactionSubcategoryFilter(filters.category || "", filters.subcategory || "");
   elements.transactionTagFilter.value = filters.tag || "";
@@ -2108,6 +2138,7 @@ function syncTransactionFilterDraft() {
 function setTransactionFilterPopover(open, { restoreDraft = true } = {}) {
   if (!open && restoreDraft) syncTransactionFilterDraft();
   elements.transactionFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.transactionFilterPopover);
   elements.transactionFilterButton.setAttribute("aria-expanded", String(open));
 }
 
@@ -2159,10 +2190,9 @@ function renderSubcategorySummary() {
 function renderTransactionDialogTransactions() {
   const filters = currentTransactionDialogFilters();
   state.transactionDialogFilters = filters;
-  const descriptionQuery = filters.description.toLocaleLowerCase();
   const visibleTransactions = transactionUi.sortTransactions(
     state.transactionDialogTransactions.filter((transaction) => (
-      (!descriptionQuery || transaction.description.toLocaleLowerCase().includes(descriptionQuery)) &&
+      transactionUi.matchesTransactionSearch(transaction, filters.description) &&
       (!filters.category || transaction.category === filters.category) &&
       (!filters.tag || transactionTags(transaction).some(
         (tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase(),
@@ -2297,7 +2327,7 @@ function openTransactionForm(transaction = null) {
   );
   transactionUi.populateTransactionEditor(elements.form, transaction, {
     date: defaultNewTransactionDate(),
-  });
+  }, { transactions: state.transactions });
   elements.formDialog.showModal();
   formField(editing ? "description" : "date").focus();
 }
@@ -2345,6 +2375,7 @@ function applyPayload(payload, preferredMonth = selectedMonthKey()) {
   populatePeriodSelects(stablePreferredMonth);
   populateDatalists();
   renderDashboard();
+  elements.todayButton.disabled = false;
 }
 
 async function saveTransaction(event) {
@@ -2398,6 +2429,7 @@ function renderDashboard() {
   const excludedInternalTransfers = excludedInternalTransfersForSelectedPeriod();
   const annual = state.viewMode === "annual";
   const comparison = state.viewMode === "year-over-year";
+  const tagMode = !comparison && state.breakdownDimension === "tag";
   elements.monthControl.hidden = annual || comparison;
   elements.comparisonStartYearControl.hidden = !comparison;
   elements.yearControlLabel.textContent = comparison ? "End year" : "Year";
@@ -2410,6 +2442,9 @@ function renderDashboard() {
       String(button.dataset.breakdownDimension === state.breakdownDimension),
     );
   });
+  // Normalize the active tag query before any summary or chart uses it.
+  if (!comparison) renderTagExplorer(transactions);
+  else elements.tagExplorer.hidden = true;
   elements.annualBreakdownDescription.textContent = state.breakdownDimension === "category"
     ? "Expand a category to compare exact subcategory totals across months."
     : state.selectedTags.length > 0
@@ -2418,8 +2453,13 @@ function renderDashboard() {
   elements.overviewEyebrow.textContent = comparison
     ? "Year-over-year overview"
     : annual ? "Annual overview" : "Monthly overview";
-  elements.summaryGrid.setAttribute("aria-label", annual ? "Annual summary" : "Monthly summary");
-  elements.incomeSummaryNote.textContent = annual ? "Income received this year" : "Income received this month";
+  elements.summaryGrid.setAttribute("aria-label", `${annual ? "Annual" : "Monthly"} summary${tagMode ? " for selected tags" : ""}`);
+  elements.spendingSummaryNote.textContent = tagMode
+    ? state.selectedTags.length ? "Selected tags · internal transfers excluded" : "Select tags to see spending"
+    : "Internal transfers are excluded";
+  elements.incomeSummaryNote.textContent = tagMode
+    ? state.selectedTags.length ? "Income matching selected tags" : "Select tags to see income"
+    : annual ? "Income received this year" : "Income received this month";
   elements.periodDescription.textContent = state.selectedYear
     ? comparison
       ? `Compare financial progress from ${state.comparisonStartYear} through ${state.selectedYear}.`
@@ -2427,11 +2467,13 @@ function renderDashboard() {
       ? `A full-year view of where your money went in ${state.selectedYear}.`
       : `A clear view of where your money went in ${monthLabel(selectedMonthKey())}.`
     : "No transaction data is available yet.";
-  if (!comparison) renderSummary(transactions);
   if (!comparison) {
-    renderTagExplorer(transactions);
-  } else {
-    elements.tagExplorer.hidden = true;
+    // Filter the complete period, not the spending-only explorer result: tagged
+    // income belongs in the cards too. Filtering rows counts overlapping tags once.
+    renderSummary(tagMode ? matchingTagTransactions(transactions) : transactions);
+    if (tagMode && state.selectedTags.length === 0) {
+      elements.netTotalNote.textContent = "Select tags to see net total";
+    }
   }
   if (!annual && !comparison) renderCategories(transactions);
   elements.annualInsights.hidden = !annual;
@@ -2454,7 +2496,9 @@ function renderDashboard() {
 }
 
 function setError(message, code = "") {
+  elements.todayButton.disabled = true;
   const fileMissing = code === "transaction_file_missing";
+  const transferReview = code === "internal_transfer_review_required";
   elements.errorState.classList.toggle("error-state--setup", fileMissing);
   elements.errorEyebrow.textContent = fileMissing ? "Get started" : "Unable to load data";
   elements.errorTitle.textContent = fileMissing ? "Import your transaction data." : "Something went wrong.";
@@ -2463,6 +2507,14 @@ function setError(message, code = "") {
     : message;
   elements.importDataButton.hidden = !fileMissing;
   elements.retryButton.hidden = fileMissing;
+  elements.importDataButton.href = transferReview ? "/settings#internal-transfers" : "/import";
+  elements.importDataButton.textContent = transferReview ? "Review internal transfers" : "Import data";
+  if (transferReview) {
+    elements.errorState.classList.add("error-state--setup");
+    elements.errorEyebrow.textContent = "One-time review";
+    elements.errorTitle.textContent = "Save your internal transfers.";
+    elements.importDataButton.hidden = false;
+  }
   elements.errorState.hidden = false;
   elements.dashboardSections.forEach((section) => {
     section.hidden = true;
@@ -2478,6 +2530,7 @@ function clearError() {
 }
 
 async function loadTransactions() {
+  elements.todayButton.disabled = true;
   clearError();
   try {
     const response = await fetch("/api/transactions", { cache: "no-store" });
@@ -2488,6 +2541,10 @@ async function loadTransactions() {
         return;
       }
       throw new Error(payload.error || `Request failed with status ${response.status}`);
+    }
+    if (payload.internalTransferReviewRequired) {
+      setError("Transfer detection now runs only when you import or request a scan. Review existing matches once before viewing updated totals; your CSV has not been changed.", "internal_transfer_review_required");
+      return;
     }
     applyPayload(payload);
     loadTaxonomySuggestions();
@@ -2501,6 +2558,7 @@ elements.viewModeSelect.addEventListener("change", (event) => {
   saveDashboardView();
   renderDashboard();
 });
+elements.todayButton.addEventListener("click", goToToday);
 elements.breakdownDimensionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const dimension = button.dataset.breakdownDimension;
@@ -2613,11 +2671,6 @@ elements.comparisonChartModeButtons.forEach((button) => {
     renderYearComparison();
   });
 });
-elements.comparisonPeriodMode.addEventListener("change", (event) => {
-  state.comparisonPeriodMode = event.target.value;
-  saveDashboardView();
-  renderYearComparison();
-});
 elements.closeDialog.addEventListener("click", () => elements.dialog.close());
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
 elements.transactionFilterButton.addEventListener("click", () => {
@@ -2632,6 +2685,7 @@ elements.transactionCategoryFilter.addEventListener("change", () => {
   );
 });
 elements.resetTransactionFilters.addEventListener("click", () => {
+  elements.transactionGroupFilter.value = "";
   elements.transactionCategoryFilter.value = "";
   populateTransactionSubcategoryFilter("");
   elements.transactionAccountFilter.value = "";
@@ -2639,18 +2693,17 @@ elements.resetTransactionFilters.addEventListener("click", () => {
   elements.transactionTagFilter.value = "";
   elements.transactionCategoryFilter.focus();
 });
-elements.applyTransactionFilters.addEventListener("click", () => {
+transactionUi.bindLiveTransactionFilters(elements.transactionFilterPopover, () => {
   state.transactionDialogFilters = {
     ...state.transactionDialogFilters,
     ...transactionFilterDraft(),
   };
-  setTransactionFilterPopover(false, { restoreDraft: false });
   renderTransactionDialogTransactions();
-  elements.transactionFilterButton.focus();
-});
+}, elements.resetTransactionFilters);
 elements.clearTransactionFilters.addEventListener("click", () => {
   state.transactionDialogFilters = {
     ...state.transactionDialogFilters,
+    group: "",
     category: "",
     subcategory: "",
     tag: "",

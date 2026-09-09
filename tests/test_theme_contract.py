@@ -165,6 +165,12 @@ class ThemeContractTests(unittest.TestCase):
         self.assertIn("root.dataset.theme = normalized", self.theme_javascript)
 
     def test_component_callouts_use_theme_tokens_instead_of_light_colors(self) -> None:
+        edited_badge = exact_rule(self.css, ".transaction-description .transaction-edited-badge")
+        self.assertIn("color: var(--accent)", edited_badge)
+        self.assertIn("background: var(--accent-soft)", edited_badge)
+        for name, declarations in self.themes().items():
+            with self.subTest(theme=name, component="edited badge"):
+                self.assertGreaterEqual(contrast_ratio(declarations["accent"], declarations["accent-soft"]), 4.5)
         code_block = exact_rule(self.css, ".classification-guide-code pre")
         self.assertIn("color: var(--ink)", code_block)
         self.assertIn("background: var(--surface-muted)", code_block)

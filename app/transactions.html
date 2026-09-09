@@ -6,14 +6,16 @@
   <script src="/theme.js?v=20260905-display-preferences-1"></script>
   <title>Transactions — Ledger</title>
   <meta name="description" content="Search all your Ledger transactions and explore spending across tags, trips, and projects." />
-  <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
-  <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
+  <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+  <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
   <link rel="stylesheet" href="/transactions.css?v=20260905-1" />
+  <link rel="stylesheet" href="/group-comparison.css?v=20260907-1" />
   <script src="/navigation.js" defer></script>
-  <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
-  <script src="/transaction-bulk.js?v=20260906-1" defer></script>
-  <script src="/transactions-model.js?v=20260905-1" defer></script>
-  <script src="/transactions.js?v=20260905-1" defer></script>
+  <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+  <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+  <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+  <script src="/group-comparison.js?v=20260907-stable-colors-1" defer></script>
+  <script src="/transactions.js?v=20260907-notes-search-1" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -35,23 +37,84 @@
     <header class="transactions-heading">
       <div><p class="eyebrow">Across time</p><h1>Transactions.</h1>
         <p>Find an old purchase, follow a lifelong interest, or add up a trip.</p></div>
-      <button class="secondary-button" id="refresh-transactions" type="button">Refresh</button>
     </header>
     <p id="page-status" class="settings-status" role="status" hidden></p>
+    <div class="transactions-view-tabs" role="tablist" aria-label="Transactions workspace">
+      <button id="browse-transactions-tab" type="button" role="tab" aria-selected="true" aria-controls="browse-transactions-panel">Transactions</button>
+      <button id="compare-groups-tab" type="button" role="tab" aria-selected="false" aria-controls="group-comparison-panel" tabindex="-1" disabled>Compare groups</button>
+    </div>
+    <section id="group-comparison-panel" role="tabpanel" aria-labelledby="compare-groups-tab" hidden>
+      <div class="group-compare-setup">
+        <header><div><p class="eyebrow">Trips, projects &amp; purchases</p><h2>Compare your groups.</h2>
+          <p>See the total cost, then explore what made the difference.</p></div></header>
+        <div class="group-compare-controls">
+          <div class="group-compare-picker">
+            <button type="button" class="secondary-button" id="choose-comparison-groups" aria-expanded="false" aria-controls="comparison-group-picker">Choose groups <span aria-hidden="true">+</span></button>
+            <div id="comparison-group-picker" class="group-picker-panel" hidden>
+              <label for="comparison-group-search">Find a group</label>
+              <input id="comparison-group-search" type="search" placeholder="Search trips or projects" autocomplete="off" />
+              <p>Choose up to 4. Changes apply instantly.</p>
+              <div id="comparison-group-options" role="group" aria-label="Groups to compare"></div>
+              <button id="close-comparison-picker" type="button" class="text-button">Done choosing</button>
+            </div>
+          </div>
+          <fieldset class="group-compare-dates"><legend>Optional date range</legend>
+            <label>From<input id="comparison-start-date" type="date" aria-describedby="comparison-date-error" /></label>
+            <label>Through<input id="comparison-end-date" type="date" aria-describedby="comparison-date-error" /></label>
+            <button id="comparison-all-time" type="button" class="text-button">All time</button>
+          </fieldset>
+        </div>
+        <p id="comparison-date-error" class="form-error" role="status" hidden></p>
+        <div id="comparison-selected-groups" class="comparison-selected-groups" aria-label="Selected groups"></div>
+        <p id="comparison-scope" class="alltime-hint" role="status"></p>
+        <details class="group-compare-guide"><summary>How this comparison works</summary>
+          <p>Comparison uses all saved transactions in each group and the date range above. Your Transactions search, tags, and account filters are kept separately and do not limit these totals.</p>
+          <p>Spending is purchases less credit adjustments, excluding transactions marked Refunded or Internal transfer. Income is shown separately, not subtracted from spending. Original amounts remain unchanged.</p>
+          <p>Groups may span different lengths of time; recorded activity dates are shown for context. All time means the data imported into Ledger, not necessarily a complete purchase history. A dash means no recorded activity in this scope, not zero spending.</p>
+        </details>
+      </div>
+      <div id="comparison-empty" class="group-compare-empty"></div>
+      <div id="comparison-results" hidden>
+        <div class="group-compare-reference"><label for="comparison-baseline">Show dollar differences from</label><select id="comparison-baseline"></select></div>
+        <div id="comparison-cards" class="group-compare-cards"></div>
+        <section class="group-compare-chart" aria-labelledby="comparison-chart-title">
+          <h2 id="comparison-chart-title">Spending, side by side</h2>
+          <p>Same dollar scale for every group. Select a row to inspect its transactions.</p>
+          <div id="comparison-spending-bars"></div>
+        </section>
+        <section class="group-compare-categories" aria-labelledby="comparison-categories-title">
+          <header><div><h2 id="comparison-categories-title">Where the money went</h2><p>Exact spending by category. Select an amount to see its transactions.</p></div>
+            <button id="comparison-category-toggle" class="text-button" type="button" hidden>Show all categories</button></header>
+          <div id="comparison-category-table" class="comparison-table-scroll" tabindex="0" role="region" aria-label="Group spending by category"></div>
+        </section>
+      </div>
+    </section>
+    <section id="browse-transactions-panel" role="tabpanel" aria-labelledby="browse-transactions-tab">
+    <div id="comparison-drilldown" class="comparison-drilldown" hidden><button id="back-to-comparison" type="button" class="text-button">← Back to comparison</button><span id="comparison-drilldown-context"></span></div>
     <section class="transactions-query" aria-label="Search all transactions">
       <div class="transaction-toolbar">
-        <label class="transaction-search-field"><span>Description</span>
-          <input id="alltime-search" type="search" placeholder="Search descriptions across all time" autocomplete="off" />
+        <label class="transaction-search-field"><span>Search</span>
+          <input id="alltime-search" type="search" placeholder="Search descriptions and notes" autocomplete="off" />
         </label>
         <div class="transaction-filter-menu">
           <button id="alltime-filter-button" class="transaction-filter-button" type="button" aria-expanded="false" aria-controls="alltime-filter-popover">Filters <span id="alltime-filter-count" hidden></span></button>
           <form id="alltime-filter-popover" class="transaction-filter-popover" aria-label="Transaction filters" hidden>
-            <div class="transaction-filter-popover-heading"><strong>Filter transactions</strong><span>Leave dates blank to search all time.</span></div>
+            <div class="transaction-filter-popover-heading"><strong>Filter transactions</strong><span>Changes apply instantly. Leave dates blank to search all time.</span></div>
             <fieldset><legend>Classification</legend>
               <div class="transaction-filter-pair">
                 <label><span>Category</span><select name="category" aria-label="Category"></select></label>
                 <label><span>Subcategory</span><select name="subcategory" aria-label="Subcategory"></select></label>
               </div>
+              <label class="transaction-filter-wide"><span>Group</span><select name="group" aria-label="Group"></select></label>
+            </fieldset>
+            <fieldset class="alltime-tag-filter"><legend>Tags</legend>
+              <div class="alltime-tag-mode" role="group" aria-label="Combine selected tags">
+                <button type="button" data-tag-mode="any" aria-pressed="true">Match any (OR)</button>
+                <button type="button" data-tag-mode="all" aria-pressed="false">Match all (AND)</button>
+              </div>
+              <label class="transaction-filter-wide"><span>Find a tag</span><input id="tag-search" type="search" placeholder="Search existing tags" autocomplete="off" /></label>
+              <div id="tag-options" class="alltime-tag-options" role="group" aria-label="Tags"></div>
+              <p class="alltime-hint" id="tag-query-hint">No tags selected · all tags included</p>
             </fieldset>
             <fieldset><legend>Account</legend>
               <div class="transaction-filter-pair">
@@ -61,9 +124,10 @@
             </fieldset>
             <fieldset><legend>Time &amp; activity</legend>
               <div class="transaction-filter-pair">
-                <label><span>From</span><input name="startDate" type="date" aria-label="From date" /></label>
-                <label><span>Through</span><input name="endDate" type="date" aria-label="Through date" /></label>
+                <label><span>From</span><input name="startDate" type="date" aria-label="From date" aria-describedby="alltime-date-error" /></label>
+                <label><span>Through</span><input name="endDate" type="date" aria-label="Through date" aria-describedby="alltime-date-error" /></label>
               </div>
+              <p class="form-error" id="alltime-date-error" role="status" hidden></p>
               <label class="transaction-filter-wide"><span>Activity</span><select name="type">
                 <option value="all">All transactions</option><option value="spending">Spending</option><option value="income">Income</option>
               </select></label>
@@ -71,36 +135,19 @@
             </fieldset>
             <div class="transaction-filter-popover-actions">
               <button type="button" class="text-button" id="reset-alltime-filters">Reset</button>
-              <button type="submit" class="primary-button">Apply</button>
             </div>
           </form>
         </div>
         <div id="alltime-sort"></div>
-      </div>
-      <div class="alltime-tag-bar">
-        <details id="tag-picker" class="alltime-tag-picker">
-          <summary class="transaction-filter-button">Tags <span id="selected-tag-count" hidden></span></summary>
-          <div class="alltime-tag-popover">
-            <label class="form-field"><span>Find a tag</span><input id="tag-search" type="search" placeholder="Bike, tools, apparel…" autocomplete="off" /></label>
-            <p class="alltime-hint">Select existing labels. Matching transactions are counted once.</p>
-            <div id="tag-options" class="alltime-tag-options" role="group" aria-label="Tags"></div>
-            <button id="close-tag-picker" type="button" class="text-button">Done</button>
-          </div>
-        </details>
-        <div class="alltime-tag-mode" role="group" aria-label="Combine selected tags">
-          <button type="button" data-tag-mode="any" aria-pressed="true">Match any (OR)</button>
-          <button type="button" data-tag-mode="all" aria-pressed="false">Match all (AND)</button>
-        </div>
-        <span class="alltime-hint" id="tag-query-hint">No tags selected · all tags included</span>
       </div>
       <div class="transaction-active-filters" id="active-filters" hidden>
         <div class="transaction-filter-chips" id="filter-chips"></div>
         <button type="button" id="clear-alltime-filters" class="text-button">Clear all</button>
       </div>
       <details class="alltime-guide"><summary>About tags &amp; groups</summary>
-        <p>Tags describe recurring interests such as Bike or Tools. A group bundles a specific trip or project, such as Hawaii 2022 or Canyon Aeroad. Each transaction can have many tags but only one group. Use the Group selector above the list to narrow this search, including its totals and category breakdown.</p>
+        <p>Tags describe recurring interests such as Bike or Tools. A group bundles a specific trip or project, such as Hawaii 2022 or Canyon Aeroad. Each transaction can have many tags but only one group. Choose Group inside Filters to narrow this search, including its totals and category breakdown.</p>
         <p>Use Edit multiple to select purchases and assign a group or add tags together. Existing tags named with “(group)” stay as tags until you choose to move their transactions into a group.</p>
-        <p>Choose Bike and Apparel with Match all to find bike clothing, or Match any to find either interest. Add a category or date filter to narrow the same results. “All time” covers the history you have imported into Ledger.</p>
+        <p>Inside Filters, choose Bike and Apparel with Match all to find bike clothing, or Match any to find either interest. Every selection updates the results and totals immediately, together with category, account, and date filters. Each matching transaction is counted once. “All time” covers the history you have imported into Ledger.</p>
       </details>
     </section>
     <section class="alltime-summary" aria-label="Totals for matching transactions">
@@ -125,6 +172,7 @@
         <div id="category-breakdown"></div>
       </aside>
     </div>
+    </section>
   </main>
     <dialog class="transaction-form-dialog" id="transaction-form-dialog" aria-labelledby="form-title">
       <form class="transaction-form" id="transaction-form">
@@ -212,11 +260,11 @@
             <label class="form-field form-field--wide">
               <span>Budget treatment</span>
               <select id="field-internal-transfer-treatment" name="internalTransferTreatment">
-                <option value="automatic">Automatic</option>
+                <option value="automatic">Eligible for detection</option>
                 <option value="internal-transfer">Internal transfer — exclude from budget</option>
                 <option value="include-in-budget">Count normally — override automatic detection</option>
               </select>
-              <small>Automatic detects matching movements between your bank and credit accounts.</small>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
             </label>
           </div>
           <p class="form-error" id="form-error" role="alert" hidden></p>
