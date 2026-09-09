@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import re
 import tempfile
 import threading
 import unittest
@@ -94,6 +95,31 @@ class TransactionsPageContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.page = PageContract("transactions.html")
 
+    def test_tags_wrap_without_a_nested_scroll_area(self) -> None:
+        css = (APP_DIR / "transactions.css").read_text(encoding="utf-8")
+        tags = re.search(r"\.alltime-tag-options\s*\{([^}]+)\}", css)
+        self.assertIsNotNone(tags)
+        self.assertIn("flex-wrap: wrap", tags[1])
+        self.assertIn("max-height: none", tags[1])
+        self.assertIn("overflow: visible", tags[1])
+        self.assertNotIn("overflow-y:", tags[1])
+        panel = re.search(r"\.transactions-query \.transaction-filter-popover\s*\{([^}]+)\}", css)
+        self.assertIsNotNone(panel)
+        self.assertIn("overflow-y: auto", panel[1])
+
+    def test_all_transaction_filter_variants_have_no_apply_button(self) -> None:
+        html = (APP_DIR / "transactions.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="refresh-transactions"', html)
+        self.assertIn('id="alltime-date-error"', html)
+        for filename in ("transactions.html", "index.html", "upload.html", "settings.html", "classifications.html"):
+            with self.subTest(page=filename):
+                page = (APP_DIR / filename).read_text(encoding="utf-8")
+                self.assertNotRegex(page, r'id="apply-[^"]*filters"')
+        for filename in ("transactions.js", "app.js", "upload.js", "settings.js"):
+            with self.subTest(controller=filename):
+                self.assertIn("transactionUi.bindLiveTransactionFilters(",
+                              (APP_DIR / filename).read_text(encoding="utf-8"))
+
     def test_shared_dependencies_load_before_the_page_controller(self) -> None:
         scripts = [
             (urlsplit(attributes["src"]).path, attributes)
@@ -102,13 +128,41 @@ class TransactionsPageContractTests(unittest.TestCase):
         ]
         sources = [source for source, _ in scripts]
         self.assertEqual(sources.count("/transactions.js"), 1)
-        for dependency in ("/theme.js", "/transaction-ui.js", "/transactions-model.js"):
+        for dependency in ("/theme.js", "/transaction-ui.js", "/transactions-model.js", "/group-comparison.js"):
             self.assertEqual(sources.count(dependency), 1)
             self.assertLess(sources.index(dependency), sources.index("/transactions.js"))
         for source, attributes in scripts:
-            if source in {"/transaction-ui.js", "/transactions-model.js", "/transactions.js"}:
+            if source in {"/transaction-ui.js", "/transactions-model.js", "/group-comparison.js", "/transactions.js"}:
                 self.assertIn("defer", attributes, source)
                 self.assertNotIn("async", attributes, source)
+
+    def test_comparison_is_an_accessible_workspace_not_an_independent_transaction_editor(self) -> None:
+        elements = {attrs.get("id"): (tag, attrs) for tag, attrs in self.page.elements if attrs.get("id")}
+        for tab_id, panel_id in (("browse-transactions-tab", "browse-transactions-panel"),
+                                 ("compare-groups-tab", "group-comparison-panel")):
+            self.assertEqual(elements[tab_id][1]["role"], "tab")
+            self.assertEqual(elements[tab_id][1]["aria-controls"], panel_id)
+            self.assertEqual(elements[panel_id][1]["aria-labelledby"], tab_id)
+        self.assertIn("hidden", elements["group-comparison-panel"][1])
+        self.assertIn("disabled", elements["compare-groups-tab"][1])
+        self.assertEqual(elements["comparison-category-table"][1]["tabindex"], "0")
+        self.assertEqual(sum(attrs.get("id") == "transaction-form-dialog" for _, attrs in self.page.elements), 1)
+        controller = (APP_DIR / "group-comparison.js").read_text(encoding="utf-8")
+        self.assertNotIn("fetch(", controller)
+        self.assertNotIn("innerHTML", controller)
+        self.assertIn("onInspect(", controller)
+
+    def test_comparison_colors_are_theme_tokens_and_narrow_tables_scroll_inside_the_card(self) -> None:
+        css = (APP_DIR / "group-comparison.css").read_text(encoding="utf-8")
+        theme = (APP_DIR / "styles.css").read_text(encoding="utf-8")
+        tokens = set(re.findall(r"var\((--[\w-]+)\)", css)) - {"--group-color"}
+        for token in tokens:
+            self.assertIn(f"{token}:", theme, token)
+        self.assertNotRegex(css, r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(")
+        self.assertIn("@media (max-width: 650px)", css)
+        self.assertIn("overflow-x: auto", css)
+        self.assertIn("position: sticky", css)
+        self.assertIn("overflow-wrap: anywhere", css)
 
     def test_every_primary_page_has_the_same_navigation_and_correct_current_page(self) -> None:
         destinations = ["/", "/transactions", "/import", "/classifications", "/settings"]

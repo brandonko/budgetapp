@@ -64,7 +64,7 @@ class ExtensionStructureTests(unittest.TestCase):
         manifest = json.loads((EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertIn("https://card.apple.com/*", manifest["host_permissions"])
         self.assertNotIn("*://*.apple.com/*", manifest["host_permissions"])
-        self.assertEqual(manifest["version"], "0.7.0")
+        self.assertGreaterEqual(tuple(map(int, manifest["version"].split("."))), (0, 8, 0))
         bridge = (EXTENSION_ROOT / "shared" / "ledger_bridge.js").read_text(
             encoding="utf-8"
         )

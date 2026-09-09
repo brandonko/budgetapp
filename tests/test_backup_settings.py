@@ -330,6 +330,29 @@ class BackupApiTests(unittest.TestCase):
 
 
 class SettingsPageTests(unittest.TestCase):
+    def test_internal_transfer_guidance_uses_shared_collapsed_info_panel(self) -> None:
+        html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
+        card = html.split('id="internal-transfers-settings-panel"', 1)[1].split(
+            '</article>', 1
+        )[0]
+        self.assertIn('class="settings-card internal-transfer-settings-card"', card)
+        self.assertIn(
+            '<details class="import-note import-guide internal-transfer-guide">', card
+        )
+        guide = card.split('<details', 1)[1].split('</details>', 1)[0]
+        self.assertIn('<summary>', guide)
+        self.assertIn('How transfer detection works', guide)
+        self.assertIn('class="import-guide-content"', guide)
+        for heading in (
+            'How pairs are found', 'You review before saving', 'Reviewing older data'
+        ):
+            self.assertIn(f'<h3>{heading}</h3>', guide)
+        self.assertIn('Nothing changes until you confirm', guide)
+        self.assertIn('Count normally', guide)
+        self.assertIn('id="find-internal-transfers"', card.split('<details', 1)[0])
+        after_guide = card.split('</details>', 1)[1]
+        self.assertIn('id="transfer-review-status" role="status" hidden', after_guide)
+
     def test_exports_is_the_first_accessible_settings_tab(self) -> None:
         html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
         javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
@@ -361,7 +384,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('view.textContent = "View transactions"', javascript)
         self.assertIn('id="import-history-dialog"', html)
         self.assertIn('id="import-history-edit-form"', html)
-        self.assertIn('<script src="/transaction-ui.js?v=20260906-groups-1" defer>', html)
+        self.assertRegex(html, r'<script src="/transaction-ui\.js\?v=[^"]+" defer>')
         self.assertIn("historyBulk.render", javascript)
         self.assertIn("transactionUi.transactionFromEditor", javascript)
         self.assertIn('method: "PUT"', javascript)
@@ -483,8 +506,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("classification-add-rule", javascript)
         self.assertIn("openUnclassifiedDialog", javascript)
         self.assertNotIn('id="save-classifications-button"', html)
-        self.assertIn('/settings.js?v=20260905-taxonomy-delete-1', html)
-        self.assertIn('/styles.css?v=20260905-taxonomy-delete-1', html)
+        self.assertRegex(html, r'<script src="/settings\.js\?v=[^"]+" defer></script>')
+        self.assertRegex(html, r'href="/styles\.css\?v=[^\"]+"')
         self.assertIn("persistClassifications", javascript)
         self.assertIn('smallAction("Edit"', javascript)
         self.assertIn('smallAction("Cancel"', javascript)
