@@ -42,6 +42,14 @@ window.addEventListener("message", (event) => {
     message = { action: "ledgerStartEbayImport", data: event.data.payload };
   } else if (event.data.action === "cancelEbayImport") {
     message = { action: "ledgerCancelEbayImport", data: event.data.payload };
+  } else if (event.data.action === "startWalmartImport") {
+    message = { action: "ledgerStartWalmartImport", data: event.data.payload };
+  } else if (event.data.action === "cancelWalmartImport") {
+    message = { action: "ledgerCancelWalmartImport", data: event.data.payload };
+  } else if (event.data.action === "startCapitalOneImport") {
+    message = { action: "ledgerStartCapitalOneImport", data: event.data.payload };
+  } else if (event.data.action === "cancelCapitalOneImport") {
+    message = { action: "ledgerCancelCapitalOneImport", data: event.data.payload };
   } else if (event.data.action === "startAppleCardImport") {
     message = { action: "ledgerStartAppleCardImport", data: event.data.payload };
   } else if (event.data.action === "cancelAppleCardImport") {
@@ -56,7 +64,9 @@ window.addEventListener("message", (event) => {
     const isVenmo = event.data.action.includes("Venmo");
     const isEbay = event.data.action.includes("Ebay");
     const isAppleCard = event.data.action.includes("AppleCard");
-    const errorAction = isCreditKarma ? "creditKarmaError" : isAliExpress ? "aliExpressError" : isVenmo ? "venmoError" : isEbay ? "ebayError" : isAppleCard ? "appleCardError" : "error";
+    const isWalmart = event.data.action.includes("Walmart");
+    const isCapitalOne = event.data.action.includes("CapitalOne");
+    const errorAction = isCapitalOne ? "capitalOneError" : isWalmart ? "walmartError" : isCreditKarma ? "creditKarmaError" : isAliExpress ? "aliExpressError" : isVenmo ? "venmoError" : isEbay ? "ebayError" : isAppleCard ? "appleCardError" : "error";
     if (chrome.runtime.lastError) {
       sendToPage(errorAction, { message: chrome.runtime.lastError.message });
     } else if (!response?.success) {
@@ -64,7 +74,7 @@ window.addEventListener("message", (event) => {
         message: response?.error || "The extension could not start the import.",
       });
     } else {
-      sendToPage(isCreditKarma ? "creditKarmaStarted" : isAliExpress ? "aliExpressStarted" : isVenmo ? "venmoStarted" : isEbay ? "ebayStarted" : isAppleCard ? "appleCardStarted" : "started");
+      sendToPage(isCapitalOne ? "capitalOneStarted" : isWalmart ? "walmartStarted" : isCreditKarma ? "creditKarmaStarted" : isAliExpress ? "aliExpressStarted" : isVenmo ? "venmoStarted" : isEbay ? "ebayStarted" : isAppleCard ? "appleCardStarted" : "started");
     }
   });
 });
@@ -98,6 +108,14 @@ chrome.runtime.onMessage.addListener((message) => {
     sendToPage("ebayProgress", { ...message.data, status: "scraping" });
   } else if (message?.action === "ledgerEbayImportError") {
     sendToPage("ebayError", message.data);
+  } else if (message?.action === "ledgerWalmartImportProgress") {
+    sendToPage("walmartProgress", message.data);
+  } else if (message?.action === "ledgerWalmartImportError") {
+    sendToPage("walmartError", message.data);
+  } else if (message?.action === "ledgerCapitalOneImportProgress") {
+    sendToPage("capitalOneProgress", message.data);
+  } else if (message?.action === "ledgerCapitalOneImportError") {
+    sendToPage("capitalOneError", message.data);
   } else if (message?.action === "ledgerAppleCardImportProgress") {
     sendToPage("appleCardProgress", { ...message.data, status: "scraping" });
   } else if (message?.action === "ledgerAppleCardImportError") {

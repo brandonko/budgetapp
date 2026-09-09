@@ -34,12 +34,26 @@ monthly net chart with green surpluses and red deficits. The browser remembers
 the selected view, period, and annual category/subcategory filter when navigating
 to another page and back.
 
-Use the top-right navigation menu to move between the dashboard, Import data,
-Classifications, and Settings. The first Settings tab creates timestamped snapshots in
-`data/backups/`, lists their dates and transaction counts, and restores a chosen
-snapshot after confirmation. Ledger creates a safety backup of the current CSV
-before every restore. Individual backups can be renamed without overwriting an
-existing backup, or permanently deleted after a separate confirmation. The
+Use **Transactions** at `/transactions` to explore the complete history without
+selecting a month or year. Description, category/subcategory, account/provider,
+optional inclusive dates, and multi-tag Any/All filters update matching spending,
+income, net, and the category breakdown. The list uses the shared transaction
+rows, Filters/sort toolbar, and editor, with 50 transactions per page; totals
+always cover the complete result. Groups such as `Hawaii 2022` identify concrete
+trips or projects; each transaction can have one group and many tags. Use the
+searchable group picker in the editor to choose or create one without duplicates.
+Group filters also narrow the all-time totals. Existing `(group)` tags stay unchanged.
+Overlapping tags never count a transaction twice.
+
+All transaction lists expose **Edit multiple** with independent selection, explicit
+field actions, and a before/after confirmation. Add/remove tags without replacing
+the others, assign or clear a group, or update any other user-editable field.
+Import and classification preview edits remain staged until their final confirmation.
+
+Use the top-right navigation menu to move between the dashboard, Transactions,
+Import data, Classifications, and Settings. The first Settings tab exports an
+inclusive date range as a portable CSV. Ledger also retains automatic safety
+snapshots in `data/backups/` before destructive or bulk changes. The
 dedicated Classifications page manages ordered regular-expression
 rules that assign categories and subcategories to future imports. Category and
 subcategory are available as separate match fields. Each rule also supports
@@ -48,7 +62,10 @@ These rules are persisted beside the transaction CSV in `classifications.json` a
 exported as JSON. The editor shows one classification at a time with pagination.
 Classification and rule inputs appear only in their individual edit modes, and
 each inline Save persists the complete classification document immediately.
-General settings remain a placeholder.
+The **Preferences** tab stores browser-local display choices. It includes dark
+mode and a slider controlling whether dashboard totals begin abbreviating at
+thousands, millions, billions, or trillions; abbreviations are disabled with
+None and begin at millions by default.
 
 Use **Review unclassified** to open every blank-subcategory transaction in a
 filterable modal without leaving the Classifications page or disturbing the

@@ -44,6 +44,32 @@ def transaction(**overrides):
 
 
 class ClassificationEngineTests(unittest.TestCase):
+    def test_classification_controls_use_the_theme_surface(self) -> None:
+        css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
+
+        for selector in (
+            ".classification-action-field {",
+            ".classification-action-field > input,",
+            ".classification-field input,",
+            ".classification-rule {",
+        ):
+            style = css.split(selector, 1)[1].split("}", 1)[0]
+            self.assertIn("background: var(--surface)", style)
+
+    def test_explicit_themes_define_independent_surface_palettes(self) -> None:
+        css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
+        light_root = css.split(":root {", 1)[1].split("}", 1)[0]
+        dark_root = css.split('html[data-theme="dark"] {', 1)[1].split("}", 1)[0]
+
+        self.assertIn("color-scheme: dark", dark_root)
+        self.assertIn("--canvas: #101512", dark_root)
+        self.assertIn("--surface: #18201b", dark_root)
+        self.assertNotIn("--surface: #ffffff", dark_root)
+        self.assertIn("color-scheme: light", light_root)
+        self.assertIn("--canvas: #f3f5f2", light_root)
+        self.assertIn("--surface: #ffffff", light_root)
+        self.assertNotIn("@media (prefers-color-scheme: dark)", css)
+
     def test_transaction_tags_are_trimmed_and_deduplicated_case_insensitively(self) -> None:
         normalized = normalize_transaction(
             transaction(tags=" Travel, travel,  Work   Trip ,"), "transaction"
