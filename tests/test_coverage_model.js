@@ -11,6 +11,20 @@ test("account identity includes provider and type, with conservative whitespace/
   assert.equal(result.totalRows, 4);
   assert.deepEqual(result.accounts.map((account) => account.count).sort(), [1, 1, 2]);
 });
+test("account identity and search do not depend on the browser's Turkish locale", () => {
+  const fs = require("node:fs"), vm = require("node:vm");
+  const context = vm.createContext({});
+  vm.runInContext("const nativeLocaleLower = String.prototype.toLocaleLowerCase; String.prototype.toLocaleLowerCase = function () { return nativeLocaleLower.call(this, 'tr'); };", context);
+  vm.runInContext(fs.readFileSync(require.resolve("../app/coverage-model.js"), "utf8"), context);
+  const result = context.LedgerCoverageModel.buildCoverage([
+    row({ provider: "FIRST", accountName: "IRA" }),
+    row({ provider: "first", accountName: "ira" }),
+  ], { ...options, query: "IRA" });
+  assert.equal(result.totalAccounts, 1);
+  assert.equal(result.accounts.length, 1);
+  assert.equal(result.accounts[0].count, 2);
+});
+
 test("all occurrences count, including refunds/transfers and distinct years", () => {
   const result = buildCoverage([row(), row(), row({ flags: "refunded" }), row({ flags: "internal-transfer" }),
     row({ date: "2025-12-31" }), row({ date: "2026-09-07" })], options);

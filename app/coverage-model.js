@@ -6,7 +6,7 @@
   else root.LedgerCoverageModel = model;
 })(typeof window === "undefined" ? globalThis : window, function () {
   const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-  const key = (value) => text(value).toLocaleLowerCase();
+  const key = (value) => text(value).toLowerCase();
   const day = (value) => Date.parse(`${value}T00:00:00Z`);
   function validDate(value) {
     return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
