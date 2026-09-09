@@ -49,6 +49,9 @@ test("default latest month ignores excluded rows and differences never divide by
   assert.equal(model.difference(15, 10).percent, 50);
 });
 test("drilldown links round-trip only whitelisted filters, with strict date validation", () => {
+  const longCategory = "Household & home / ".repeat(40);
+  const longUrl = model.drilldownUrl(focus, { category: longCategory, type: "spending" });
+  assert.equal(model.parseDrilldown(longUrl.split("?")[1]).category, longCategory);
   const url = model.drilldownUrl(focus, { type: "spending", category: "Food & drink" });
   assert.deepEqual(model.parseDrilldown(url.split("?")[1]), { ...focus, category: "Food & drink", type: "spending", showExcluded: false });
   assert.equal(model.parseDrilldown("?report=other&startDate=2026-05-01&endDate=2026-05-31"), null);

@@ -85,7 +85,7 @@
     const range = { startDate: params.get("startDate"), endDate: params.get("endDate") };
     const type = params.get("type") || "all";
     const category = params.get("category") || "";
-    if (validateRange(range) || !["all", "income", "spending"].includes(type) || category.length > 200) return null;
+    if (validateRange(range) || !["all", "income", "spending"].includes(type)) return null;
     return { ...range, category, type, showExcluded: type === "all" };
   }
   return Object.freeze({ validDate, validateRange, days, previousPeriod, previousYear, defaultPeriods,

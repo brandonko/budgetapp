@@ -1,4 +1,11 @@
 /* Shared groups and bulk editing. All surfaces inherit the active theme. */
+.import-transfer-updates { margin: 12px 0 24px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-strong); color: var(--ink); }
+.import-transfer-updates summary { font-weight: 650; cursor: pointer; }
+.import-transfer-updates > p, .transfer-change-details { color: var(--muted); font-size: 13px; }
+.transfer-change-details { grid-column: 2 / -1; overflow-wrap: anywhere; }
+.transfer-change-details p { margin: 4px 0; }
+#transfer-review-footer { flex-shrink: 0; }
+#transfer-review-footer[hidden] { display: none; }
 .transaction-group-picker { position: relative; min-width: 0; }
 .transaction-group-picker > input { width: 100%; min-height: 40px; padding: 10px 28px 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
 .transaction-group-picker::after { content: "⌄"; position: absolute; right: 12px; top: 10px; color: var(--muted); pointer-events: none; }
@@ -6,14 +13,36 @@
 .transaction-group-options { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; padding: 5px; max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
 .transaction-group-options button { display: block; width: 100%; padding: 10px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); text-align: left; font: inherit; font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
 .transaction-group-options button:hover, .transaction-group-options button.is-focused, .transaction-group-options button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-deep); }
+.transaction-value-field { min-width: 0; }
+.transaction-value-field .transaction-group-picker > input { font-size: 14px; font-weight: 500; min-height: 44px; padding: 0 32px 0 13px; }
+.transaction-value-field .transaction-group-picker::after { top: 50%; transform: translateY(-50%); }
+.transaction-group-options button.transaction-value-create { position: sticky; bottom: -5px; color: var(--accent-deep); background: var(--surface); border-top: 1px dashed var(--line); margin-top: 4px; font-weight: 650; }
+.transaction-group-options button.transaction-value-create:hover, .transaction-group-options button.transaction-value-create.is-focused { background: var(--accent-soft); }
+.transaction-group-options.opens-up { top: auto; bottom: calc(100% + 4px); }
 .transaction-description .transaction-group-badge { display: table; max-width: 100%; margin-top: 7px; padding: 4px 8px; border-left: 3px solid var(--viz-1); border-radius: 3px; background: var(--surface-strong); color: var(--ink); font-weight: 650; letter-spacing: 0; white-space: normal; overflow-wrap: anywhere; }
 .transaction-bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; flex: 0 0 auto; gap: 10px 16px; padding: 12px 32px; border-bottom: 1px solid var(--line); background: var(--surface); }
-.transaction-group-filter { width: 200px; max-width: 100%; }
-.transaction-group-filter > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-.transaction-group-filter .transaction-group-picker > input { min-height: 36px; font-size: 12px; }
+.transaction-bulk-toolbar[hidden] { display: none; }
+.transaction-list-header-actions { display: flex; flex-direction: column; align-items: flex-end; flex: 0 0 auto; gap: 10px; }
+.transaction-list-header-actions .bulk-mode-button { min-height: 34px; padding: 7px 11px; font-size: 12px; white-space: nowrap; }
+.transaction-list-header-actions .bulk-mode-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent); }
+.dialog-header:has(.transaction-list-header-actions) { gap: 16px; }
+.dialog-header > div:first-child { min-width: 0; }
+.transaction-filter-popover { max-height: min(560px, 65vh); overflow-y: auto; }
+.transaction-filter-popover .transaction-filter-popover-actions { position: sticky; bottom: -18px; margin: 0 -18px -18px; padding: 12px 18px; background: var(--surface); border-top: 1px solid var(--line); }
+.classification-preview-filters { position: relative; }
+.classification-preview-filters > summary { display: flex; align-items: center; list-style: none; cursor: pointer; }
+.classification-preview-filters > summary::-webkit-details-marker { display: none; }
+.classification-preview-filters .transaction-filter-popover { top: calc(100% + 6px); right: 0; width: 260px; max-width: calc(100vw - 80px); }
+.classification-preview-filters .transaction-filter-wide > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.classification-preview-filters .transaction-filter-popover-actions { margin-top: 16px; }
 .transaction-bulk-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
 .transaction-bulk-controls button { min-height: 34px; padding: 7px 11px; font-size: 12px; }
 .bulk-selection-count { color: var(--muted); font-size: 12px; }
+.transaction-bulk-controls .bulk-delete-button:disabled { opacity: 0.5; cursor: not-allowed; }
+.bulk-delete-dialog .form-header { gap: 16px; }
+.bulk-delete-dialog .dialog-subtitle { max-width: 60ch; line-height: 1.6; }
+.bulk-delete-list .transaction-row { border-color: var(--line); }
+.bulk-delete-list .transaction-row:last-child { border-bottom: 0; }
 .bulk-import-hint { flex-basis: 100%; color: var(--muted); margin: 0; font-size: 12px; line-height: 1.5; }
 .transaction-row--bulk-selectable { grid-template-columns: 24px 48px minmax(0, 1fr) auto; }
 .bulk-row-selection { display: flex; justify-content: center; align-items: center; cursor: pointer; }
@@ -48,7 +77,6 @@
 .alltime-list-card .transaction-bulk-toolbar { padding: 14px 24px; }
 @media (max-width: 650px) {
   .transaction-bulk-toolbar { padding: 12px 16px; }
-  .transaction-group-filter { flex: 1 1 140px; }
   .transaction-bulk-controls { justify-content: flex-start; }
   .transaction-row--bulk-selectable, #import-review-list .transaction-row--bulk-selectable { grid-template-columns: 20px 40px minmax(0, 1fr); gap: 10px; }
   .transaction-row--bulk-selectable .transaction-actions, #import-review-list .transaction-row--bulk-selectable .transaction-actions { grid-column: 3; }

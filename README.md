@@ -17,7 +17,7 @@ The dashboard includes:
 - A shared navigation menu for the dashboard, transactions, data imports, classifications, and settings
 - Manual transaction creation, editing, multi-tag labeling, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
-- Direct Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card imports through a companion Chrome extension
+- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, and Capital One through a companion Chrome extension
 - Manual Apple Card CSV fallback with editable account details
 - Automatic and manually overridable internal-transfer exclusion
 - Ordered, regular-expression classification rules for import categories and subcategories
@@ -69,13 +69,16 @@ Raw financial data is private and must not be committed to Git. This
 repository's `.gitignore` excludes both `raw_data_files/` and `data/`.
 
 With Ledger running, open <http://127.0.0.1:8000/import> or select **Import
-data** from the dashboard. The page presents seven sources as tabs so only one
+data** from the dashboard. The page presents eight sources as tabs so only one
 importer is visible at a time:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
-  amounts. Its four default-enabled filters omit Amazon, AliExpress/Alipay,
-  Venmo, and eBay transactions so they can be replaced by richer source data. Each filter
+  amounts. Its five default-enabled filters omit Amazon, AliExpress/Alipay,
+  Venmo, eBay, and Walmart transactions so they can be replaced by richer source data. Each filter
   can be disabled for an individual import.
+  The Walmart filter matches `walmart`, `wal-mart`, `wal mart`, or
+  `wm supercenter` (case-insensitive). Turn it off to include membership charges,
+  refunds, or purchases not covered by itemized imports.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
   tax multiplier. Its editable payment-account defaults are `Prime VISA`,
   `CREDIT CARD`, and `chase`.
@@ -91,6 +94,15 @@ importer is visible at a time:
   item. Order totals are proportionally allocated across items so shipping, tax,
   and discounts remain reconciled. Its editable defaults are `eBay`, `CREDIT CARD`,
   and `eBay`.
+- **Walmart** opens signed-in Walmart.com purchase history, including Walmart+
+  purchases. It creates one Shopping row per charged item line, allocating the
+  receipt total (tax, fees, tips, and discounts included) without multiplying
+  quantities twice. Defaults are `Walmart`, `CREDIT CARD`, and `Walmart`; replace
+  these with the actual payment account. Completed USD receipts only; pending,
+  cancelled, and returned/refunded orders are explicitly reported as skipped.
+  Import uncovered charges/refunds from your account instead. Membership fees
+  are not part of this order-history export. Dates are inclusive order dates,
+  not delivery or bank posting dates.
 - **Apple Card** opens `card.apple.com`, selects **Export Transactions**, applies
   the chosen dates and CSV format, and captures the official export. A manual
   CSV picker remains available as a fallback. Purchases are expenses, refunds
@@ -111,8 +123,35 @@ the file; the page's date selectors apply only to the automatic workflow.
 
 ### Companion browser extension
 
+**Capital One:** choose its tab, set an inclusive date range and account labels,
+then click **Import Capital One transactions**. Requires companion **0.9.1+**;
+reload it in `chrome://extensions` and accept the two Capital One banking-site
+permissions. Sign in, complete verification, and open the account yourself.
+The collector attempts recognizable **Download transactions / Export** controls,
+fills explicit start/end fields, selects CSV, and captures that export for review.
+An unfamiliar form is left for you to operate manually; capture remains active.
+If capture is unavailable, use **Use a downloaded Capital One CSV** in that tab.
+Both paths apply the selected dates to **Transaction Date**, not Posted Date.
+Include the entire requested range in the bank export; Ledger cannot recover
+transactions the bank did not export. Import one account at a time and change
+account type to `BANK` for checking/savings (default: `CREDIT CARD`).
+
+Supported Capital One layouts have `Transaction Date, Description, Debit, Credit`
+(credit cards, plus optional Category) or `Transaction Date, Transaction Description,
+Transaction Amount, Transaction Type` (bank accounts, explicit Debit/Credit types).
+Debits become positive expenses; credits become negative money received. Retain
+source categories or use Uncategorized; classification rules run before review.
+Account/card numbers and balances are discarded. Invalid formats, ambiguous
+amounts and malformed rows stop the entire source import without writing any
+transactions. The common review supports duplicates, editing and cancellation.
+No cookies, credentials or session tokens enter the Capital One page from Ledger.
+The website integration is provisional until verified against your signed-in
+export form; automated tests use synthetic fixtures, not a live bank account.
+CSV layout references: [Capital One credit parser](https://github.com/mtlynch/beancount-capitalone)
+and [Capital One checking CSV example](https://github.com/wgwz/capital-one-recurring-expenses).
+
 The Import data page supports selecting a date range and importing from an
-authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, or Apple Card session without first saving a file. This
+authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, or Apple Card session without first saving a file. This
 requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
@@ -126,7 +165,7 @@ The Credit Karma action opens its Transactions page, collects **All
 transactions** for the range in the BudgetLens bundle shape, and sends it to the
 normal Credit Karma parser. The Amazon, AliExpress, and eBay actions open order history and collect
 item details. Venmo opens Statements and downloads official statement CSV data in monthly
-segments. Apple Card drives the official date-range CSV export form. All six use the browser's existing signed-in session; Ledger never
+segments. Apple Card and Capital One drive CSV export forms. Website importers use the browser's existing signed-in session; Ledger never
 receives site credentials or cookies. Progress is shown on the Import data
 page, and data is sent through a random, one-hour import session rather than
 being left in Downloads. Parsed rows are staged in a review modal before the
@@ -138,6 +177,13 @@ and duplicates can be deliberately selected before confirming the import.
 The review modal uses the same searchable, filterable, and sortable transaction
 toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
 toggles sit immediately below that toolbar.
+
+Closing an uncommitted review with Cancel, X, Escape, or an outside click asks
+before discarding the imported data. Cancel that prompt to keep reviewing with
+your edits and selections intact. Confirming discard saves nothing.
+Successful individual and bulk changes show an **Edited** badge, helping you
+track manually reviewed rows alongside **No rule matched** or **Duplicate**.
+This badge belongs only to the current review; it does not add a saved tag.
 
 Before duplicate detection and review, Ledger applies classifications saved
 on the dedicated **Classifications** page. If no rule matches, the importer-provided
@@ -162,6 +208,24 @@ source tab cancels that import. See
 [`ledger_data_importer_extension/README.md`](ledger_data_importer_extension/README.md)
 for implementation and attribution details.
 
+Walmart requires companion extension **0.9.1 or newer**. After updating the code,
+reload Ledger Data Importer in `chrome://extensions`, accept the Walmart site
+permission, restart the Python backend, and reload Ledger's Import data page.
+Keep the Walmart tab open. Its own Next-page controls drive collection; a passive
+observer reads the resulting history data and the collector reads receipt pages.
+It does not bypass login or CAPTCHA checks, replay signed requests, or send cookies,
+addresses, or payment-card details to Ledger. Missing receipt fields, stalled or
+repeated pages, and safety-limit failures stop collection rather than importing a
+misleading partial result. Website changes may require updates to the collector.
+
+Companion 0.9.1 fixes Walmart/Capital One helper loading across Chrome's separate
+page and extension contexts. If Walmart reports `Cannot read properties of
+undefined (reading 'history')`, reload Ledger Data Importer in `chrome://extensions`,
+refresh Ledger until the connected version is **0.9.1**, and start a fresh import.
+This extension-only fix does not require a backend restart or a transaction export
+for troubleshooting. Regression tests load actual manifest entries in separate
+globals and simulate Chrome's script-path deduplication.
+
 ### Duplicate handling
 
 Imports identify existing transactions by normalized `date` and `amount` while
@@ -177,8 +241,13 @@ the source transaction to be imported again.
 
 Open **Transactions** from the navigation menu or visit `/transactions` to search
 the complete transaction history, without choosing a reporting month or year.
-Search descriptions, filter category and subcategory, account name or provider,
-and combine tags using **Match any** (OR) or **Match all** (AND). Optional start
+Search descriptions and notes, filter category and subcategory, account name or provider,
+and combine tags inside **Filters** using **Match any** (OR) or **Match all** (AND).
+Filters update results and totals immediately, without Apply or Refresh buttons.
+**Reset** clears the popover filters immediately; closing it keeps your selections.
+Incomplete or reversed date ranges show an inline message and retain the last
+valid date range until corrected. Selected tags
+appear as removable chips and count toward the Filters indicator. Optional start
 and end dates narrow the results inclusively; leaving both blank searches all time.
 
 The matching spending, income, and net totals update with the filters, along
@@ -192,7 +261,7 @@ Groups are separate from tags: a transaction has at most one group, such as
 The transaction editor provides a searchable group selector with inline creation;
 names are whitespace-normalized and reused case-insensitively. New groups become
 durable only when the enclosing transaction or import is saved. A distinct group
-badge appears on transaction rows. Use the Group filter to narrow a list or the
+badge appears on transaction rows. Choose Group inside **Filters** to narrow a list or the
 all-time spending totals and category breakdown. Existing `(group)` tags are
 never converted or removed automatically.
 
@@ -201,7 +270,47 @@ Ledger's transaction dialogs. Results are shown 50 per page; the summary always
 includes all matching rows, not just the current page. Editing a transaction
 returns to the current search so it can be reviewed in context.
 
+### Compare groups
+
+On **Transactions → Compare groups**, choose two to four groups to compare bike
+builds, trips, or projects. Search the group picker and toggle names; totals
+update immediately. Leave the optional date range blank for all recorded history,
+or set a shared inclusive range. Comparison has its own scope: the Transactions
+search, tags, and account filters do not carry over. Your selection and range are
+remembered on this browser.
+
+Selected groups keep their colors when you add or remove another group. New
+selections take the next available palette color, and the assignments are
+remembered when you return. The same stable-color behavior applies to dashboard
+categories, subcategories, and year-over-year lines.
+
+Spending cards show exact totals and dollar differences from a reference group
+you can change. Unstacked horizontal bars share one dollar scale, while the
+category table shows where costs differ. Each category row has its own shared
+scale across groups. Negative expense credits reduce spending; refunded and
+internal-transfer rows are excluded from totals. Income is shown separately.
+A dash means there are no relevant transactions, not a zero-dollar total.
+Recorded activity dates describe the available data, not a guaranteed complete trip.
+
+Select **View transactions**, a spending bar, or a category amount to inspect
+the underlying group through the existing filter/sort and editing tools. **Back
+to comparison** returns to the updated comparison, preserving your previous
+Transactions search. Choosing groups and changing comparison controls never
+modify transaction data.
+
 ## Edit transaction data
+
+Category, subcategory, account name, account type, and provider use searchable
+dropdowns with existing values and an **Add new…** option inside the menu.
+Subcategory choices follow the selected category and include saved taxonomy values.
+Leave Category blank to search all subcategories. Choosing an existing subcategory
+fills its parent category (the first alphabetically if several share that name).
+An already-selected category stays unchanged. In bulk edits, the inferred Category
+is shown as an action and included in the before/after review.
+Existing names are reused case-insensitively. New values stay in the draft until
+you save the transaction or confirm its import; Cancel discards them. Changing
+category never silently clears the current subcategory or account details.
+The same dropdowns are available when editing multiple transactions.
 
 Open any category or the all-transactions view and select **Edit** on a
 transaction. Transaction-list dialogs can be sorted by date, description, or
@@ -223,10 +332,17 @@ the stale write instead of silently overwriting newer data.
 
 ### Edit multiple transactions
 
-Every transaction list has **Edit multiple**. Enter selection mode, check the
+Every transaction list has **Edit multiple**, beneath the modal's close button
+or in the Transactions results header. Selection controls appear only while
+editing multiple rows; **Done editing** returns to the normal list. Enter selection mode, check the
 rows you want, then choose **Edit selected**. **Select visible** selects only the
 currently displayed rows (the current page on the all-time dashboard). Selection
 survives filtering and sorting; the toolbar reports selected rows outside the view.
+Click a checkbox, then **Shift-click** another to select or clear every visible
+row between them. The range follows the displayed order and stays on the current
+page; hidden rows are not affected. Changing the displayed order resets the range
+anchor. This also works with import inclusion checkboxes, independently of bulk
+selection, and never saves anything until you confirm the enclosing action.
 Add only the fields you want to change and review the exact before/after values
 before confirming. All user-editable fields are available, including group, date,
 amount, notes, and refund/transfer treatment; `createdAt` remains immutable.
@@ -239,6 +355,15 @@ import and classification previews only update that staged review; final import
 or classification confirmation is still required. Import inclusion checkboxes
 and bulk-edit selection are independent. Cancel, Escape, X, and backdrop dismissal
 discard the bulk draft without writing anything.
+
+For saved transactions, **Delete selected** opens a confirmation listing the
+exact rows to remove, including selected rows hidden by filters or on another
+page. Nothing is deleted until **Delete permanently** is confirmed. The whole
+selection is revision-checked and deleted atomically after a safety backup.
+Cancelling keeps both your transactions and selection. Lists, totals, and import
+history counts update after deletion. In staged import, classification, and
+transfer reviews, deletion is intentionally unavailable; uncheck import rows
+to omit them, or close the review and delete saved rows from a transaction list.
 
 ## Exports and safety snapshots
 
@@ -382,24 +507,34 @@ date ranges with exact totals, daily averages, and category changes. See
   as a positive number even though those values remain negative in the CSV.
 - **Net total** is income minus spending. Positive values use a light-green
   background; negative values use a light-red background.
-- Transaction lists default to latest-first, can be filtered by description,
-  category, subcategory, tag, account name, and provider, and can be sorted by date,
+- Transaction lists default to latest-first, support description/notes search and
+  category, subcategory, tag, account name, and provider filters, and can be sorted by date,
   description, or absolute cost in ascending or descending order.
-- Transaction dialogs keep description search and sorting visible. Less-frequent
+- Transaction dialogs keep description/notes search and sorting visible. Search
+  is case-insensitive, matches literal text in either field, and supports phrases
+  across line breaks in notes without changing the saved text. Less-frequent
   filters live in a compact popover, with category beside its dependent
   subcategory and account name beside provider. Active filters appear as
   individually removable chips. The tag filter lists tags present in the
   transactions available to the current dialog.
+  Selections and Reset apply immediately while the popover stays open. This only
+  filters the list; import and transaction-edit confirmations remain explicit.
 - Transactions flagged `refunded` remain visible but contribute $0 to category,
   spending, income, net, and annual-chart totals.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
+- **Today** beside the period controls switches from any dashboard view to the
+  current month and year in your device's local time. It also works when that
+  month has no transactions, and the chosen period is remembered on navigation.
 - **Monthly** view filters the dashboard by a selected month and year. Its
   breakdown can group spending by top-level category or explore custom tags.
 - In tag mode, select multiple tags and choose **Match any** (logical OR) or
   **Match all** (logical AND). Matching totals count each transaction once even
   when it carries several selected tags. The monthly Tag Explorer is the full
   tag breakdown; it does not add a secondary category-card drill-down.
+  In Monthly and Annual, the three summary cards also reflect the tag query,
+  including tagged income. No selected tags or no matches shows zero; switching
+  back to By category restores the full-period totals.
 - **Annual** view summarizes the selected year. Category mode retains the
   category/subcategory stacked chart and exact-dollar table.
   Selecting a category redraws the monthly stacks by subcategory; selecting a
@@ -411,10 +546,9 @@ date ranges with exact totals, daily averages, and category changes. See
 - **Year over year** compares a start/end year range with selectable year
   lines. Switch between cumulative and per-month values, and compare spending,
   income, or net total. The lines and points smoothly move between chart modes.
-  **Comparable months** stops every line at the latest available month in the
-  newest selected year, while **All available months** shows each year through
-  its own latest imported month. The summary and exact-value table use the same
-  scope, and selecting a chart point opens that month's matching transactions.
+  Each year always continues through its own latest imported month. The summary
+  and exact-value table use the same scope, and selecting a chart point opens
+  that month's matching transactions.
 - Annual tag mode replaces overlapping stacks with one combined bar per month.
   Its table reports matching transaction counts and unique spending for each
   month and the full year. Annual mode does not repeat the monthly category-card
@@ -430,19 +564,50 @@ date ranges with exact totals, daily averages, and category changes. See
 
 ### Internal transfers and bill-payment reconciliation
 
-Ledger does not exclude every transaction categorized as `Transfer`. In the
-default **Automatic** treatment, it excludes only matched transactions from
+Ledger does not exclude every transaction categorized as `Transfer`. Detection
+proposes matched transactions from
 different accounts with equal and opposite nonzero amounts
 that post within five days. At least one side must be categorized as `Transfer`
 or have a description that looks like a transfer or account payment. The other
 side may retain any source category, because exports sometimes label bill
 payments as income or business services. This also handles credit-balance refunds
-that flow from a card back to a bank account. Matching is one-to-one and runs across the
-complete database, including month boundaries. Unmatched transfers, such as
+that flow from a card back to a bank account. Matching is one-to-one and works
+across month and year boundaries. Unmatched transfers, such as
 Venmo or Zelle payments, remain visible and affect the budget normally. Every
-transaction editor can instead mark a row as an internal transfer or force it
+transaction editor can mark a row as an internal transfer or force it
 to count normally. These choices are stored as `internal-transfer` and
 `include-in-budget` flags; the original amount always remains in the CSV.
+
+**Detection runs only during import review or when requested in Settings.**
+Confirmed internal-transfer flags are persisted in the CSV, so dashboard loads
+do not rerun matching. Automatically matched pairs share an internal pairing
+identifier in the existing `flags` column; older CSV layouts remain compatible.
+Changing a description or deleting a counterpart does not silently remove a saved
+exclusion. Choose **Eligible for detection**, **Internal transfer**, or **Count
+normally** in any transaction editor to control budget treatment explicitly.
+
+Imports match selected incoming rows against each other and existing unmatched
+transactions. The review shows any existing counterparts that will also be
+flagged. Editing or unchecking an incoming row recalculates the proposal. Only
+confirmation saves the selected rows and existing-side flags together, with a
+safety backup of an existing database. Cancelling saves nothing.
+
+Open **Settings → Internal transfers → Find internal transfers** to scan all
+saved transactions. The shared review modal supports search, filters, sorting,
+and staged individual or bulk edits, and shows the exact proposed changes.
+The **Proposed changes** toggle starts on; **Already flagged** starts off and
+reveals unchanged saved internal transfers. Both only affect visibility, not
+what gets saved. Editing a saved transfer moves it into proposed changes.
+Confirm to save them; Cancel, Escape, X, or clicking outside discards the review.
+Already excluded transactions and explicit Count normally overrides are not
+reused as matching candidates.
+
+After upgrading, Ledger asks for this one-time review before showing dashboard
+totals under the saved-only policy. Your existing CSV is not silently rewritten.
+Completion is recorded in `data/transactions.transfer-review.json`; transfer
+status itself stays in `transactions.csv`. A new database created by a confirmed
+import needs no extra review. If you later restore older data without saved
+transfer flags, run the Settings scan again.
 
 Excluded rows contribute $0 to monthly and annual summaries, categories,
 subcategories, charts, and breakdown tables. They remain available through
@@ -470,9 +635,11 @@ app/transactions.html
                     All-time search, tag/group exploration, and matching summaries
 app/transactions.js All-time transaction-page behavior using the shared transaction UI
 app/transactions-model.js
-                    All-time filter and summary calculations
+                    All-time filter, summary, and group comparison calculations
 app/transactions.css
                     Theme-aware styling for the all-time transaction dashboard
+app/group-comparison.js / .css
+                    Read-only multi-group comparison workspace and visualizations
 app/navigation.js  Shared accessible navigation-menu behavior
 app/settings.html  Tabbed backup, import-history, taxonomy, and general settings
 app/classifications.html
@@ -488,6 +655,8 @@ ledger_data_importer_extension/
                     AliExpress signed API client
   venmo_extension/  Venmo statement collector
   apple_card_extension/ Apple Card export-form automation
+  capitalone_extension/ Capital One CSV capture and export-form assistance
+  walmart_extension/ Walmart purchase-history and receipt collector
   shared/           Ledger bridge and import coordinator
 tests/              Isolated standard-library regression tests
 raw_data_files/     Optional private source exports (ignored by Git)

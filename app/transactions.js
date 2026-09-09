@@ -18,12 +18,13 @@
   const filterForm = byId("alltime-filter-popover");
   const editor = byId("transaction-form");
   const dialog = byId("transaction-form-dialog");
-  const tagPicker = byId("tag-picker");
   const field = (name) => filterForm.elements.namedItem(name);
   const state = { transactions: [], taxonomy: [], revision: null, page: 0, loaded: false,
     loading: false, busy: false, editing: null, editingRevision: null, returnFocus: null };
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { /* Storage is optional. */ }
+  let workspaceMode = saved.mode === "compare" ? "compare" : "browse";
+  let inspection = null;
   let filters = defaults();
   if (saved.filters && typeof saved.filters === "object") {
     for (const name of Object.keys(filters)) {
@@ -48,9 +49,24 @@
   const bulk = window.LedgerTransactionBulk.create({
     container: byId("alltime-list"), getTransactions: () => state.transactions,
     getRevision: () => state.revision, render: () => updateResults(false),
-    getGroupFilter: () => filters.group, onGroupChange: (value) => { filters.group = value; state.page = 0; },
-    onSaved: (payload) => { applyPayload(payload); status(`Updated ${payload.changed} transactions. A safety backup was created.`); },
+    getGroupFilter: () => filters.group,
+    onSaved: (payload) => {
+      applyPayload(payload);
+      const action = payload.deleted !== undefined ? `Deleted ${payload.deleted}` : `Updated ${payload.changed}`;
+      status(`${action} transactions.${payload.backup ? " A safety backup was created." : ""}`);
+    },
   });
+
+  const comparison = window.LedgerGroupComparison.create({ onInspect: (query) => {
+    inspection = { filters, page: state.page };
+    filters = { ...defaults(), group: query.group, category: query.category || "", startDate: query.startDate, endDate: query.endDate };
+    state.page = 0; workspaceMode = "browse"; bulk.reset();
+    byId("comparison-drilldown-context").textContent = `Inspecting ${query.group}${query.category ? ` · ${query.category === BLANK ? "Uncategorized" : query.category}` : ""}. Use the filters below to explore further.`;
+    byId("alltime-search").value = "";
+    populateFilterForm(); updateResults(); renderWorkspace();
+    byId("back-to-comparison").focus({ preventScroll: true });
+    byId("comparison-drilldown").scrollIntoView({ block: "start" });
+  } });
 
   function node(tag, text, className = "") {
     const element = document.createElement(tag);
@@ -67,8 +83,29 @@
   }
 
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ filters, sort: sortControl.value() })); }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ filters: inspection?.filters || filters, sort: sortControl.value(), mode: inspection ? "compare" : workspaceMode })); }
     catch { /* The view still works when browser storage is unavailable. */ }
+  }
+
+  function renderWorkspace() {
+    const ready = state.loaded && state.revision !== null;
+    const compare = ready && workspaceMode === "compare";
+    byId("browse-transactions-panel").hidden = compare;
+    byId("group-comparison-panel").hidden = !compare;
+    byId("comparison-drilldown").hidden = !inspection;
+    byId("compare-groups-tab").disabled = !ready;
+    for (const [id, selected] of [["browse-transactions-tab", !compare], ["compare-groups-tab", compare]]) {
+      byId(id).setAttribute("aria-selected", String(selected)); byId(id).tabIndex = selected ? 0 : -1;
+    }
+  }
+
+  function showWorkspace(mode) {
+    if (!state.loaded || state.revision === null || dialog.open || state.busy) return;
+    if (inspection) { filters = inspection.filters; state.page = inspection.page; inspection = null; }
+    workspaceMode = mode; bulk.reset(); closeFilters(); comparison.closePicker();
+    byId("alltime-search").value = filters.description;
+    populateFilterForm(); updateResults(false); renderWorkspace();
+    byId(mode === "compare" ? "compare-groups-tab" : "browse-transactions-tab").focus();
   }
 
   function status(message, error = false) {
@@ -101,13 +138,17 @@
   }
 
   function populateFilterForm(values = filters) {
+    byId("tag-search").value = "";
+    renderTagOptions();
     populateSelect("category", state.transactions.map((tx) => tx.category), values.category, "All categories", "Uncategorized");
     populateSubcategories(values.subcategory);
+    transactionUi.populateGroupFilter(field("group"), state.transactions, values.group);
     populateSelect("accountName", state.transactions.map((tx) => tx.accountName), values.accountName, "All accounts");
     populateSelect("provider", state.transactions.map((tx) => tx.provider), values.provider, "All providers");
     for (const name of ["startDate", "endDate", "type"]) field(name).value = values[name];
     field("showExcluded").checked = values.showExcluded;
     field("endDate").setCustomValidity("");
+    byId("alltime-date-error").hidden = true;
   }
 
   function closeFilters(returnFocus = false) {
@@ -129,6 +170,7 @@
     const search = key(byId("tag-search").value);
     const options = [UNTAGGED, ...availableTags()];
     const container = byId("tag-options");
+    let focusButton = null;
     container.replaceChildren();
     for (const tag of options) {
       const label = tag === UNTAGGED ? "Untagged" : tag;
@@ -138,14 +180,21 @@
         filters.tags = filters.tags.includes(value) ? filters.tags.filter((item) => item !== value) : [...filters.tags, value];
         // No transaction can be both tagged and untagged.
         if (filters.tags.includes(UNTAGGED)) filters.tagMode = "any";
-        updateResults();
-        renderTagOptions(value);
+        updateResults(true, value);
       });
       toggle.setAttribute("aria-pressed", String(filters.tags.includes(value)));
       container.append(toggle);
-      if (focusTag === value) toggle.focus();
+      if (focusTag === value) focusButton = toggle;
     }
     if (!container.children.length) container.append(node("p", "No matching tags.", "alltime-hint"));
+    document.querySelectorAll("[data-tag-mode]").forEach((element) => {
+      element.setAttribute("aria-pressed", String(element.dataset.tagMode === filters.tagMode));
+      element.disabled = element.dataset.tagMode === "all" && filters.tags.includes(UNTAGGED);
+    });
+    byId("tag-query-hint").textContent = filters.tags.length
+      ? filters.tags.map(tagLabel).join(filters.tagMode === "all" ? " AND " : " OR ")
+      : "No tags selected · all tags included";
+    focusButton?.focus({ preventScroll: true });
   }
 
   function renderFilterChips() {
@@ -156,7 +205,7 @@
       element.setAttribute("aria-label", `Remove ${label} filter`);
       chips.append(element);
     }
-    const labels = { description: "Description", category: "Category", subcategory: "Subcategory",
+    const labels = { description: "Search", category: "Category", subcategory: "Subcategory",
       accountName: "Account", provider: "Provider", startDate: "From", endDate: "Through", type: "Activity" };
     for (const [name, label] of Object.entries(labels)) {
       if (!filters[name] || (name === "type" && filters[name] === "all")) continue;
@@ -169,23 +218,15 @@
     }
     if (!filters.showExcluded) chip("Excluded hidden", () => { filters.showExcluded = true; });
     if (filters.group) chip(`Group: ${filters.group === "__ledger_no_group__" ? "No group" : filters.group}`, () => { filters.group = ""; });
+    if (filters.tags.length > 1) chips.append(node("span",
+      filters.tagMode === "all" ? "Tags: match all (AND)" : "Tags: match any (OR)", "alltime-tag-match-label"));
     for (const tag of filters.tags) chip(tagLabel(tag), () => { filters.tags = filters.tags.filter((item) => item !== tag); });
     byId("active-filters").hidden = !chips.children.length;
-    const filterCount = ["category", "subcategory", "accountName", "provider", "startDate", "endDate"]
-      .filter((name) => filters[name]).length + Number(filters.type !== "all") + Number(!filters.showExcluded);
+    const filterCount = ["category", "subcategory", "group", "accountName", "provider", "startDate", "endDate"]
+      .filter((name) => filters[name]).length + Number(filters.type !== "all") + Number(!filters.showExcluded) + filters.tags.length;
     byId("alltime-filter-count").textContent = String(filterCount);
     byId("alltime-filter-count").hidden = filterCount === 0;
     byId("alltime-filter-button").classList.toggle("has-active-filters", filterCount > 0);
-    byId("selected-tag-count").textContent = String(filters.tags.length);
-    byId("selected-tag-count").hidden = !filters.tags.length;
-    tagPicker.querySelector("summary").classList.toggle("has-active-filters", filters.tags.length > 0);
-    document.querySelectorAll("[data-tag-mode]").forEach((element) => {
-      element.setAttribute("aria-pressed", String(element.dataset.tagMode === filters.tagMode));
-      element.disabled = element.dataset.tagMode === "all" && filters.tags.includes(UNTAGGED);
-    });
-    byId("tag-query-hint").textContent = filters.tags.length
-      ? filters.tags.map(tagLabel).join(filters.tagMode === "all" ? " AND " : " OR ")
-      : "No tags selected · all tags included";
   }
 
   function renderBreakdown(matching) {
@@ -251,10 +292,10 @@
     renderFilterChips();
   }
 
-  function updateResults(resetPage = true) {
+  function updateResults(resetPage = true, focusTag = null) {
     if (resetPage) state.page = 0;
     renderResults();
-    renderTagOptions();
+    renderTagOptions(focusTag);
     persist();
   }
 
@@ -276,13 +317,14 @@
     state.transactions = payload.transactions;
     state.revision = payload.revision;
     state.loaded = true;
+    comparison.setTransactions(state.transactions);
     updateResults(false);
+    renderWorkspace();
   }
 
   async function loadTransactions() {
     if (state.loading || dialog.open) return;
     state.loading = true;
-    byId("refresh-transactions").disabled = true;
     status("");
     try {
       const response = await fetch("/api/transactions", { cache: "no-store" });
@@ -291,17 +333,31 @@
         state.transactions = [];
         state.revision = null;
         state.loaded = true;
+        comparison.setTransactions([]);
         updateResults();
+        renderWorkspace();
       } else {
         if (!response.ok) throw new Error(payload.error || "Could not load transactions.");
+        if (payload.internalTransferReviewRequired) {
+          state.loaded = false; renderWorkspace();
+          document.querySelector(".alltime-summary").hidden = true;
+          document.querySelector(".alltime-results").hidden = true;
+          byId("matching-scope").textContent = "Complete the one-time internal transfer review before viewing updated totals. ";
+          const link = document.createElement("a");
+          link.href = "/settings#internal-transfers";
+          link.textContent = "Review internal transfers";
+          byId("matching-scope").append(link);
+          return;
+        }
+        document.querySelector(".alltime-summary").hidden = false;
+        document.querySelector(".alltime-results").hidden = false;
         applyPayload(payload);
       }
     } catch (error) {
-      status(`${error.message} Use Refresh to try again.`, true);
+      status(`${error.message} Reload the page to try again.`, true);
       if (!state.loaded) byId("matching-scope").textContent = "Transactions could not be loaded.";
     } finally {
       state.loading = false;
-      byId("refresh-transactions").disabled = false;
     }
   }
 
@@ -312,14 +368,12 @@
     state.editingRevision = state.revision;
     state.returnFocus = document.activeElement;
     populateEditorSuggestions();
-    transactionUi.populateTransactionEditor(editor, transaction);
+    transactionUi.populateTransactionEditor(editor, transaction, {}, { transactions: state.transactions });
     byId("form-eyebrow").textContent = "Update transaction";
     byId("form-title").textContent = "Edit transaction";
     byId("delete-transaction-button").hidden = false;
     byId("form-error").hidden = true;
-    byId("refresh-transactions").disabled = true;
     closeFilters();
-    tagPicker.open = false;
     dialog.showModal();
   }
 
@@ -327,7 +381,6 @@
     if (state.busy && !force) return;
     dialog.close();
     state.editing = null;
-    byId("refresh-transactions").disabled = false;
     if (state.returnFocus?.isConnected) state.returnFocus.focus();
     else {
       byId("results-title").tabIndex = -1;
@@ -367,32 +420,42 @@
   byId("alltime-search").addEventListener("input", (event) => { filters.description = event.target.value; updateResults(); });
   byId("alltime-filter-button").addEventListener("click", () => {
     if (!filterForm.hidden) { closeFilters(true); return; }
-    tagPicker.open = false;
     populateFilterForm();
     filterForm.hidden = false;
+    transactionUi.fitTransactionFilterPopover(filterForm);
     byId("alltime-filter-button").setAttribute("aria-expanded", "true");
     field("category").focus();
   });
   field("category").addEventListener("change", () => populateSubcategories());
-  for (const name of ["startDate", "endDate"]) field(name).addEventListener("input", () => field("endDate").setCustomValidity(""));
-  filterForm.addEventListener("submit", (event) => {
-    event.preventDefault();
+  function applyLiveFilters() {
     const start = field("startDate").value;
     const end = field("endDate").value;
-    if (start && end && start > end) {
-      field("endDate").setCustomValidity("Through date must be on or after the From date.");
-      field("endDate").reportValidity();
-      return;
+    const incomplete = ["startDate", "endDate"].some((name) => field(name).validity?.badInput
+      || (field(name).value && !/^\d{4}-\d{2}-\d{2}$/.test(field(name).value)));
+    const error = incomplete ? "Enter a complete, valid date. The last valid date range is still in use."
+      : start && end && start > end ? "Through date must be on or after the From date. The last valid date range is still in use." : "";
+    field("endDate").setCustomValidity(error);
+    byId("alltime-date-error").textContent = error;
+    byId("alltime-date-error").hidden = !error;
+    if (!error) {
+      filters.startDate = start;
+      filters.endDate = end;
     }
-    for (const name of ["category", "subcategory", "accountName", "provider", "startDate", "endDate", "type"]) filters[name] = field(name).value;
+    for (const name of ["category", "subcategory", "group", "accountName", "provider", "type"]) filters[name] = field(name).value;
     filters.showExcluded = field("showExcluded").checked;
-    closeFilters(true);
     updateResults();
+  }
+  // Enter in a search/date field must not navigate or submit a transaction.
+  filterForm.addEventListener("submit", (event) => event.preventDefault());
+  byId("reset-alltime-filters").addEventListener("click", () => {
+    filters = { ...defaults(), description: filters.description };
+    populateFilterForm();
   });
-  byId("reset-alltime-filters").addEventListener("click", () => populateFilterForm(defaults()));
+  transactionUi.bindLiveTransactionFilters(filterForm, applyLiveFilters, byId("reset-alltime-filters"));
   byId("clear-alltime-filters").addEventListener("click", () => {
     filters = defaults();
     byId("alltime-search").value = "";
+    populateFilterForm();
     updateResults();
   });
   document.querySelectorAll("[data-tag-mode]").forEach((element) => element.addEventListener("click", () => {
@@ -400,28 +463,21 @@
     updateResults();
   }));
   byId("tag-search").addEventListener("input", () => renderTagOptions());
-  tagPicker.addEventListener("toggle", () => {
-    if (tagPicker.open) { closeFilters(); renderTagOptions(); byId("tag-search").focus(); }
-  });
-  byId("close-tag-picker").addEventListener("click", () => { tagPicker.open = false; tagPicker.querySelector("summary").focus(); });
   document.addEventListener("click", (event) => {
     // A tag click rerenders its button before bubbling; use the original event
     // path so selecting several tags never accidentally closes the picker.
     const path = event.composedPath();
     if (!path.includes(filterForm) && !path.includes(byId("alltime-filter-button"))) closeFilters();
-    if (!path.includes(tagPicker)) tagPicker.open = false;
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!filterForm.hidden) { closeFilters(true); event.preventDefault(); }
-    if (tagPicker.open) { tagPicker.open = false; tagPicker.querySelector("summary").focus(); event.preventDefault(); }
   });
   for (const [id, step] of [["previous-page", -1], ["next-page", 1]]) byId(id).addEventListener("click", () => {
     state.page = Math.max(0, state.page + step);
     updateResults(false);
     byId("results-title").scrollIntoView({ block: "start" });
   });
-  byId("refresh-transactions").addEventListener("click", loadTransactions);
   byId("close-form-dialog").addEventListener("click", () => closeEditor());
   byId("cancel-form-button").addEventListener("click", () => closeEditor());
   dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeEditor(); });
@@ -435,10 +491,25 @@
     if (!state.editing || state.busy) return;
     if (window.confirm(`Permanently delete “${state.editing.description}” for ${currency.format(state.editing.amount)}?\n\nThis removes the transaction from the master CSV.`)) void mutate("DELETE");
   });
+  byId("browse-transactions-tab").addEventListener("click", () => showWorkspace("browse"));
+  byId("compare-groups-tab").addEventListener("click", () => showWorkspace("compare"));
+  byId("back-to-comparison").addEventListener("click", () => showWorkspace("compare"));
+  for (const id of ["browse-transactions-tab", "compare-groups-tab"]) byId(id).addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !state.loaded || state.revision === null) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "browse" : event.key === "End" ? "compare" : workspaceMode === "browse" ? "compare" : "browse";
+    showWorkspace(next);
+  });
+  renderWorkspace();
   populateFilterForm();
   renderTagOptions();
   void loadTransactions();
   // Saved taxonomy values are suggestions only, never additional transactions.
   void fetch("/api/taxonomy", { cache: "no-store" }).then((response) => response.ok ? response.json() : null)
-    .then((payload) => { if (Array.isArray(payload?.categories)) state.taxonomy = payload.categories; }).catch(() => {});
+    .then((payload) => {
+      if (Array.isArray(payload?.categories)) {
+        state.taxonomy = payload.categories;
+        transactionUi.setEditorTaxonomy(payload.categories);
+      }
+    }).catch(() => {});
 })();

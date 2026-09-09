@@ -22,6 +22,139 @@
   const groupPickerStates = new WeakMap();
   let availableGroups = [];
   let groupPickerId = 0;
+  const valuePickerStates = new WeakMap();
+  const transactionValueLabels = Object.freeze({
+    category: "Category", subcategory: "Subcategory", accountName: "Account name",
+    accountType: "Account type", provider: "Provider",
+  });
+  let editorTaxonomy = [];
+  let editorTaxonomyRequest = null;
+
+  function setEditorTaxonomy(categories) {
+    if (Array.isArray(categories)) editorTaxonomy = categories;
+  }
+
+  function loadEditorTaxonomy() {
+    if (!editorTaxonomyRequest) {
+      editorTaxonomyRequest = fetch("/api/taxonomy", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload) => { if (payload) setEditorTaxonomy(payload.categories); })
+        .catch(() => { editorTaxonomyRequest = null; });
+    }
+    return editorTaxonomyRequest;
+  }
+
+  function transactionFieldValues(field, transactions = [], category = "") {
+    const key = groupName(category).toLocaleLowerCase();
+    const rows = field === "subcategory" && key
+      ? transactions.filter((row) => groupName(row.category).toLocaleLowerCase() === key) : transactions;
+    const taxonomy = editorTaxonomy.filter((entry) => !key || groupName(entry.name).toLocaleLowerCase() === key);
+    const extras = field === "category" ? editorTaxonomy.map((entry) => entry.name)
+      : field === "subcategory" ? taxonomy.flatMap((entry) => (entry.subcategories || []).map((sub) => sub.name)) : [];
+    return groupsFromTransactions([...rows.map((row) => row[field]), ...extras].map((group) => ({ group })));
+  }
+
+  function createTransactionValuePicker(container, field, options = {}) {
+    const label = transactionValueLabels[field];
+    if (!label) throw new Error("Unsupported transaction dropdown field.");
+    return createGroupPicker(container, {
+      ...options, label, emptyLabel: `No ${label.toLocaleLowerCase()}`, maxLength: 500,
+      createLabel: `Add new ${label.toLocaleLowerCase()}`,
+      getScope: () => field === "subcategory" ? groupName(options.getCategory?.()).toLocaleLowerCase() : "",
+      getValues: () => transactionFieldValues(field, options.transactions || [], options.getCategory?.() || ""),
+      onChange: (value) => {
+        if (field === "subcategory" && value && !groupName(options.getCategory?.())) {
+          const category = categoryForSubcategory(value, options.transactions || []);
+          if (category) options.onSelectCategory?.(category);
+        }
+        options.onChange?.(value);
+      },
+    });
+  }
+
+  function categoryForSubcategory(subcategory, transactions) {
+    const key = groupName(subcategory).toLocaleLowerCase();
+    if (!key) return "";
+    const fromRows = transactions.filter((row) => groupName(row.subcategory).toLocaleLowerCase() === key)
+      .map((row) => row.category);
+    const fromTaxonomy = editorTaxonomy.filter((entry) => (entry.subcategories || [])
+      .some((sub) => groupName(sub.name).toLocaleLowerCase() === key)).map((entry) => entry.name);
+    // The same alphabetic order as the Category dropdown, independent of row order.
+    return groupsFromTransactions([...fromRows, ...fromTaxonomy].map((group) => ({ group })))[0] || "";
+  }
+
+  function configureTransactionValuePickers(form, transactions) {
+    let pickers = valuePickerStates.get(form);
+    if (!pickers) { pickers = new Map(); valuePickerStates.set(form, pickers); }
+    for (const field of Object.keys(transactionValueLabels)) {
+      const input = form.elements.namedItem(field);
+      if (!input || input.type !== "text") continue;
+      let entry = pickers.get(field);
+      if (!entry) {
+        // Options are interactive buttons, so they must not live inside a label
+        // that would also activate the input. The combobox has its own aria-label.
+        if (input.parentElement.tagName === "LABEL") {
+          const label = input.parentElement;
+          const fieldWrap = document.createElement("div");
+          fieldWrap.className = label.className;
+          label.parentElement.insertBefore(fieldWrap, label);
+          fieldWrap.append(...label.childNodes);
+          label.remove();
+        }
+        const container = document.createElement("div");
+        container.className = "transaction-value-field";
+        input.parentElement.insertBefore(container, input);
+        input.removeAttribute("list");
+        const data = { transactions: [] };
+        const picker = createTransactionValuePicker(container, field, {
+          input,
+          get transactions() { return data.transactions; },
+          getCategory: () => form.elements.namedItem("category")?.value || "",
+          onSelectCategory: (category) => pickers.get("category")?.picker.set(category),
+        });
+        entry = { picker, data }; pickers.set(field, entry);
+      }
+      entry.data.transactions = transactions || [];
+      // Cancelled new values must not leak into another transaction. Preserve
+      // the original spelling and every other field until explicitly changed.
+      entry.picker.set(input.value, []);
+    }
+  }
+
+  // Selection identity, not sorting or array position, owns a palette slot.
+  // Call sync with the whole active selection, never just search-visible items.
+  function createSeriesColorSlots({ size = 12, initial = [] } = {}) {
+    if (!Number.isInteger(size) || size < 1 || size > 256) throw new RangeError("Invalid palette size");
+    const normalize = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+    const slots = new Map();
+    const restoredSlots = new Set();
+    for (const entry of Array.isArray(initial) ? initial : []) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
+      const [name, slot] = entry; const key = normalize(name);
+      if (!key || slots.has(key) || !Number.isSafeInteger(slot) || slot < 0 || slot > 100000 || restoredSlots.has(slot)) continue;
+      slots.set(key, slot); restoredSlots.add(slot);
+    }
+    return Object.freeze({
+      sync(keys) {
+        const active = new Set(keys.map(normalize).filter(Boolean));
+        for (const key of slots.keys()) if (!active.has(key)) slots.delete(key);
+        const usage = Array(size).fill(0);
+        const occupied = new Set(slots.values());
+        for (const slot of occupied) usage[slot % size] += 1;
+        for (const key of active) {
+          if (slots.has(key)) continue;
+          const color = usage.indexOf(Math.min(...usage));
+          let slot = color;
+          // Logical slots beyond the palette wrap. Keeping them distinct also
+          // preserves overflow assignments when saved and later restored.
+          while (occupied.has(slot)) slot += size;
+          slots.set(key, slot); occupied.add(slot); usage[color] += 1;
+        }
+      },
+      slot(key) { return slots.get(normalize(key)); },
+      snapshot() { return [...slots]; },
+    });
+  }
 
   function groupName(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -40,13 +173,88 @@
     availableGroups = groupsFromTransactions(groups.map((group) => ({ group })));
   }
 
+  function groupFilterLabel(value) {
+    return value === "__ledger_no_group__" ? "No group" : value;
+  }
+
+  function matchesGroupFilter(transaction, value) {
+    const name = groupName(transaction.group).toLocaleLowerCase();
+    return !value || (value === "__ledger_no_group__" ? !name : name === groupName(value).toLocaleLowerCase());
+  }
+
+  function populateGroupFilter(select, transactions, selected = "") {
+    const names = groupsFromTransactions([...transactions, ...(selected && selected !== "__ledger_no_group__" ? [{group:selected}] : [])]);
+    select.replaceChildren(new Option("All groups", ""), new Option("No group", "__ledger_no_group__"),
+      ...names.map((name) => new Option(name, name)));
+    select.value = selected === "__ledger_no_group__" ? selected
+      : names.find((name) => name.toLocaleLowerCase() === groupName(selected).toLocaleLowerCase()) || "";
+  }
+
+  function fitTransactionFilterPopover(popover) {
+    const dialog = popover.closest?.("dialog");
+    const bottom = Math.min(globalObject.innerHeight || 800, dialog?.getBoundingClientRect().bottom ?? Infinity);
+    popover.style.maxHeight = `${Math.max(120, Math.min(560, bottom - popover.getBoundingClientRect().top - 16))}px`;
+  }
+
+  // Bind after dependent controls (such as category/subcategory) and Reset
+  // have been wired. Filtering is local UI state, never transaction mutation.
+  function bindLiveTransactionFilters(container, onChange, resetButton) {
+    container.querySelectorAll("select, input").forEach((control) => {
+      if (control.tagName === "INPUT" && !control.name) return;
+      control.addEventListener("change", onChange);
+      if (["date", "search", "text", "number"].includes(control.type)) {
+        control.addEventListener("input", onChange);
+      }
+    });
+    resetButton?.addEventListener("click", onChange);
+  }
+
+  // One controller per selection purpose: bulk actions and import inclusion must
+  // never share an anchor. Keys identify occurrences, not descriptions/amounts.
+  function createCheckboxRangeSelection(onChange) {
+    let keys = [];
+    let anchor = null;
+    let scope = null;
+    let generation = 0;
+    let controls = new Map();
+    function reset() { anchor = null; generation += 1; }
+    function sync(nextKeys, nextScope) {
+      if (scope !== nextScope || keys.length !== nextKeys.length || keys.some((key, index) => key !== nextKeys[index])) reset();
+      keys = [...nextKeys]; scope = nextScope; controls = new Map();
+    }
+    function bind(checkbox, key) {
+      controls.set(key, checkbox);
+      const boundGeneration = generation;
+      let extend = false;
+      checkbox.title = "Shift-click another checkbox to select or clear the visible range.";
+      // change is not a MouseEvent. Capture the modifier on click, then use the
+      // native checked value in change (also preserves ordinary Space/AT input).
+      checkbox.addEventListener("click", (event) => { extend = event.shiftKey === true; });
+      checkbox.addEventListener("change", () => {
+        const useRange = extend; extend = false;
+        if (checkbox.disabled || boundGeneration !== generation) return;
+        const end = keys.indexOf(key);
+        if (end < 0) return;
+        const start = useRange ? keys.indexOf(anchor) : -1;
+        const affected = start < 0 ? [key] : keys.slice(Math.min(start, end), Math.max(start, end) + 1);
+        const enabled = affected.filter((item) => !controls.get(item)?.disabled);
+        const restoreFocus = document.activeElement === checkbox;
+        anchor = key;
+        // One callback for the whole range, never one render/request per row.
+        onChange(enabled, checkbox.checked);
+        if (restoreFocus) controls.get(key)?.focus({ preventScroll: true });
+      });
+    }
+    return { bind, sync, reset };
+  }
+
   function createGroupPicker(container, options = {}) {
     const wrap = document.createElement("div");
     wrap.className = "transaction-group-picker";
-    const input = document.createElement("input");
+    const input = options.input || document.createElement("input");
     input.type = "text";
     input.autocomplete = "off";
-    input.maxLength = 100;
+    input.maxLength = options.maxLength || 100;
     input.placeholder = options.emptyLabel || "No group";
     input.setAttribute("aria-label", options.label || "Group");
     input.setAttribute("role", "combobox");
@@ -64,6 +272,17 @@
     let names = [];
     let activeIndex = -1;
     let choices = [];
+    let searching = false;
+    const draftValues = new Map();
+
+    function refreshNames() {
+      if (options.getValues) {
+        const scope = options.getScope?.() || "";
+        names = groupsFromTransactions([
+          ...options.getValues(), ...(draftValues.get(scope) || []), selected,
+        ].map((group) => ({ group })));
+      }
+    }
 
     function close() {
       list.hidden = true;
@@ -71,9 +290,16 @@
       input.removeAttribute("aria-activedescendant");
       input.value = selected === "__ledger_no_group__" ? "No group" : selected;
       input.setCustomValidity("");
+      input.placeholder = options.emptyLabel || "No group";
+      searching = false;
     }
     function choose(value) {
       selected = value;
+      const scope = options.getScope?.() || "";
+      if (value && options.getValues) {
+        if (!draftValues.has(scope)) draftValues.set(scope, new Set());
+        draftValues.get(scope).add(value);
+      }
       if (value && value !== "__ledger_no_group__" && !names.some((name) => name.toLocaleLowerCase() === value.toLocaleLowerCase())) names.push(value);
       close();
       options.onChange?.(selected);
@@ -81,14 +307,17 @@
       close();
     }
     function render() {
-      const query = groupName(input.value);
+      refreshNames();
+      const query = searching ? groupName(input.value) : "";
       const lower = query.toLocaleLowerCase();
       choices = [{ value: "", label: options.emptyLabel || "No group" }];
       if (options.includeUngrouped) choices.push({ value: "__ledger_no_group__", label: "No group" });
       choices.push(...names.filter((name) => !lower || name.toLocaleLowerCase().includes(lower))
         .map((value) => ({ value, label: value })));
       if (options.allowCreate !== false && query && !names.some((name) => name.toLocaleLowerCase() === lower)) {
-        choices.push({ value: query, label: `+ Create “${query}”` });
+        choices.push({ value: query, label: `+ ${options.createLabel || "Create"} “${query}”`, create: true });
+      } else if (options.createLabel && !query) {
+        choices.push({ label: `+ ${options.createLabel}…`, startCreate: true });
       }
       list.replaceChildren(...choices.map((choice, index) => {
         const button = document.createElement("button");
@@ -98,17 +327,36 @@
         button.setAttribute("aria-selected", String(choice.value === selected));
         button.tabIndex = -1;
         button.textContent = choice.label;
-        button.addEventListener("click", () => choose(choice.value));
+        if (choice.create || choice.startCreate) button.className = "transaction-value-create";
+        button.addEventListener("click", () => activate(choice));
         return button;
       }));
       activeIndex = -1;
       list.hidden = false;
+      // Keep long menus inside the editor's scroll area, opening upward near
+      // its bottom edge rather than clipping options behind the footer.
+      const bounds = wrap.closest?.(".form-body")?.getBoundingClientRect();
+      const control = wrap.getBoundingClientRect();
+      const below = Math.min(globalObject.innerHeight || 800, bounds?.bottom ?? Infinity) - control.bottom - 10;
+      const above = control.top - Math.max(0, bounds?.top ?? 0) - 10;
+      const opensUp = below < 160 && above > below;
+      list.classList.toggle("opens-up", opensUp);
+      list.style.maxHeight = `${Math.max(80, Math.min(220, opensUp ? above : below))}px`;
       input.setAttribute("aria-expanded", "true");
+    }
+    function activate(choice) {
+      if (choice.startCreate) {
+        searching = true;
+        input.value = "";
+        input.placeholder = `Enter a new ${(options.label || "group").toLocaleLowerCase()}`;
+        input.focus(); render();
+      } else choose(choice.value);
     }
     input.addEventListener("focus", () => { input.select(); render(); });
     input.addEventListener("click", render);
     input.addEventListener("input", () => {
-      input.setCustomValidity("Choose a group from the list, or use Create to add it.");
+      searching = true;
+      input.setCustomValidity(`Choose ${(options.label || "group").toLocaleLowerCase()} from the list, or add the new value.`);
       render();
     });
     input.addEventListener("keydown", (event) => {
@@ -124,7 +372,7 @@
       } else if (event.key === "Enter" && !list.hidden) {
         event.preventDefault();
         const exact = names.find((name) => name.toLocaleLowerCase() === groupName(input.value).toLocaleLowerCase());
-        if (activeIndex >= 0) choose(choices[activeIndex].value);
+        if (activeIndex >= 0) activate(choices[activeIndex]);
         else if (exact || !groupName(input.value)) choose(exact || "");
         else if (options.allowCreate !== false) choose(groupName(input.value));
       }
@@ -133,9 +381,11 @@
     return {
       value: () => selected,
       set(value, groups = names) {
+        draftValues.clear();
         names = groupsFromTransactions([...groups, value].map((group) => ({ group })))
           .filter((name) => name !== "__ledger_no_group__");
-        selected = names.find((name) => name.toLocaleLowerCase() === groupName(value).toLocaleLowerCase()) || groupName(value);
+        selected = options.input ? String(value ?? "")
+          : names.find((name) => name.toLocaleLowerCase() === groupName(value).toLocaleLowerCase()) || groupName(value);
         close();
       },
       input,
@@ -336,6 +586,9 @@
     }
     const transferTreatment = form.elements.namedItem("internalTransferTreatment");
     if (transferTreatment instanceof HTMLSelectElement) {
+      if (transferTreatment.value !== "internal-transfer") {
+        for (const flag of flags) if (flag.startsWith("transfer-pair-")) flags.delete(flag);
+      }
       flags.delete("internal-transfer");
       flags.delete("include-in-budget");
       if (transferTreatment.value === "internal-transfer") flags.add("internal-transfer");
@@ -344,13 +597,14 @@
     return [...flags].sort().join(",");
   }
 
-  function populateTransactionEditor(form, transaction, defaults = {}) {
+  function populateTransactionEditor(form, transaction, defaults = {}, options = {}) {
     form.reset();
     for (const fieldName of editableFields) {
       const field = form.elements.namedItem(fieldName);
       if (field) field.value = transaction?.[fieldName] ?? defaults[fieldName] ?? "";
     }
     configureTransactionGroupPicker(form);
+    configureTransactionValuePickers(form, options.transactions || []);
     const refunded = form.elements.namedItem("refunded");
     if (refunded instanceof HTMLInputElement && refunded.type === "checkbox") {
       refunded.checked = hasTransactionFlag(transaction, "refunded");
@@ -455,6 +709,7 @@
       leadingControl = null,
       duplicate = false,
       needsClassification = false,
+      edited = false,
       disabled = false,
       showEdit = true,
       amountForDisplay = null,
@@ -519,6 +774,13 @@
       classificationBadge.textContent = "No rule matched";
       classificationBadge.title = "Review this transaction manually or create a classification rule.";
       description.append(classificationBadge);
+    }
+    if (edited) {
+      const editedBadge = document.createElement("span");
+      editedBadge.className = "transaction-edited-badge";
+      editedBadge.textContent = "Edited";
+      editedBadge.title = "Changed manually during this import review. Not a saved transaction tag.";
+      description.append(editedBadge);
     }
     if (refunded) {
       const refundedBadge = document.createElement("span");
@@ -599,11 +861,24 @@
   }
 
   globalObject.LedgerTransactionUI = Object.freeze({
+    matchesTransactionSearch: (transaction, query) => globalObject.LedgerTransactionsModel.matchesTransactionSearch(transaction, query),
+    createTransactionValuePicker,
+    configureTransactionValuePickers,
+    transactionFieldValues,
+    setEditorTaxonomy,
+    loadEditorTaxonomy,
     compareTransactions,
     configureTransactionTagPicker,
     configureTransactionGroupPicker,
     createGroupPicker,
     groupsFromTransactions,
+    groupFilterLabel,
+    matchesGroupFilter,
+    populateGroupFilter,
+    fitTransactionFilterPopover,
+    bindLiveTransactionFilters,
+    createCheckboxRangeSelection,
+    createSeriesColorSlots,
     setAvailableGroups,
     createTransactionRow,
     createTransactionSortControls,
