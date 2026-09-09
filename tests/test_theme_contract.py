@@ -91,6 +91,18 @@ def rgb_distance(first: str, second: str) -> float:
 
 
 class ThemeContractTests(unittest.TestCase):
+    def test_preferences_have_one_canonical_style_and_mobile_breakpoint(self) -> None:
+        css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
+        for selector in (".settings-preference-row", ".number-abbreviation-control",
+                         ".number-abbreviation-control output", ".number-abbreviation-options"):
+            self.assertEqual(len(re.findall(rf"^{re.escape(selector)}\s*\{{", css, re.MULTILINE)), 1, selector)
+        for selector in (".settings-preference-row", ".number-abbreviation-control"):
+            self.assertEqual(len(re.findall(rf"^  {re.escape(selector)}\s*\{{", css, re.MULTILINE)), 1, selector)
+        self.assertIn("background: var(--surface-subtle)", exact_rule(css, ".settings-preference-row"))
+        self.assertIn("flex-wrap: wrap", exact_rule(css, ".settings-preference-row"))
+        self.assertIn("flex: 1 1 240px", exact_rule(css, ".settings-preference-row > div:first-child"))
+        self.assertIn("@media (max-width: 560px)", css)
+
     def test_pages_reserve_a_stable_scrollbar_gutter(self) -> None:
         css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
         self.assertIn("scrollbar-gutter: stable", css)

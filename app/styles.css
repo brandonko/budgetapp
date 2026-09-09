@@ -2155,74 +2155,6 @@ html[data-theme="dark"] .comparison-chart-tooltip {
   margin-bottom: 10px;
 }
 
-.settings-preference-row {
-  display: flex;
-  gap: 28px;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-top: 24px;
-  padding: 20px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--canvas);
-}
-
-.settings-preference-row strong {
-  display: block;
-  margin-bottom: 5px;
-  font-size: 14px;
-}
-
-.settings-preference-row p {
-  max-width: 540px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.number-abbreviation-control {
-  width: min(100%, 340px);
-  flex: 0 0 min(100%, 340px);
-}
-
-.number-abbreviation-control output {
-  display: block;
-  margin-bottom: 10px;
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-  text-align: center;
-}
-
-.number-abbreviation-control input[type="range"] {
-  width: 100%;
-  margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.number-abbreviation-options {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  margin-top: 7px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.number-abbreviation-options span {
-  text-align: center;
-}
-
-.number-abbreviation-options span:first-child {
-  text-align: left;
-}
-
-.number-abbreviation-options span:last-child {
-  text-align: right;
-}
-
 .settings-back-link {
   width: fit-content;
   margin-top: 9px;
@@ -4606,15 +4538,6 @@ body:has(dialog[open]) {
     grid-template-columns: 1fr;
   }
 
-  .settings-preference-row {
-    flex-direction: column;
-  }
-
-  .number-abbreviation-control {
-    width: 100%;
-    flex-basis: auto;
-  }
-
   .settings-card-heading {
     align-items: stretch;
     flex-direction: column;
@@ -4945,6 +4868,7 @@ body:has(dialog[open]) {
 
 .settings-preference-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 28px;
   align-items: center;
   justify-content: space-between;
@@ -4953,6 +4877,11 @@ body:has(dialog[open]) {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-subtle);
+}
+
+.settings-preference-row > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .settings-preference-row strong {
