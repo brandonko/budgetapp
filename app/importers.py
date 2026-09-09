@@ -24,6 +24,9 @@ ALIEXPRESS_DEFAULT_ACCOUNT = (
 VENMO_DEFAULT_ACCOUNT = ("Checking Account", "BANK", "Bank of America")
 APPLE_CARD_DEFAULT_ACCOUNT = ("Apple Card", "CREDIT CARD", "Goldman Sachs")
 EBAY_DEFAULT_ACCOUNT = ("eBay", "CREDIT CARD", "eBay")
+WALMART_DEFAULT_ACCOUNT = ("Walmart", "CREDIT CARD", "Walmart")
+CAPITAL_ONE_DEFAULT_ACCOUNT = ("Capital One", "CREDIT CARD", "Capital One")
+WALMART_MERCHANT_STRINGS = ("walmart", "wal-mart", "wal mart", "wm supercenter")
 
 
 class ImportDataError(ValueError):
@@ -38,6 +41,7 @@ class CreditKarmaImport:
     ignored_aliexpress_count: int
     ignored_venmo_count: int
     ignored_ebay_count: int
+    ignored_walmart_count: int = 0
 
 
 def load_json_text(content: Any, parser_name: str) -> Any:
@@ -100,6 +104,7 @@ def parse_credit_karma(
     ignore_aliexpress: bool = True,
     ignore_venmo: bool = True,
     ignore_ebay: bool = True,
+    ignore_walmart: bool = True,
 ) -> CreditKarmaImport:
     document = load_json_text(content, "Credit Karma")
     root = require_mapping(document, "Credit Karma document")
@@ -110,6 +115,7 @@ def parse_credit_karma(
     ignored_aliexpress_count = 0
     ignored_venmo_count = 0
     ignored_ebay_count = 0
+    ignored_walmart_count = 0
 
     for index, raw in enumerate(raw_transactions):
         location = f"Credit Karma transaction[{index}]"
@@ -141,6 +147,12 @@ def parse_credit_karma(
         if ignore_ebay and "ebay" in normalized_description:
             ignored_ebay_count += 1
             continue
+        if ignore_walmart and any(
+            merchant in re.sub(r"\s+", " ", normalized_description)
+            for merchant in WALMART_MERCHANT_STRINGS
+        ):
+            ignored_walmart_count += 1
+            continue
 
         unsigned_amount = abs(require_decimal(transaction, "amount", location))
         signed_amount = unsigned_amount if transaction_type == "debit" else -unsigned_amount
@@ -165,6 +177,7 @@ def parse_credit_karma(
         ignored_aliexpress_count,
         ignored_venmo_count,
         ignored_ebay_count,
+        ignored_walmart_count,
     )
 
 
@@ -334,6 +347,86 @@ def _apple_card_date(value: str, location: str) -> str:
         except ValueError:
             continue
     raise ImportDataError(f"{location}.Transaction Date is not a recognized date")
+
+
+def parse_capital_one(
+    content: Any,
+    account_identity: tuple[str, str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Read Capital One's explicit debit/credit CSV layouts, never guess signs.
+
+    Account numbers, card numbers, balances and posting dates are deliberately
+    not retained. Reject a malformed export as a whole rather than silently
+    dropping financial rows. Range filtering happens at the session boundary.
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise ImportDataError("Capital One export is empty")
+    if len(content.encode("utf-8")) > 16 * 1024 * 1024:
+        raise ImportDataError("Capital One export exceeds 16 MB; use a shorter range")
+    reader = csv.reader(io.StringIO(content.lstrip("\ufeff"), newline=""), strict=True)
+    try:
+        headers = [value.strip().casefold() for value in next(reader, [])]
+        if len(set(headers)) != len(headers) or not all(headers):
+            raise ImportDataError("Capital One CSV has blank or duplicate column names")
+        card = {"transaction date", "description", "debit", "credit"}.issubset(headers)
+        bank = {"transaction date", "transaction description", "transaction amount", "transaction type"}.issubset(headers)
+        if card == bank:
+            raise ImportDataError("Unrecognized Capital One CSV. Export CSV with Debit/Credit columns (card), or Transaction Amount/Transaction Type columns (bank).")
+        identity = account_identity or ("Capital One", "CREDIT CARD" if card else "BANK", "Capital One")
+        transactions = []
+
+        def money(value: str, location: str) -> Decimal:
+            if not re.fullmatch(r"-?\$?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?", value):
+                raise ImportDataError(f"{location}: invalid monetary amount")
+            number = Decimal(value.replace("$", "").replace(",", ""))
+            if abs(number) > Decimal("1000000000"):
+                raise ImportDataError(f"{location}: amount is too large")
+            return number
+
+        for values in reader:
+            if not any(value.strip() for value in values):
+                continue
+            location = f"Capital One CSV line {reader.line_num}"
+            if len(values) != len(headers):
+                raise ImportDataError(f"{location}: incorrect number of columns")
+            row = dict(zip(headers, (value.strip() for value in values)))
+            if row.get("currency", "USD").upper() not in {"", "USD"}:
+                raise ImportDataError(f"{location}: only USD exports are supported")
+            raw_date = row["transaction date"]
+            parsed_date = None
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    parsed_date = datetime.strptime(raw_date, fmt).date().isoformat()
+                    break
+                except ValueError:
+                    pass
+            if parsed_date is None:
+                raise ImportDataError(f"{location}: invalid Transaction Date")
+            description = row["description" if card else "transaction description"]
+            if not description:
+                raise ImportDataError(f"{location}: description cannot be blank")
+            if card:
+                debit = money(row["debit"], location) if row["debit"] else Decimal(0)
+                credit = money(row["credit"], location) if row["credit"] else Decimal(0)
+                if (not row["debit"] and not row["credit"]) or debit < 0 or credit < 0 or (debit and credit):
+                    raise ImportDataError(f"{location}: expected one nonnegative Debit or Credit amount")
+                amount = debit - credit
+            else:
+                kind = row["transaction type"].casefold()
+                if kind not in {"debit", "credit"}:
+                    raise ImportDataError(f"{location}: unrecognized Transaction Type; expected Debit or Credit")
+                amount = abs(money(row["transaction amount"], location)) * (1 if kind == "debit" else -1)
+            transactions.append({
+                "date": parsed_date, "description": " ".join(description.split()),
+                "amount": as_money(amount), "category": row.get("category", "") or "Uncategorized",
+                "subcategory": "", "accountName": identity[0], "accountType": identity[1],
+                "provider": identity[2], "notes": "",
+            })
+            if len(transactions) > 100000:
+                raise ImportDataError("Capital One CSV exceeds 100,000 transactions")
+        return transactions
+    except csv.Error as exc:
+        raise ImportDataError("Capital One CSV is malformed") from exc
 
 
 def parse_apple_card(
@@ -585,6 +678,95 @@ def parse_ebay(
                 }
             )
     return transactions
+
+
+def parse_walmart(
+    content: Any,
+    account_identity: tuple[str, str, str] | None = None,
+    *,
+    start_date: str = "0001-01-01",
+    end_date: str = "9999-12-31",
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate the companion's minimal receipt export; never infer missing prices.
+
+    lineTotal already includes quantity. Allocate the final receipt total (tax,
+    discounts, fees and tips included) by line value, using integer cents and
+    largest remainders so even tiny totals cannot produce negative last lines.
+    Refund/pending orders are explicitly omitted, not silently netted on a
+    fabricated refund date. Their bank entries can still be imported separately.
+    """
+    root = require_mapping(load_json_text(content, "Walmart"), "Walmart document")
+    if root.get("version") != 1 or isinstance(root.get("version"), bool):
+        raise ImportDataError("Unsupported Walmart export version")
+    orders = require_list(root.get("orders"), "Walmart orders")
+    if len(orders) > 10000:
+        raise ImportDataError("Walmart export exceeds 10,000 orders")
+    identity = account_identity or WALMART_DEFAULT_ACCOUNT
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    reasons = {
+        "cancelled": "cancelled or unavailable",
+        "pending": "not yet completed (prices may change)",
+        "refund": "returned/refunded; import the charge and refund from your account instead",
+    }
+
+    def money(record: Mapping[str, Any], field: str, location: str) -> Decimal:
+        value = require_decimal(record, field, location)
+        if value < 0 or value > Decimal("1000000000") or value != value.quantize(CENT):
+            raise ImportDataError(f"{location}.{field} must be a nonnegative USD cent amount")
+        return value
+
+    for index, raw in enumerate(orders):
+        location = f"Walmart order[{index}]"
+        order = require_mapping(raw, location)
+        order_id = require_text(order, "orderId", location)
+        if not re.fullmatch(r"[0-9-]{5,50}", order_id):
+            raise ImportDataError(f"{location}.orderId is invalid")
+        if order_id in seen:
+            raise ImportDataError("Walmart export repeats an order; retry the collection")
+        seen.add(order_id)
+        order_date = require_date(order, "orderDate", location)
+        if not start_date <= order_date <= end_date:
+            continue
+        skipped = order.get("skipReason")
+        if skipped:
+            if skipped not in reasons:
+                raise ImportDataError(f"{location}.skipReason is unsupported")
+            warnings.append(f"Order {order_id}: {reasons[skipped]}.")
+            continue
+        if order.get("currency") != "USD":
+            raise ImportDataError(f"{location}.currency must be USD")
+        total = money(order, "total", location)
+        items = require_list(order.get("items"), f"{location}.items")
+        if not items or len(items) > 1000:
+            raise ImportDataError(f"{location} must have 1–1,000 item lines")
+        parsed = []
+        for item_index, raw_item in enumerate(items):
+            item_location = f"{location}.items[{item_index}]"
+            item = require_mapping(raw_item, item_location)
+            title = require_text(item, "title", item_location)
+            quantity = require_decimal(item, "quantity", item_location)
+            if not 0 < quantity <= 10000:
+                raise ImportDataError(f"{item_location}.quantity must be positive and at most 10,000")
+            label = title if quantity == 1 else f"{title} (x{format(quantity.normalize(), 'f')})"
+            parsed.append((label, int(money(item, "lineTotal", item_location) * 100)))
+        cents = int(total * 100)
+        weight = sum(value for _, value in parsed)
+        if not weight and cents:
+            raise ImportDataError(f"{location} has a paid total but no priced items")
+        allocations = [cents * value // weight if weight else 0 for _, value in parsed]
+        remainders = sorted(range(len(parsed)), key=lambda i: -(cents * parsed[i][1] % weight) if weight else 0)
+        for i in remainders[:cents - sum(allocations)]:
+            allocations[i] += 1
+        for (description, _), amount in zip(parsed, allocations):
+            rows.append({
+                "date": order_date, "description": description, "amount": amount / 100,
+                "category": "Shopping", "accountName": identity[0],
+                "accountType": identity[1], "provider": identity[2],
+                "notes": f"Walmart order: {order_id} · Receipt total allocated across items, including tax, fees, tips and discounts.",
+            })
+    return rows, warnings
 
 
 def parse_amazon(
