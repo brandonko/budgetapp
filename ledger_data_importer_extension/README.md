@@ -1,7 +1,15 @@
 # Ledger Data Importer
 
+Capital One is available in companion **0.9.1+**. Reload the extension and accept
+its `verified.capitalone.com` and `myaccounts.capitalone.com` permissions. Start
+from Ledger's Capital One tab, sign in, and select an account. Export-form
+automation and passive CSV capture live in `capitalone_extension/`; unfamiliar
+forms can be operated manually, or the downloaded CSV can be selected in Ledger.
+Nothing is saved before the shared transaction review is confirmed. See
+[Capital One details](capitalone_extension/README.md) for limitations and privacy.
+
 This unpacked Chrome extension connects Ledger's local **Import data** page to
-authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card sessions.
+authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, and Apple Card sessions.
 
 ## Install
 
@@ -62,6 +70,7 @@ creditkarma_extension/  Credit Karma authenticated transaction collector
 aliexpress_extension/   AliExpress authenticated order API client
 venmo_extension/        Venmo authenticated statement collector
 ebay_extension/         eBay authenticated purchase-history collector
+walmart_extension/      Walmart receipt reader, passive list observer, and coordinator
 apple_card_extension/   Apple Card official CSV export automation
 shared/                  Ledger bridge and cross-source import coordinator
 _locales/                Amazon popup catalogs (Chrome requires this root path)
@@ -96,3 +105,15 @@ and sign-in flow may change.
 The eBay integration is an independent implementation informed by the public behavior
 of the eBay Purchase History Downloader extension. It does not bundle that extension's
 code. eBay's private purchase-history endpoint and response shape may change.
+
+The Walmart integration is independently implemented from the data shapes and page
+behavior documented by [Walmart Invoice Exporter](https://github.com/hppanpaliya/Walmart-Invoice-Exporter).
+No source code or dependencies from that project are bundled. See
+[`walmart_extension/README.md`](walmart_extension/README.md) for supported receipts,
+limitations, and the privacy boundary. Reload this unpacked extension after updating
+to 0.9.1 and accept its Walmart.com permission if prompted.
+
+Version 0.9.1 fixes Walmart/Capital One startup: MAIN observers are self-contained,
+and parser helpers are loaded only in ISOLATED. Never register one static JS path
+in both worlds: Chrome can skip its second injection. The regression suite now
+exercises actual manifest loading, separate globals, and path deduplication.

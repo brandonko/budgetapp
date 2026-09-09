@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Ledger Data Importer",
-  "version": "0.7.0",
-  "description": "Import Amazon, AliExpress, eBay, Credit Karma, Venmo, and Apple Card data into a local Ledger instance.",
+  "version": "0.9.1",
+  "description": "Import Amazon, AliExpress, eBay, Walmart, Credit Karma, Venmo, Apple Card, and Capital One data into local Ledger.",
   "default_locale": "en",
   "icons": {
     "48": "amazon_extension/icons/icon-48.png",
@@ -30,6 +30,9 @@
     "https://account.venmo.com/*",
     "https://*.ebay.com/*",
     "https://card.apple.com/*",
+    "https://www.walmart.com/*",
+    "https://verified.capitalone.com/*",
+    "https://myaccounts.capitalone.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
@@ -42,6 +45,18 @@
     "default_popup": "amazon_extension/popup/popup.html"
   },
   "content_scripts": [
+    {
+      "matches": ["https://verified.capitalone.com/*", "https://myaccounts.capitalone.com/*"],
+      "js": ["capitalone_extension/capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://verified.capitalone.com/*", "https://myaccounts.capitalone.com/*"],
+      "js": ["capitalone_extension/csv.js", "capitalone_extension/content.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://*.amazon.com/*gp/your-account/order-history*",
@@ -104,6 +119,18 @@
       "matches": ["https://*.ebay.com/*"],
       "js": ["ebay_extension/content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.walmart.com/orders*"],
+      "js": ["walmart_extension/observer.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.walmart.com/orders*"],
+      "js": ["walmart_extension/receipts.js", "walmart_extension/content.js"],
+      "world": "ISOLATED",
+      "run_at": "document_start"
     },
     {
       "matches": ["https://card.apple.com/*"],
