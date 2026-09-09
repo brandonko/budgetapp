@@ -41,6 +41,7 @@
         } else {
           if (!["automatic", "internal-transfer", "include-in-budget"].includes(value)) throw new Error("Choose a budget treatment.");
           flags.delete("internal-transfer"); flags.delete("include-in-budget");
+          if (value !== "internal-transfer") for (const flag of flags) if (flag.startsWith("transfer-pair-")) flags.delete(flag);
           if (value !== "automatic") flags.add(value);
         }
         result.flags = [...flags].sort().join(",");
@@ -86,11 +87,70 @@
   async function request(path, payload) {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Could not update transactions (${response.status}).`);
+    if (!response.ok) throw new Error(result.error || (path.endsWith("/bulk-delete") && response.status === 404
+      ? "Restart the Ledger Python server to enable bulk deletion, then try again."
+      : `Could not update transactions (${response.status}).`));
     return result;
   }
 
   let activeDialog = null;
+
+  function openDeleteReview({ rows, hiddenCount, apply, onClose }) {
+    if (activeDialog) return;
+    const dialog = node("dialog", undefined, "transaction-bulk-dialog bulk-delete-dialog");
+    activeDialog = dialog;
+    dialog.setAttribute("aria-labelledby", "bulk-delete-title");
+    dialog.setAttribute("aria-describedby", "bulk-delete-warning");
+    const shell = node("div", undefined, "transaction-form");
+    const header = node("header", undefined, "form-header");
+    const heading = node("div");
+    const title = node("h2", `Delete ${rows.length} selected ${rows.length === 1 ? "transaction" : "transactions"}?`);
+    title.id = "bulk-delete-title";
+    const warning = node("p", "These transactions will be permanently removed from your master CSV. This cannot be undone in the app. A safety backup will be created first.", "dialog-subtitle");
+    warning.id = "bulk-delete-warning";
+    heading.append(node("p", "CONFIRM DELETION", "eyebrow"), title, warning);
+    const body = node("div", undefined, "form-body");
+    if (hiddenCount) body.append(node("p", `${hiddenCount} selected ${hiddenCount === 1 ? "transaction is" : "transactions are"} outside your current filters or page. All selected transactions are listed below.`, "bulk-hint"));
+    const list = node("div", undefined, "bulk-delete-list");
+    const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+    const shortMonthFormatter = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
+    ui.renderTransactionList(list, ui.sortTransactions(rows), () => ({ currency, shortMonthFormatter, showEdit: false, showYear: true }));
+    const error = node("p", "", "form-error"); error.hidden = true; error.setAttribute("role", "alert");
+    body.append(list, error);
+    const footer = node("footer", undefined, "form-footer");
+    let busy = false;
+    function close() {
+      if (busy) return;
+      dialog.close(); dialog.remove(); activeDialog = null; onClose?.();
+    }
+    const cancel = button("Cancel", close, "secondary-button");
+    const closeButton = button("×", close, "icon-button"); closeButton.setAttribute("aria-label", "Cancel deletion");
+    const confirm = button(`Delete permanently (${rows.length})`, async () => {
+      if (busy) return;
+      busy = true; error.hidden = true;
+      confirm.disabled = true; cancel.disabled = true; closeButton.disabled = true;
+      try {
+        await apply();
+        busy = false; close();
+      } catch (failure) {
+        error.textContent = failure.message || "Could not delete selected transactions.";
+        error.hidden = false;
+      } finally {
+        busy = false; confirm.disabled = false; cancel.disabled = false; closeButton.disabled = false;
+      }
+    }, "danger-button");
+    header.append(heading, closeButton);
+    footer.append(cancel, node("span", undefined, "form-footer-spacer"), confirm);
+    shell.append(header, body, footer); dialog.append(shell); document.body.append(dialog);
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close();
+    });
+    // Enter on the initially focused control must never confirm a destructive action.
+    dialog.showModal(); cancel.focus();
+  }
 
   function openEditor({ rows, revision, apply, preview, staged = false, available = [], onClose }) {
     if (activeDialog) return;
@@ -107,6 +167,7 @@
     let reviewing = false;
     let pending = null;
     const changes = new Map();
+    const valuePickers = new Map();
     const body = node("div", undefined, "form-body bulk-edit-body");
     const editSection = node("div");
     const actionList = node("div", undefined, "bulk-action-list");
@@ -141,7 +202,7 @@
       const labelText = fields.find(([name]) => name === field)[1];
       const item = node("section", undefined, "bulk-action");
       const top = node("div", undefined, "bulk-action-heading");
-      top.append(node("strong", labelText), button("Remove", () => { changes.delete(field); item.remove(); update(); }, "text-button bulk-remove"));
+      top.append(node("strong", labelText), button("Remove", () => { changes.delete(field); valuePickers.delete(field); item.remove(); update(); }, "text-button bulk-remove"));
       item.append(top);
       let read;
       if (field === "group") {
@@ -150,6 +211,21 @@
         picker.set("", ui.groupsFromTransactions(available));
         read = () => picker.value();
         item.append(node("small", "Choose an existing group, create one, or select No group to clear it."));
+      } else if (["category", "subcategory", "accountName", "accountType", "provider"].includes(field)) {
+        const container = node("div"); item.append(container);
+        const picker = ui.createTransactionValuePicker(container, field, {
+          transactions: available,
+          getCategory: () => changes.get("category")?.() || "",
+          onSelectCategory: (category) => {
+            // Keep the inferred parent visible and part of explicit bulk review.
+            addField("category");
+            valuePickers.get("category").set(category);
+          },
+        });
+        valuePickers.set(field, picker);
+        picker.set("");
+        read = () => picker.value();
+        item.append(node("small", "Choose an existing value, add a new one, or choose the blank option to clear this field."));
       } else if (field === "tags") {
         const mode = select([["add", "Add tags"], ["remove", "Remove tags"], ["replace", "Replace all tags"], ["clear", "Clear all tags"]], "Tag action");
         const tagForm = node("div");
@@ -172,7 +248,7 @@
         item.append(node("small", "Add and Remove preserve the other tags. Replace and Clear affect the entire tag list."));
       } else if (["refunded", "internalTransferTreatment"].includes(field)) {
         const control = select(field === "refunded" ? [["true", "Mark refunded"], ["false", "Mark not refunded"]]
-          : [["automatic", "Automatic"], ["internal-transfer", "Internal transfer — exclude"], ["include-in-budget", "Count normally"]], labelText);
+          : [["automatic", "Eligible for detection"], ["internal-transfer", "Internal transfer — exclude"], ["include-in-budget", "Count normally"]], labelText);
         item.append(control); read = () => field === "refunded" ? control.value === "true" : control.value;
       } else {
         const control = node(field === "notes" ? "textarea" : "input");
@@ -237,38 +313,38 @@
   function create(options) {
     const { container } = options;
     const toolbar = node("div", undefined, "transaction-bulk-toolbar");
-    const filterWrap = node("div", undefined, "transaction-group-filter");
-    const label = node("span", "Group");
-    const filterRoot = node("div"); filterWrap.append(label, filterRoot);
-    let groupFilter = "";
-    const groupPicker = ui.createGroupPicker(filterRoot, { allowCreate: false, includeUngrouped: true, emptyLabel: "All groups", label: "Filter by group", onChange(value) {
-      groupFilter = value; options.onGroupChange?.(value); options.render();
-    } });
+    toolbar.hidden = true;
     const controls = node("div", undefined, "transaction-bulk-controls");
     const count = node("span", "", "bulk-selection-count"); count.setAttribute("role", "status");
     const selected = new Set();
     const id = options.getKey || ((row) => row._id);
     let active = false;
+    const isStaged = () => typeof options.staged === "function" ? options.staged() : options.staged === true;
     let revision = null;
     let visible = [];
-    function resetSelection() { selected.clear(); active = false; revision = null; options.onModeChange?.(false); }
+    const rangeSelection = ui.createCheckboxRangeSelection((ids, checked) => {
+      ids.forEach((item) => { if (checked) selected.add(item); else selected.delete(item); });
+      options.render();
+    });
+    function resetSelection() { selected.clear(); rangeSelection.reset(); active = false; revision = null; options.onModeChange?.(false); }
     function changeMode(value) {
       resetSelection(); active = value; revision = options.getRevision(); options.onModeChange?.(value); options.render();
     }
-    const toggle = button("Edit multiple", () => changeMode(true), "secondary-button bulk-mode-button");
-    const selectVisible = button("Select visible", () => { visible.forEach((row) => selected.add(id(row))); options.render(); });
-    const clear = button("Clear selection", () => { selected.clear(); options.render(); });
-    const done = button("Done", () => changeMode(false));
+    const toggle = button("Edit multiple", () => changeMode(!active), "secondary-button bulk-mode-button");
+    toggle.setAttribute("aria-pressed", "false");
+    const selectVisible = button("Select visible", () => { rangeSelection.reset(); visible.forEach((row) => selected.add(id(row))); options.render(); });
+    const clear = button("Clear selection", () => { rangeSelection.reset(); selected.clear(); options.render(); });
     const edit = button("Edit selected (0)", () => {
       const rows = options.getTransactions().filter((row) => selected.has(id(row)));
       if (!rows.length || revision !== options.getRevision()) { resetSelection(); options.render(); return; }
       const ids = rows.map(id);
-      openEditor({ rows, revision, staged: options.staged === true,
+      const staged = isStaged();
+      openEditor({ rows, revision, staged,
         available: options.getAllTransactions?.() || options.getTransactions(),
-        preview: options.staged ? null : (changes, baseline) => request("/api/transactions/bulk-preview", { ids, changes, revision: baseline }),
+        preview: staged ? null : (changes, baseline) => request("/api/transactions/bulk-preview", { ids, changes, revision: baseline }),
         apply: async (changes, baseline, proposed) => {
           if (baseline !== options.getRevision()) throw new Error("This list changed. Cancel and select transactions again.");
-          if (options.staged) await options.onStage(ids, proposed);
+          if (staged) await options.onStage(ids, proposed);
           else {
             const payload = await request("/api/transactions/bulk", { ids, changes, revision: baseline, confirm: true });
             resetSelection();
@@ -276,32 +352,59 @@
           }
           resetSelection(); options.render();
         },
-        onClose: () => { edit.focus(); },
+        onClose: () => { (active ? edit : toggle).focus(); },
       });
     }, "primary-button");
-    controls.append(count, toggle, selectVisible, clear, edit, done);
-    for (const control of [count, selectVisible, clear, edit, done]) control.hidden = true;
-    toolbar.append(filterWrap, controls);
+    const remove = button("Delete selected (0)", () => {
+      if (isStaged()) return;
+      const rows = options.getTransactions().filter((row) => selected.has(id(row)));
+      if (!rows.length || revision !== options.getRevision()) { resetSelection(); options.render(); return; }
+      // Capture both the selection and revision; neither may drift during confirmation.
+      const baseline = revision;
+      const ids = rows.map(id);
+      openDeleteReview({ rows: rows.map((row) => ({ ...row })),
+        hiddenCount: rows.length - visible.filter((row) => selected.has(id(row))).length,
+        apply: async () => {
+          if (isStaged() || baseline !== options.getRevision()) throw new Error("This list changed. Cancel and select transactions again.");
+          const payload = await request("/api/transactions/bulk-delete", { ids, revision: baseline, confirm: true });
+          resetSelection();
+          await options.onSaved(payload);
+          options.render();
+        },
+        onClose: () => { (active ? remove : toggle).focus(); },
+      });
+    }, "danger-button bulk-delete-button");
+    controls.append(count, selectVisible, clear, edit, remove);
+    const header = options.header || container.parentElement.querySelector("header");
+    const actions = node("div", undefined, "transaction-list-header-actions");
+    const close = header.querySelector(".icon-button");
+    if (close) { close.before(actions); actions.append(close); }
+    else header.append(actions);
+    actions.append(toggle);
+    toolbar.append(controls);
     const hint = node("p", "Selection is for editing only; it does not change which rows will be imported.", "bulk-import-hint");
     hint.hidden = true; toolbar.append(hint);
     container.before(toolbar);
     function filter(rows) {
-      groupFilter = options.getGroupFilter?.() ?? groupFilter;
-      return rows.filter((row) => !groupFilter || (groupFilter === "__ledger_no_group__" ? !key(row.group) : key(row.group) === key(groupFilter)));
+      return rows.filter((row) => ui.matchesGroupFilter(row, options.getGroupFilter?.() || ""));
     }
     function render(rows, rowOptions) {
       if (active && revision !== options.getRevision()) resetSelection();
       const eligible = new Set(options.getTransactions().map(id));
       for (const selectedId of selected) if (!eligible.has(selectedId)) selected.delete(selectedId);
       visible = filter(rows);
+      rangeSelection.sync(visible.map(id), revision);
       ui.setAvailableGroups(ui.groupsFromTransactions(options.getAllTransactions?.() || options.getTransactions()));
-      groupPicker.set(groupFilter, ui.groupsFromTransactions(options.getTransactions()));
-      toggle.hidden = active; toggle.disabled = !options.getTransactions().length;
-      for (const control of [count, selectVisible, clear, edit, done]) control.hidden = !active;
+      toolbar.hidden = !active;
+      toggle.textContent = active ? "Done editing" : "Edit multiple";
+      toggle.setAttribute("aria-pressed", String(active));
+      toggle.disabled = !options.getTransactions().length;
       selectVisible.disabled = !visible.length; clear.disabled = !selected.size;
       const hidden = selected.size - visible.filter((row) => selected.has(id(row))).length;
       count.textContent = `${selected.size} selected${hidden > 0 ? ` · ${hidden} outside this view` : ""}`;
       edit.textContent = `Edit selected (${selected.size})`; edit.disabled = !selected.size;
+      remove.textContent = `Delete selected (${selected.size})`; remove.disabled = !selected.size || isStaged();
+      remove.hidden = isStaged();
       hint.hidden = !(options.staged && active && options.importSelection);
       ui.renderTransactionList(container, visible, (row, index) => {
         const original = rowOptions(row, index);
@@ -309,9 +412,11 @@
         const selection = node("label", undefined, "bulk-row-selection");
         const checkbox = node("input"); checkbox.type = "checkbox"; checkbox.checked = selected.has(id(row));
         checkbox.setAttribute("aria-label", `Select ${row.description} for bulk editing`);
-        checkbox.addEventListener("change", () => { if (checkbox.checked) selected.add(id(row)); else selected.delete(id(row)); options.render(); });
+        rangeSelection.bind(checkbox, id(row));
         selection.append(checkbox);
-        return { ...original, leadingControl: selection, showEdit: false };
+        // Selection is additive: keep each variant's existing row editor available.
+        // Explicitly read-only preview rows still retain their showEdit: false.
+        return { ...original, leadingControl: selection };
       });
       [...container.children].forEach((row, index) => {
         row.classList.toggle("transaction-row--bulk-selectable", active);
@@ -320,7 +425,7 @@
       if (!visible.length) container.append(node("p", "No transactions match this view.", "empty-transaction-list"));
       return visible;
     }
-    return { render, filter, reset({ keepFilter = false } = {}) { resetSelection(); if (!keepFilter) groupFilter = ""; }, isActive: () => active };
+    return { render, filter, reset() { resetSelection(); toolbar.hidden = true; toggle.textContent = "Edit multiple"; toggle.setAttribute("aria-pressed", "false"); }, isActive: () => active };
   }
 
   globalObject.LedgerTransactionBulk = Object.freeze({ create, applyChanges, changedFields });

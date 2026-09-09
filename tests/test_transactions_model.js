@@ -67,6 +67,24 @@ test("description, paired categories, account and provider combine with tag quer
   assert.deepEqual(model.filterTransactions([row], { description: ".*" }), []);
 });
 
+test("shared transaction search matches descriptions or notes literally without modifying freeform text", () => {
+  const rows = [transaction({ description: "BIKE helmet", notes: "For the LA\n  trip; cost [20]." }),
+    transaction({ description: "LA trip hotel", notes: "LA trip stay" }),
+    transaction({ description: "Book", notes: null }), transaction({ description: "Shoes" })];
+  const before = JSON.stringify(rows);
+  for (const [query, expected] of [["bike", [0]], ["  la  TRIP ", [0, 1]], ["cost [20]", [0]],
+    [".*", []], ["Book", [2]], ["Shoes", [3]], ["", [0, 1, 2, 3]], [" \n\t ", [0, 1, 2, 3]],
+    ["helmet for", []], ["missing", []]]) {
+    const matches = expected.map(index => rows[index]);
+    assert.deepEqual(rows.filter(row => model.matchesTransactionSearch(row, query)), matches, query);
+    assert.deepEqual(model.filterTransactions(rows, { description: query }), matches, query);
+  }
+  assert.deepEqual(model.filterTransactions(rows, { description: "la trip", provider: "Not this bank" }), []);
+  assert.equal(JSON.stringify(rows), before, "Notes and descriptions must not be normalized in storage");
+  assert.equal(model.filterTransactions([rows[1], { ...rows[1] }], { description: "la trip" }).length, 2,
+    "Preserve identical occurrences without duplicating a row matching both fields");
+});
+
 test("blank category and subcategory filters do not confuse a literal Unclassified category", () => {
   const rows = [transaction({ category: "", subcategory: "" }), transaction({ category: "Unclassified" }), transaction({ subcategory: "Tools" })];
   assert.deepEqual(model.filterTransactions(rows, { category: "__ledger_blank__" }), [rows[0]]);
@@ -171,4 +189,66 @@ test("browser and CommonJS entry points expose the same pure model", () => {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../app/transactions-model.js"), "utf8"), context);
   assert.deepEqual(Object.keys(context.window.LedgerTransactionsModel), Object.keys(model));
   assert.equal(context.window.LedgerTransactionsModel.summarizeTransactions(bikeTransactions).spent, 1140);
+});
+
+test("group comparison uses exact normalized groups, preserves occurrences, and never infers groups from tags", () => {
+  const first = Object.freeze(transaction({ group: "Road  bike", amount: 10.1 }));
+  const rows = Object.freeze([first, first, Object.freeze(transaction({ group: "road bike", amount: .2 })),
+    Object.freeze(transaction({ group: "Other bike", amount: 25 })),
+    Object.freeze(transaction({ tags: "Road bike (group)", amount: 1000 }))]);
+  const result = model.compareGroups(rows, [" ROAD BIKE ", "road bike", "Other bike"]);
+  assert.deepEqual(result.groups.map(({ name, spent, count, difference }) => ({ name, spent, count, difference })), [
+    { name: "Road bike", spent: 20.4, count: 3, difference: 0 },
+    { name: "Other bike", spent: 25, count: 1, difference: 4.6 },
+  ]);
+  assert.equal(result.baseline, "road bike");
+  assert.equal(rows[0].group, "Road  bike");
+  assert.throws(() => model.compareGroups([], ["A", "B", "C", "D", "E"]), RangeError);
+});
+
+test("group spending reconciles credits, category cells, exclusions, income and explicit overrides in cents", () => {
+  const rows = [
+    transaction({ group: "A", amount: 10.1, category: "Food" }),
+    transaction({ group: "A", amount: .2, category: "food" }),
+    transaction({ group: "A", amount: -.3, category: "FOOD" }),
+    transaction({ group: "A", amount: 8, category: "" }),
+    transaction({ group: "A", amount: -100, category: "Income" }),
+    transaction({ group: "A", amount: 500, flags: "refunded" }),
+    transaction({ group: "A", amount: 500, flags: "internal-transfer" }),
+    transaction({ group: "A", amount: 2, flags: "include-in-budget", _isInternalTransfer: true }),
+    transaction({ group: "B", amount: -30, category: "food" }),
+  ];
+  const result = model.compareGroups(rows, ["A", "B"], { baseline: "b" });
+  const [a, b] = result.groups;
+  assert.equal(a.spent, 20); assert.equal(a.income, 100); assert.equal(a.excludedCount, 2);
+  assert.equal(a.purchases, 20.3); assert.equal(a.credits, .3); assert.equal(a.difference, 50);
+  assert.equal(b.spent, -30); assert.equal(b.difference, 0);
+  assert.equal(result.categories.filter((entry) => entry.key === "food").length, 1);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(result.categories.reduce((sum, entry) => sum + Math.round(entry.cells[i].total * 100), 0), result.groups[i].spent * 100);
+  }
+  assert.equal(result.categories.find((entry) => entry.key === "").cells[1].count, 0);
+});
+
+test("comparison distinguishes genuine zero, no date-range activity, and a removed group", () => {
+  const rows = [transaction({ group: "Zero", amount: 10, date: "2025-01-01" }),
+    transaction({ group: "Zero", amount: -10, date: "2025-01-31" }),
+    transaction({ group: "Later", date: "2026-01-01" })];
+  const result = model.compareGroups(rows, ["Zero", "Later", "Removed"], { startDate: "2025-01-01", endDate: "2025-01-31" });
+  assert.deepEqual(result.groups.map((group) => [group.spent, group.count, group.savedCount, group.difference]), [
+    [0, 2, 2, 0], [0, 0, 1, null], [0, 0, 0, null],
+  ]);
+  assert.equal(result.categories[0].cells[0].count, 2);
+  assert.equal(result.categories[0].cells[0].total, 0);
+  const missingReference = model.compareGroups(rows, ["Removed", "Zero"]);
+  assert.equal(missingReference.groups[1].difference, null);
+  assert.deepEqual(model.compareGroups(rows, []), { groups: [], baseline: "", categories: [] });
+});
+
+test("comparison validates ranges and includes both date boundaries across years", () => {
+  const rows = [transaction({ group: "Bike", date: "2024-12-31" }), transaction({ group: "Bike", date: "2025-01-01" })];
+  assert.equal(model.compareGroups(rows, ["Bike"], { startDate: "2024-12-31", endDate: "2025-01-01" }).groups[0].spent, 20);
+  for (const dates of [{ startDate: "invalid" }, { endDate: "2025-02-30" }, { startDate: "2026-01-01", endDate: "2025-01-01" }]) {
+    assert.throws(() => model.compareGroups(rows, ["Bike"], dates), TypeError);
+  }
 });

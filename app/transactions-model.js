@@ -16,6 +16,14 @@
     return normalizedText(value).toLocaleLowerCase();
   }
 
+  // One literal, case-insensitive search contract for every transaction surface.
+  // Normalize a view of multiline notes, never the stored freeform text.
+  function matchesTransactionSearch(transaction, query) {
+    const key = matchKey(query);
+    return !key || [transaction.description, transaction.notes]
+      .some((value) => matchKey(value).includes(key));
+  }
+
   function tagsFor(transaction) {
     const values = Array.isArray(transaction.tags)
       ? transaction.tags
@@ -28,7 +36,7 @@
   }
 
   // Keep treatment precedence identical to LedgerTransactionUI.isInternalTransfer.
-  // The server reconciles automatic pairs across the whole database before querying.
+  // Detection runs on import or an explicit scan; queries use persisted treatment.
   function isExcluded(transaction) {
     const flags = new Set(String(transaction.flags ?? "").split(",").map(matchKey));
     if (flags.has("refunded") || flags.has("internal-transfer")) return true;
@@ -61,7 +69,7 @@
     if (startDate && endDate && startDate > endDate) return [];
 
     return transactions.filter((transaction) => {
-      if (description && !matchKey(transaction.description).includes(description)) return false;
+      if (!matchesTransactionSearch(transaction, description)) return false;
       for (const [field, value] of exactFields) {
         const current = matchKey(transaction[field]);
         if (value === BLANK_VALUE && (field === "category" || field === "subcategory")) {
@@ -131,5 +139,52 @@
       .map(({ category, cents, count }) => ({ category, total: cents / 100, count }));
   }
 
-  return Object.freeze({ filterTransactions, summarizeTransactions, spendingByCategory });
+  function compareGroups(transactions, selectedGroups, { startDate = "", endDate = "", baseline = "" } = {}) {
+    if ((startDate && !validDate(startDate)) || (endDate && !validDate(endDate)) || (startDate && endDate && startDate > endDate)) {
+      throw new TypeError("Choose a valid date range.");
+    }
+    const names = new Map();
+    for (const transaction of transactions) {
+      const name = normalizedText(transaction.group);
+      if (name && !names.has(matchKey(name))) names.set(matchKey(name), name);
+    }
+    const chosen = new Map();
+    for (const value of selectedGroups) {
+      const name = normalizedText(value);
+      if (name && !chosen.has(matchKey(name))) chosen.set(matchKey(name), names.get(matchKey(name)) || name);
+    }
+    if (chosen.size > 4) throw new RangeError("Compare up to four groups at a time.");
+    const groups = [...chosen].map(([key, name]) => {
+      const all = transactions.filter((transaction) => matchKey(transaction.group) === key);
+      const rows = filterTransactions(all, { startDate, endDate });
+      const summary = summarizeTransactions(rows);
+      let purchases = 0; let credits = 0;
+      for (const transaction of rows) {
+        if (isIncome(transaction) || isExcluded(transaction)) continue;
+        const amount = amountInCents(transaction);
+        if (amount < 0) credits -= amount; else purchases += amount;
+      }
+      return { key, name, ...summary, savedCount: all.length, purchases: purchases / 100, credits: credits / 100,
+        categories: spendingByCategory(rows) };
+    });
+    const reference = groups.find((group) => group.key === matchKey(baseline)) || groups[0];
+    for (const group of groups) {
+      group.difference = reference?.count && group.count
+        ? (Math.round(group.spent * 100) - Math.round(reference.spent * 100)) / 100 : null;
+    }
+    const categories = new Map();
+    for (const group of groups) for (const entry of group.categories) {
+      const key = matchKey(entry.category);
+      if (!categories.has(key)) categories.set(key, { key, category: entry.category, magnitude: 0, cells: new Map() });
+      const category = categories.get(key);
+      category.magnitude += Math.abs(Math.round(entry.total * 100));
+      category.cells.set(group.key, entry);
+    }
+    return { groups, baseline: reference?.key || "", categories: [...categories.values()]
+      .sort((a, b) => b.magnitude - a.magnitude || a.category.localeCompare(b.category))
+      .map((entry) => ({ key: entry.key, category: entry.category,
+        cells: groups.map((group) => entry.cells.get(group.key) || { category: entry.category, total: 0, count: 0 }) })) };
+  }
+
+  return Object.freeze({ matchesTransactionSearch, filterTransactions, summarizeTransactions, spendingByCategory, compareGroups });
 });

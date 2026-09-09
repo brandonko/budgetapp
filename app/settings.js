@@ -1,5 +1,6 @@
 "use strict";
 const transactionUi = window.LedgerTransactionUI;
+void transactionUi.loadEditorTaxonomy();
 const IMPORT_HISTORY_PAGE_SIZE = 5;
 
 const state = {
@@ -13,10 +14,13 @@ const state = {
   importHistoryFilters: {
     description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
   },
-  editingImportTransactionId: null,
+  transactionEdit: null,
   importHistoryEditBusy: false,
   availableTransactionTags: [],
   availableTransactions: [],
+  transferReview: null,
+  transferReviewBusy: false,
+  transferReviewFilters: { proposed: true, flagged: false },
   taxonomy: { version: 1, categories: [] },
   taxonomyRevision: "",
   taxonomyBusy: false,
@@ -51,13 +55,16 @@ const elements = {
   importHistoryProvider: document.querySelector("#import-history-provider-filter"),
   importHistoryFilterButton: document.querySelector("#import-history-filter-button"),
   importHistoryFilterPopover: document.querySelector("#import-history-filter-popover"),
+  importHistoryGroup: document.querySelector("#import-history-group-filter"),
   importHistoryFilterCount: document.querySelector("#import-history-filter-count"),
   resetImportHistoryFilters: document.querySelector("#reset-import-history-filters"),
-  applyImportHistoryFilters: document.querySelector("#apply-import-history-filters"),
   importHistoryActiveFilters: document.querySelector("#import-history-active-filters"),
   importHistoryFilterChips: document.querySelector("#import-history-filter-chips"),
   clearImportHistoryFilters: document.querySelector("#clear-import-history-filters"),
   importHistorySort: document.querySelector("#import-history-sort"),
+  transferReviewFilters: document.querySelector("#transfer-review-filters"),
+  transferReviewProposedFilter: document.querySelector("#transfer-review-proposed-filter"),
+  transferReviewFlaggedFilter: document.querySelector("#transfer-review-flagged-filter"),
   closeImportHistoryDialog: document.querySelector("#close-import-history-dialog"),
   importHistoryEditDialog: document.querySelector("#import-history-edit-dialog"),
   importHistoryEditForm: document.querySelector("#import-history-edit-form"),
@@ -93,9 +100,9 @@ const elements = {
   unclassifiedProvider: document.querySelector("#unclassified-provider-filter"),
   unclassifiedFilterButton: document.querySelector("#unclassified-filter-button"),
   unclassifiedFilterPopover: document.querySelector("#unclassified-filter-popover"),
+  unclassifiedGroup: document.querySelector("#unclassified-group-filter"),
   unclassifiedFilterCount: document.querySelector("#unclassified-filter-count"),
   resetUnclassifiedFilters: document.querySelector("#reset-unclassified-filters"),
-  applyUnclassifiedFilters: document.querySelector("#apply-unclassified-filters"),
   unclassifiedActiveFilters: document.querySelector("#unclassified-active-filters"),
   unclassifiedFilterChips: document.querySelector("#unclassified-filter-chips"),
   clearUnclassifiedFilters: document.querySelector("#clear-unclassified-filters"),
@@ -109,6 +116,9 @@ const elements = {
   previewError: document.querySelector("#classification-preview-error"),
   previewList: document.querySelector("#classification-preview-list"),
   previewSort: document.querySelector("#classification-preview-sort"),
+  previewFilters: document.querySelector("#classification-preview-filters"),
+  previewGroupFilter: document.querySelector("#classification-preview-group-filter"),
+  previewFilterCount: document.querySelector("#classification-preview-filter-count"),
   closePreview: document.querySelector("#close-classification-preview"),
   cancelPreview: document.querySelector("#cancel-classification-preview"),
   confirmPreview: document.querySelector("#confirm-classification-preview"),
@@ -140,6 +150,7 @@ let classificationEdit = null;
 let ruleEdits = new Map();
 let pendingNewClassificationIndex = null;
 let pendingClassificationPreview = null;
+let classificationPreviewGroup = "";
 let unclassifiedTransactions = [];
 let unclassifiedRevision = "";
 let unclassifiedFieldFilters = {
@@ -188,6 +199,29 @@ const unclassifiedMonthFormatter = new Intl.DateTimeFormat("en-US", {
 
 const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactionBulk.create({
   container: elements.importHistoryTransactions,
+  staged: () => Boolean(state.transferReview),
+  onModeChange: (active) => {
+    const confirm = document.querySelector("#confirm-transfer-review");
+    if (confirm) confirm.disabled = active || state.transferReviewBusy;
+  },
+  onStage: async (_ids, proposed) => refreshTransferReview(proposed),
+  decorateRow: (row, transaction) => {
+    if (!state.transferReview) return;
+    const change = state.transferReview.changes.find((entry) => entry._id === transaction._id);
+    if (!change) return;
+    const details = document.createElement("div");
+    details.className = "transfer-change-details";
+    for (const field of change.changedFields) {
+      const line = document.createElement("p");
+      const display = (value) => field === "flags"
+        ? String(value).split(",").filter((flag) => !flag.startsWith("transfer-pair-")).join(", ") || "Counted / eligible for detection"
+        : String(value || "(blank)");
+      line.textContent = `${field === "flags" ? "Budget flags" : field}: ${display(change.before[field])} → ${display(change.after[field])}`;
+      details.append(line);
+    }
+    row.append(details);
+  },
+  getGroupFilter: () => state.importHistoryFilters.group,
   getTransactions: () => state.importHistoryTransactions,
   getAllTransactions: () => state.availableTransactions,
   getRevision: () => state.importHistoryRevision,
@@ -197,26 +231,32 @@ const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactio
     state.availableTransactions = payload.transactions;
     state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
     state.importHistoryTransactions = payload.transactions.filter((row) => row.createdAt === state.importHistoryBatch.createdAt);
+    if (Array.isArray(payload.imports)) renderImportHistory(payload.imports);
     configureImportHistoryFilters();
   },
 }) : null;
 
 const unclassifiedBulk = elements.unclassifiedList ? window.LedgerTransactionBulk.create({
   container: elements.unclassifiedList,
+  getGroupFilter: () => unclassifiedFieldFilters.group,
   getTransactions: () => unclassifiedTransactions,
   getAllTransactions: () => state.availableTransactions,
   getRevision: () => unclassifiedRevision,
   render: () => renderUnclassifiedTransactions(),
-  onSaved: (payload) => {
-    unclassifiedRevision = payload.revision;
-    state.availableTransactions = payload.transactions;
-    unclassifiedTransactions = payload.transactions.filter((row) => !row.subcategory);
-    configureUnclassifiedFilters(unclassifiedFieldFilters);
-  },
+  onSaved: updateUnclassifiedTransactions,
 }) : null;
+
+function updateUnclassifiedTransactions(payload) {
+  unclassifiedRevision = payload.revision;
+  state.availableTransactions = payload.transactions;
+  state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+  unclassifiedTransactions = payload.transactions.filter((row) => !row.subcategory);
+  configureUnclassifiedFilters(unclassifiedFieldFilters);
+}
 
 const classificationBulk = elements.previewList ? window.LedgerTransactionBulk.create({
   container: elements.previewList, staged: true,
+  getGroupFilter: () => classificationPreviewGroup,
   getTransactions: () => pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [],
   getAllTransactions: () => [...state.availableTransactions, ...(pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [])],
   getRevision: () => pendingClassificationPreview?.revision,
@@ -535,6 +575,7 @@ function populateImportHistorySubcategories(category, selected = "") {
 }
 
 function configureImportHistoryFilters(filters = state.importHistoryFilters) {
+  transactionUi.populateGroupFilter(elements.importHistoryGroup, state.importHistoryTransactions, filters.group);
   const tags = new Map();
   state.importHistoryTransactions.forEach((transaction) => importHistoryTags(transaction).forEach((tag) => {
     if (!tags.has(tag.toLocaleLowerCase())) tags.set(tag.toLocaleLowerCase(), tag);
@@ -551,6 +592,7 @@ function configureImportHistoryFilters(filters = state.importHistoryFilters) {
   populateImportHistoryFilter(elements.importHistoryProvider, importHistoryFilterValues("provider"), "All providers", filters.provider);
   state.importHistoryFilters = {
     description: elements.importHistorySearch.value.trim(),
+    group: elements.importHistoryGroup.value,
     category: elements.importHistoryCategory.value,
     subcategory: elements.importHistorySubcategory.value,
     tag: elements.importHistoryTag.value,
@@ -562,6 +604,7 @@ function configureImportHistoryFilters(filters = state.importHistoryFilters) {
 
 function importHistoryFilterDraft() {
   return {
+    group: elements.importHistoryGroup.value,
     category: elements.importHistoryCategory.value,
     subcategory: elements.importHistorySubcategory.value,
     tag: elements.importHistoryTag.value,
@@ -572,6 +615,7 @@ function importHistoryFilterDraft() {
 
 function renderImportHistoryFilterChips() {
   const definitions = [
+    ["group", "Group"],
     ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
     ["accountName", "Account"], ["provider", "Provider"],
   ];
@@ -581,7 +625,7 @@ function renderImportHistoryFilterChips() {
   elements.importHistoryFilterButton.classList.toggle("has-active-filters", active.length > 0);
   elements.importHistoryActiveFilters.hidden = active.length === 0;
   elements.importHistoryFilterChips.replaceChildren(...active.map(([field, label]) => {
-    const value = state.importHistoryFilters[field];
+    const value = field === "group" ? transactionUi.groupFilterLabel(state.importHistoryFilters[field]) : state.importHistoryFilters[field];
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
@@ -599,17 +643,27 @@ function renderImportHistoryFilterChips() {
 function setImportHistoryFilterPopover(open, restore = true) {
   if (!open && restore) configureImportHistoryFilters(state.importHistoryFilters);
   elements.importHistoryFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.importHistoryFilterPopover);
   elements.importHistoryFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function renderImportHistoryTransactions() {
   if (!state.importHistoryBatch) return;
   const transactions = state.importHistoryTransactions;
+  const review = state.transferReview;
+  const flaggedIds = new Set((review?.alreadyFlagged || []).map((transaction) => transaction._id));
+  elements.transferReviewFilters.hidden = !review;
+  if (review) {
+    elements.transferReviewProposedFilter.textContent = `Proposed changes (${review.changes.length})`;
+    elements.transferReviewFlaggedFilter.textContent = `Already flagged (${review.alreadyFlagged.length})`;
+    elements.transferReviewProposedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.proposed));
+    elements.transferReviewFlaggedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.flagged));
+  }
   state.importHistoryFilters.description = elements.importHistorySearch.value.trim();
   const filters = state.importHistoryFilters;
-  const description = filters.description.toLocaleLowerCase();
   const visible = transactionUi.sortTransactions(transactions.filter((transaction) =>
-    (!description || transaction.description.toLocaleLowerCase().includes(description))
+    (!review || state.transferReviewFilters[flaggedIds.has(transaction._id) ? "flagged" : "proposed"])
+    && transactionUi.matchesTransactionSearch(transaction, filters.description)
     && (!filters.category || transaction.category === filters.category)
     && (!filters.subcategory || transaction.subcategory === filters.subcategory)
     && (!filters.tag || importHistoryTags(transaction).some(
@@ -621,7 +675,9 @@ function renderImportHistoryTransactions() {
   const groupFiltered = historyBulk.filter(visible);
   const filtered = Object.values(filters).some(Boolean) || groupFiltered.length !== transactions.length;
   const count = filtered ? `${groupFiltered.length} of ${transactions.length}` : String(transactions.length);
-  elements.importHistoryDialogSubtitle.textContent = `${count} ${
+  elements.importHistoryDialogSubtitle.textContent = state.transferReview
+    ? `${review.changes.length} proposed changes · ${review.alreadyFlagged.length} already flagged · ${groupFiltered.length} shown. Changes are saved only when you confirm; visibility filters do not affect saving.`
+    : `${count} ${
     transactions.length === 1 ? "transaction" : "transactions"
   } imported ${backupDateFormatter.format(new Date(state.importHistoryBatch.createdAt))}`;
   renderImportHistoryFilterChips();
@@ -629,7 +685,9 @@ function renderImportHistoryTransactions() {
     historyBulk.render([], importHistoryTransactionOptions);
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
-    empty.textContent = "This import no longer contains any transactions.";
+    empty.textContent = state.transferReview
+      ? "No new transfer pairs found. Existing saved exclusions and manual overrides stay unchanged."
+      : "This import no longer contains any transactions.";
     elements.importHistoryTransactions.replaceChildren(empty);
     return;
   }
@@ -637,13 +695,21 @@ function renderImportHistoryTransactions() {
   if (groupFiltered.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
-    empty.textContent = "No transactions match these filters.";
+    empty.textContent = review && review.changes.length === 0 && !state.transferReviewFilters.flagged
+      ? "No proposed changes. Turn on Already flagged to review your saved internal transfers."
+      : "No transactions match these filters.";
     elements.importHistoryTransactions.replaceChildren(empty);
     return;
   }
 }
 
 async function openImportHistoryBatch(importBatch) {
+  state.transferReview = null;
+  elements.transferReviewFilters.hidden = true;
+  document.querySelector("#transfer-review-footer").hidden = true;
+  elements.importHistoryDialog.querySelector("h2").textContent = "Imported transactions";
+  elements.importHistoryDialog.querySelector(".eyebrow").textContent = "Import history";
+  elements.closeImportHistoryDialog.setAttribute("aria-label", "Close imported transactions");
   historyBulk.reset();
   state.importHistoryBatch = importBatch;
   state.importHistoryTransactions = [];
@@ -680,34 +746,162 @@ async function openImportHistoryBatch(importBatch) {
   }
 }
 
+async function refreshTransferReview(proposed = []) {
+  const previous = state.transferReview;
+  const overrides = new Map((previous?.overrides || []).map((row) => [row._id, row]));
+  proposed.forEach((row) => overrides.set(row._id, row));
+  state.transferReviewBusy = true;
+  const confirm = document.querySelector("#confirm-transfer-review");
+  confirm.disabled = true;
+  try {
+    const response = await fetch("/api/internal-transfers/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides: [...overrides.values()] }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || (response.status === 404
+      ? "Restart the Ledger Python server to enable transfer reviews, then try again."
+      : "Could not scan internal transfers."));
+    if (!Array.isArray(payload.alreadyFlagged)) {
+      throw new Error("Restart the Ledger Python server to view already flagged transfers, then scan again.");
+    }
+    state.transferReview = { ...payload, overrides: [...overrides.values()] };
+    state.importHistoryRevision = payload.revision;
+    state.importHistoryTransactions = [...payload.transactions, ...payload.alreadyFlagged];
+    state.importHistoryBatch = { transferReview: true };
+    configureImportHistoryFilters();
+    renderImportHistoryTransactions();
+    confirm.textContent = payload.changes.length ? `Save reviewed changes (${payload.changes.length})` : "Finish review";
+  } finally {
+    state.transferReviewBusy = false;
+    confirm.disabled = historyBulk.isActive() || !state.transferReview;
+  }
+}
+
+async function openTransferReview() {
+  if (state.transferReviewBusy) return;
+  historyBulk.reset();
+  state.transferReview = null;
+  state.transferReviewFilters = { proposed: true, flagged: false };
+  elements.transferReviewFilters.hidden = true;
+  state.importHistoryFilters = { description: "", category: "", subcategory: "", tag: "", group: "", accountName: "", provider: "" };
+  elements.importHistorySearch.value = "";
+  setImportHistoryFilterPopover(false, false);
+  elements.importHistoryDialog.querySelector("h2").textContent = "Review internal transfers";
+  elements.importHistoryDialog.querySelector(".eyebrow").textContent = "Proposed changes";
+  elements.closeImportHistoryDialog.setAttribute("aria-label", "Cancel transfer review");
+  elements.importHistoryDialogSubtitle.textContent = "Scanning all dates…";
+  elements.importHistoryDialogError.hidden = true;
+  elements.importHistoryTransactions.replaceChildren();
+  document.querySelector("#transfer-review-footer").hidden = false;
+  if (!elements.importHistoryDialog.open) elements.importHistoryDialog.showModal();
+  try { await refreshTransferReview(); }
+  catch (error) {
+    elements.importHistoryDialogError.textContent = error.message;
+    elements.importHistoryDialogError.hidden = false;
+  }
+}
+
+async function confirmTransferReview() {
+  if (!state.transferReview || state.transferReviewBusy || historyBulk.isActive()) return;
+  const review = state.transferReview;
+  const button = document.querySelector("#confirm-transfer-review");
+  state.transferReviewBusy = true;
+  button.disabled = true;
+  elements.closeImportHistoryDialog.disabled = true;
+  document.querySelector("#cancel-transfer-review").disabled = true;
+  elements.importHistoryDialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = true; });
+  try {
+    const response = await fetch("/api/internal-transfers/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision: review.revision, plan: review.plan, overrides: review.overrides, confirm: true }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Could not save the transfer review.");
+    const status = document.querySelector("#transfer-review-status");
+    status.textContent = `${payload.changed} transactions updated · ${payload.transferPairs} transfer pairs saved. ` +
+      (payload.changed ? "A safety backup was created. " : "") + "Your dashboards now use saved transfer flags.";
+    status.hidden = false;
+    state.availableTransactions = payload.transactions;
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    state.transferReviewBusy = false;
+    closeImportHistoryDialog();
+  } catch (error) {
+    elements.importHistoryDialogError.textContent = error.message;
+    elements.importHistoryDialogError.hidden = false;
+  } finally {
+    state.transferReviewBusy = false;
+    elements.importHistoryDialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = false; });
+    button.disabled = false;
+    elements.closeImportHistoryDialog.disabled = false;
+    document.querySelector("#cancel-transfer-review").disabled = false;
+  }
+}
+
+document.querySelector("#find-internal-transfers")?.addEventListener("click", openTransferReview);
+document.querySelector("#cancel-transfer-review")?.addEventListener("click", closeImportHistoryDialog);
+document.querySelector("#confirm-transfer-review")?.addEventListener("click", confirmTransferReview);
+
+for (const [button, filter] of [
+  [elements.transferReviewProposedFilter, "proposed"],
+  [elements.transferReviewFlaggedFilter, "flagged"],
+]) {
+  button?.addEventListener("click", () => {
+    if (!state.transferReview || state.transferReviewBusy) return;
+    state.transferReviewFilters[filter] = !state.transferReviewFilters[filter];
+    renderImportHistoryTransactions();
+  });
+}
+
 function closeImportHistoryDialog() {
+  if (state.transferReviewBusy) return;
+  state.transferReview = null;
+  elements.transferReviewFilters.hidden = true;
+  document.querySelector("#transfer-review-footer").hidden = true;
   historyBulk.reset();
   if (elements.importHistoryDialog.open) elements.importHistoryDialog.close();
   state.importHistoryBatch = null;
   state.importHistoryTransactions = [];
 }
 
-function openImportHistoryTransactionEditor(transaction) {
-  state.editingImportTransactionId = transaction._id;
+// One editor/save path for history, staged transfer reviews and unclassified rows.
+function openImportHistoryTransactionEditor(transaction, source = "history") {
+  const unclassified = source === "unclassified";
+  const staged = !unclassified && Boolean(state.transferReview);
+  const returnDialog = unclassified ? elements.unclassifiedDialog : elements.importHistoryDialog;
+  state.transactionEdit = {
+    source, staged, returnDialog, transaction: { ...transaction },
+    revision: unclassified ? unclassifiedRevision : state.importHistoryRevision,
+  };
   elements.importHistoryEditError.hidden = true;
   elements.importHistoryEditError.textContent = "";
   transactionUi.configureTransactionTagPicker(
     elements.importHistoryEditForm,
-    state.availableTransactionTags,
+    transactionUi.tagsFromTransactions(state.availableTransactions),
   );
-  transactionUi.populateTransactionEditor(elements.importHistoryEditForm, transaction);
-  if (elements.importHistoryDialog.open) elements.importHistoryDialog.close();
+  transactionUi.populateTransactionEditor(elements.importHistoryEditForm, transaction, {}, {
+    transactions: [...state.availableTransactions, ...state.importHistoryTransactions],
+  });
+  elements.importHistoryEditForm.querySelector(".dialog-subtitle").textContent = staged
+    ? "Changes remain staged until you confirm the transfer review."
+    : "Changes are saved directly to the master CSV.";
+  elements.importHistoryEditForm.querySelector(".eyebrow").textContent = unclassified
+    ? "Unclassified transactions" : staged ? "Internal transfers" : "Import history";
+  if (returnDialog.open) returnDialog.close();
   elements.importHistoryEditDialog.showModal();
   elements.importHistoryEditForm.elements.namedItem("description").focus();
 }
 
 function closeImportHistoryTransactionEditor() {
   if (state.importHistoryEditBusy) return;
+  finishTransactionEdit();
+}
+
+function finishTransactionEdit() {
+  const returnDialog = state.transactionEdit?.returnDialog;
   if (elements.importHistoryEditDialog.open) elements.importHistoryEditDialog.close();
-  state.editingImportTransactionId = null;
-  if (state.importHistoryBatch && !elements.importHistoryDialog.open) {
-    elements.importHistoryDialog.showModal();
-  }
+  state.transactionEdit = null;
+  if (returnDialog && !returnDialog.open) returnDialog.showModal();
 }
 
 function setImportHistoryEditBusy(busy) {
@@ -721,33 +915,44 @@ function setImportHistoryEditBusy(busy) {
 
 async function saveImportHistoryTransaction(event) {
   event.preventDefault();
-  const transaction = state.importHistoryTransactions.find(
-    (candidate) => candidate._id === state.editingImportTransactionId,
-  );
-  if (!transaction) return;
+  const edit = state.transactionEdit;
+  if (!edit || state.importHistoryEditBusy) return;
+  const { transaction } = edit;
   elements.importHistoryEditError.hidden = true;
   setImportHistoryEditBusy(true);
   try {
+    if (edit.staged) {
+      await refreshTransferReview([{
+        ...transaction,
+        ...transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
+      }]);
+      finishTransactionEdit();
+      return;
+    }
     const response = await fetch(`/api/transactions/${transaction._id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        revision: state.importHistoryRevision,
+        revision: edit.revision,
         transaction: transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save transaction (${response.status}).`);
-    state.importHistoryRevision = payload.revision;
+    state.availableTransactions = payload.transactions;
     state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
-    state.importHistoryTransactions = payload.transactions
-      .filter((candidate) => candidate.createdAt === state.importHistoryBatch.createdAt)
-      .sort((left, right) => right.date.localeCompare(left.date) || right._id - left._id);
-    configureImportHistoryFilters(state.importHistoryFilters);
-    renderImportHistoryTransactions();
-    elements.importHistoryEditDialog.close();
-    state.editingImportTransactionId = null;
-    elements.importHistoryDialog.showModal();
+    if (edit.source === "unclassified") {
+      updateUnclassifiedTransactions(payload);
+      renderUnclassifiedTransactions();
+    } else {
+      state.importHistoryRevision = payload.revision;
+      state.importHistoryTransactions = payload.transactions
+        .filter((candidate) => candidate.createdAt === state.importHistoryBatch.createdAt)
+        .sort((left, right) => right.date.localeCompare(left.date) || right._id - left._id);
+      configureImportHistoryFilters(state.importHistoryFilters);
+      renderImportHistoryTransactions();
+    }
+    finishTransactionEdit();
   } catch (error) {
     elements.importHistoryEditError.textContent =
       error instanceof Error ? error.message : "Could not save transaction.";
@@ -833,6 +1038,7 @@ async function loadAvailableTransactionTags() {
 }
 
 function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
+  transactionUi.populateGroupFilter(elements.unclassifiedGroup, unclassifiedTransactions, filters.group);
   const unique = (field) => [...new Set(
     unclassifiedTransactions.map((transaction) => transaction[field]).filter(Boolean),
   )].sort((left, right) => left.localeCompare(right));
@@ -869,6 +1075,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
     : "";
   unclassifiedFieldFilters = {
     description: elements.unclassifiedSearch.value.trim(),
+    group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
     subcategory: elements.unclassifiedSubcategory.value,
     tag: elements.unclassifiedTag.value,
@@ -880,6 +1087,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
 
 function unclassifiedFilterDraft() {
   return {
+    group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
     subcategory: elements.unclassifiedSubcategory.value,
     tag: elements.unclassifiedTag.value,
@@ -890,6 +1098,7 @@ function unclassifiedFilterDraft() {
 
 function renderUnclassifiedFilterChips() {
   const definitions = [
+    ["group", "Group"],
     ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
     ["accountName", "Account"], ["provider", "Provider"],
   ];
@@ -902,7 +1111,7 @@ function renderUnclassifiedFilterChips() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
-    const value = field === "subcategory" ? "Unclassified" : unclassifiedFieldFilters[field];
+    const value = field === "subcategory" ? "Unclassified" : field === "group" ? transactionUi.groupFilterLabel(unclassifiedFieldFilters[field]) : unclassifiedFieldFilters[field];
     chip.textContent = `${label}: ${value} ×`;
     chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
     chip.addEventListener("click", () => {
@@ -917,16 +1126,16 @@ function renderUnclassifiedFilterChips() {
 function setUnclassifiedFilterPopover(open, restore = true) {
   if (!open && restore) configureUnclassifiedFilters(unclassifiedFieldFilters);
   elements.unclassifiedFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.unclassifiedFilterPopover);
   elements.unclassifiedFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function renderUnclassifiedTransactions() {
   unclassifiedFieldFilters.description = elements.unclassifiedSearch.value.trim();
-  const description = unclassifiedFieldFilters.description.toLocaleLowerCase();
   const visible = transactionUi.sortTransactions(
     unclassifiedTransactions.filter((transaction) =>
       (showUnclassifiedInternalTransfers || !transactionUi.isInternalTransfer(transaction))
-      && (!description || transaction.description.toLocaleLowerCase().includes(description))
+      && transactionUi.matchesTransactionSearch(transaction, unclassifiedFieldFilters.description)
       && (!unclassifiedFieldFilters.category || transaction.category === unclassifiedFieldFilters.category)
       && (!unclassifiedFieldFilters.subcategory || !transaction.subcategory)
       && (!unclassifiedFieldFilters.tag || unclassifiedTags(transaction).some(
@@ -947,7 +1156,8 @@ function renderUnclassifiedTransactions() {
   renderUnclassifiedFilterChips();
   unclassifiedBulk.render(visible, (transaction) => ({
     currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
-    needsClassification: !transactionUi.isInternalTransfer(transaction), showEdit: false, onEdit: () => {},
+    needsClassification: !transactionUi.isInternalTransfer(transaction),
+    onEdit: () => openImportHistoryTransactionEditor(transaction, "unclassified"),
   }));
   if (groupFiltered.length === 0) {
     const empty = document.createElement("p");
@@ -1749,6 +1959,10 @@ function renderClassificationPreviewChanges() {
     pendingClassificationPreview.changes.map((entry) => entry.transaction),
     classificationPreviewSort.value(),
   );
+  transactionUi.populateGroupFilter(elements.previewGroupFilter, changes, classificationPreviewGroup);
+  elements.previewFilterCount.textContent = "1";
+  elements.previewFilterCount.hidden = !classificationPreviewGroup;
+  elements.previewFilters.querySelector("summary").classList.toggle("has-active-filters", !!classificationPreviewGroup);
   classificationBulk.render(changes, (transaction) => ({
     currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
     showEdit: false, onEdit: () => {},
@@ -1758,6 +1972,8 @@ function renderClassificationPreviewChanges() {
 function closeClassificationPreview() {
   if (classificationsBusy) return;
   classificationBulk.reset();
+  classificationPreviewGroup = "";
+  elements.previewFilters.open = false;
   pendingClassificationPreview = null;
   elements.previewDialog.close();
 }
@@ -1797,6 +2013,8 @@ async function previewClassificationsForExisting() {
       return;
     }
     pendingClassificationPreview = { ...preview, document };
+    classificationPreviewGroup = "";
+    elements.previewFilters.open = false;
     classificationBulk.reset();
     const matched = preview.matched || preview.changed;
     const unchangedMatches = Math.max(0, matched - preview.changed);
@@ -2038,6 +2256,7 @@ async function loadTaxonomy() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not load taxonomy (${response.status}).`);
     state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
     state.taxonomyRevision = payload.revision;
   } catch (error) {
     setTaxonomyStatus(error instanceof Error ? error.message : "Could not load taxonomy.", "error");
@@ -2095,6 +2314,7 @@ async function saveTaxonomyEntry(event, mode, parentCategory, input, button) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save taxonomy (${response.status}).`);
     state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
     state.taxonomyRevision = payload.revision;
     elements.taxonomySearch.value = "";
     if (mode === "category") state.hideTaxonomyCategoriesWithoutSubcategories = false;
@@ -2183,6 +2403,7 @@ async function deleteTaxonomyEntry(mode, name, parentCategory = "") {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not delete taxonomy value (${response.status}).`);
     state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
     state.taxonomyRevision = payload.revision;
     setTaxonomyStatus(
       mode === "category"
@@ -2237,6 +2458,7 @@ if (elements.exportForm) {
     );
   });
   elements.resetImportHistoryFilters.addEventListener("click", () => {
+    elements.importHistoryGroup.value = "";
     elements.importHistoryCategory.value = "";
     populateImportHistorySubcategories("");
     elements.importHistoryTag.value = "";
@@ -2244,15 +2466,14 @@ if (elements.exportForm) {
     elements.importHistoryProvider.value = "";
     elements.importHistoryCategory.focus();
   });
-  elements.applyImportHistoryFilters.addEventListener("click", () => {
+  transactionUi.bindLiveTransactionFilters(elements.importHistoryFilterPopover, () => {
     state.importHistoryFilters = { ...state.importHistoryFilters, ...importHistoryFilterDraft() };
-    setImportHistoryFilterPopover(false, false);
     renderImportHistoryTransactions();
-    elements.importHistoryFilterButton.focus();
-  });
+  }, elements.resetImportHistoryFilters);
   elements.clearImportHistoryFilters.addEventListener("click", () => {
     state.importHistoryFilters = {
       ...state.importHistoryFilters,
+      group: "",
       category: "", subcategory: "", tag: "", accountName: "", provider: "",
     };
     configureImportHistoryFilters(state.importHistoryFilters);
@@ -2292,6 +2513,19 @@ if (elements.exportForm) {
   elements.importHistoryDialog.addEventListener("click", (event) => {
     if (event.target === elements.importHistoryDialog) closeImportHistoryDialog();
   });
+  elements.taxonomySearch.addEventListener("input", renderTaxonomy);
+  elements.taxonomySubcategoryFilter.addEventListener("click", () => {
+    state.hideTaxonomyCategoriesWithoutSubcategories =
+      !state.hideTaxonomyCategoriesWithoutSubcategories;
+    renderTaxonomy();
+  });
+  initializeSettingsTabs();
+  loadExportTransactions();
+  loadAvailableTransactionTags();
+}
+
+// The editor exists on both Settings and Classifications, independently of history.
+if (elements.importHistoryEditForm) {
   elements.importHistoryEditForm.addEventListener("submit", saveImportHistoryTransaction);
   elements.closeImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
   elements.cancelImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
@@ -2302,15 +2536,6 @@ if (elements.exportForm) {
   elements.importHistoryEditDialog.addEventListener("click", (event) => {
     if (event.target === elements.importHistoryEditDialog) closeImportHistoryTransactionEditor();
   });
-  elements.taxonomySearch.addEventListener("input", renderTaxonomy);
-  elements.taxonomySubcategoryFilter.addEventListener("click", () => {
-    state.hideTaxonomyCategoriesWithoutSubcategories =
-      !state.hideTaxonomyCategoriesWithoutSubcategories;
-    renderTaxonomy();
-  });
-  initializeSettingsTabs();
-  loadExportTransactions();
-  loadAvailableTransactionTags();
 }
 
 async function exportClassifications() {
@@ -2446,6 +2671,7 @@ if (elements.addClassification) {
   if (open) elements.unclassifiedCategory.focus();
   });
   elements.resetUnclassifiedFilters.addEventListener("click", () => {
+  elements.unclassifiedGroup.value = "";
   elements.unclassifiedCategory.value = "";
   elements.unclassifiedSubcategory.value = "";
   elements.unclassifiedTag.value = "";
@@ -2453,15 +2679,14 @@ if (elements.addClassification) {
   elements.unclassifiedProvider.value = "";
   elements.unclassifiedCategory.focus();
   });
-  elements.applyUnclassifiedFilters.addEventListener("click", () => {
+  transactionUi.bindLiveTransactionFilters(elements.unclassifiedFilterPopover, () => {
   unclassifiedFieldFilters = { ...unclassifiedFieldFilters, ...unclassifiedFilterDraft() };
-  setUnclassifiedFilterPopover(false, false);
   renderUnclassifiedTransactions();
-  elements.unclassifiedFilterButton.focus();
-  });
+  }, elements.resetUnclassifiedFilters);
   elements.clearUnclassifiedFilters.addEventListener("click", () => {
   unclassifiedFieldFilters = {
     ...unclassifiedFieldFilters,
+    group: "",
     category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
   configureUnclassifiedFilters(unclassifiedFieldFilters);
@@ -2499,6 +2724,28 @@ if (elements.addClassification) {
   if (event.target === elements.unclassifiedDialog) closeUnclassifiedDialog();
   });
   elements.applyClassifications.addEventListener("click", previewClassificationsForExisting);
+  elements.previewFilters.addEventListener("toggle", () => {
+    if (elements.previewFilters.open) transactionUi.fitTransactionFilterPopover(elements.previewFilters.querySelector(".transaction-filter-popover"));
+    transactionUi.populateGroupFilter(elements.previewGroupFilter,
+      pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [], classificationPreviewGroup);
+  });
+  document.querySelector("#reset-classification-preview-filters").addEventListener("click", () => {
+    elements.previewGroupFilter.value = "";
+  });
+  transactionUi.bindLiveTransactionFilters(elements.previewFilters, () => {
+    classificationPreviewGroup = elements.previewGroupFilter.value;
+    renderClassificationPreviewChanges();
+  }, document.querySelector("#reset-classification-preview-filters"));
+  document.addEventListener("click", (event) => {
+    if (elements.previewFilters.open && !elements.previewFilters.contains(event.target)) elements.previewFilters.open = false;
+  });
+  elements.previewDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.previewFilters.open) {
+      event.preventDefault(); event.stopPropagation();
+      elements.previewFilters.open = false;
+      elements.previewFilters.querySelector("summary").focus();
+    }
+  });
   elements.closePreview.addEventListener("click", closeClassificationPreview);
   elements.cancelPreview.addEventListener("click", closeClassificationPreview);
   elements.confirmPreview.addEventListener("click", confirmClassificationPreview);

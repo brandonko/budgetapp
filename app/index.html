@@ -6,12 +6,13 @@
     <script src="/theme.js?v=20260905-display-preferences-1"></script>
     <meta name="description" content="Clear monthly, annual, and year-over-year views of your money." />
     <title>Ledger — Spending overview</title>
-    <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260906-1" defer></script>
-    <script src="/app.js?v=20260905-display-preferences-1" defer></script>
+    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+    <script src="/app.js?v=20260907-notes-search-1" defer></script>
   </head>
   <body>
     <header class="site-header site-header--dashboard">
@@ -60,6 +61,8 @@
               </svg>
             </div>
           </div>
+          <button class="secondary-button period-today" id="today-button" type="button"
+            title="Go to the current month" disabled>Today</button>
       </div>
       <details class="site-menu">
         <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false">
@@ -103,7 +106,7 @@
             <span class="summary-icon summary-icon--spent" aria-hidden="true">&nearr;</span>
           </div>
           <p class="summary-value" id="total-spent">—</p>
-          <p class="summary-note">Internal transfers are excluded</p>
+          <p class="summary-note" id="spending-summary-note">Internal transfers are excluded</p>
         </article>
         <article class="summary-card">
           <div class="summary-label">
@@ -188,13 +191,6 @@
               </div>
             </fieldset>
           </div>
-          <label class="comparison-period-control">
-            <span>Time span</span>
-            <select id="comparison-period-mode">
-              <option value="comparable">Comparable months</option>
-              <option value="full">All available months</option>
-            </select>
-          </label>
         </div>
 
         <div class="comparison-summary" aria-label="Year-over-year summary">
@@ -357,16 +353,17 @@
               Ledger pairs transactions from different accounts when at least one is categorized
               as Transfer or its description looks like a transfer or account payment, their
               nonzero amounts are exact opposites, and their dates are within five days. Closest
-              matches are paired once.
+              matches are paired once during imports or a Settings scan. After confirmation, the
+              internal-transfer flags are saved in the CSV; opening this page never reruns detection.
               A transaction’s Budget treatment can always exclude it manually or force it to count normally.
             </p>
           </div>
         </aside>
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
-            <span>Description</span>
+            <span>Search</span>
             <input id="transaction-search" type="search" autocomplete="off"
-              placeholder="Search descriptions" />
+              placeholder="Search descriptions and notes" />
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="transaction-filter-button" type="button"
@@ -401,6 +398,7 @@
                     <option value="">All tags</option>
                   </select>
                 </label>
+                <label class="transaction-filter-wide"><span>Group</span><select id="transaction-group-filter"><option value="">All groups</option></select></label>
               </fieldset>
               <fieldset>
                 <legend>Account</legend>
@@ -421,7 +419,6 @@
               </fieldset>
               <div class="transaction-filter-popover-actions">
                 <button class="text-button" id="reset-transaction-filters" type="button">Reset</button>
-                <button class="primary-button" id="apply-transaction-filters" type="button">Apply</button>
               </div>
             </div>
           </div>
@@ -522,11 +519,11 @@
             <label class="form-field form-field--wide">
               <span>Budget treatment</span>
               <select id="field-internal-transfer-treatment" name="internalTransferTreatment">
-                <option value="automatic">Automatic</option>
+                <option value="automatic">Eligible for detection</option>
                 <option value="internal-transfer">Internal transfer — exclude from budget</option>
                 <option value="include-in-budget">Count normally — override automatic detection</option>
               </select>
-              <small>Automatic detects matching movements between your bank and credit accounts.</small>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
             </label>
           </div>
           <p class="form-error" id="form-error" role="alert" hidden></p>

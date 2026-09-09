@@ -6,12 +6,13 @@
     <script src="/theme.js?v=20260905-display-preferences-1"></script>
     <meta name="description" content="Configure Ledger preferences." />
     <title>Settings — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260906-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js?v=20260906-groups-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260906-1" defer></script>
-    <script src="/settings.js?v=20260905-taxonomy-delete-1" defer></script>
+    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+    <script src="/settings.js?v=20260907-notes-search-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -49,6 +50,8 @@
           aria-selected="false" aria-controls="import-history-settings-panel" tabindex="-1">Imports</button>
         <button class="settings-tab" id="taxonomy-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="taxonomy-settings-panel" tabindex="-1">Taxonomy</button>
+        <button class="settings-tab" id="internal-transfers-settings-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="internal-transfers-settings-panel" tabindex="-1">Internal transfers</button>
         <button class="settings-tab" id="preferences-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="preferences-settings-panel" tabindex="-1">Preferences</button>
       </div>
@@ -140,6 +143,50 @@
         </article>
       </section>
 
+      <section class="settings-panel" id="internal-transfers-settings-panel" role="tabpanel"
+        aria-labelledby="internal-transfers-settings-tab" hidden>
+        <article class="settings-card internal-transfer-settings-card">
+          <div class="settings-card-heading">
+            <div>
+              <p class="eyebrow">Budget treatment</p>
+              <h2>Internal transfers</h2>
+              <p>Find movements between your own accounts across all dates, then review before saving.</p>
+            </div>
+            <button class="primary-button" id="find-internal-transfers" type="button">Find internal transfers</button>
+          </div>
+          <details class="import-note import-guide internal-transfer-guide">
+            <summary>
+              <span class="import-note-icon" aria-hidden="true">i</span>
+              <span>
+                <strong>How transfer detection works</strong>
+                <small>Learn what gets matched and what happens when you save.</small>
+              </span>
+            </summary>
+            <div class="import-guide-content">
+              <section>
+                <h3>How pairs are found</h3>
+                <p>Ledger looks for equal and opposite nonzero amounts in different accounts within
+                  five days. At least one side must look like a transfer or account payment.</p>
+                <p>The closest dates are paired first, and each transaction can belong to only one pair.</p>
+              </section>
+              <section>
+                <h3>You review before saving</h3>
+                <p>Nothing changes until you confirm the review. Confirmed flags are saved in your
+                  transaction file; page loads never rerun detection.</p>
+                <p>Imports also propose matches between incoming and existing unmatched transactions.
+                  Saved exclusions and <strong>Count normally</strong> overrides stay unchanged.</p>
+              </section>
+              <section class="internal-transfer-guide-upgrade">
+                <h3>Reviewing older data</h3>
+                <p>If you used automatic exclusions before, run this one-time review to preserve those
+                  transfers. You can scan again whenever you add or correct older transactions.</p>
+              </section>
+            </div>
+          </details>
+          <p class="settings-status" id="transfer-review-status" role="status" hidden></p>
+        </article>
+      </section>
+
       <section class="settings-panel" id="preferences-settings-panel" role="tabpanel"
         aria-labelledby="preferences-settings-tab" hidden>
         <article class="settings-card" aria-labelledby="preferences-settings-title">
@@ -204,9 +251,9 @@
         </header>
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
-            <span>Description</span>
+            <span>Search</span>
             <input id="import-history-search" type="search" autocomplete="off"
-              placeholder="Search descriptions" />
+              placeholder="Search descriptions and notes" />
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="import-history-filter-button" type="button"
@@ -226,6 +273,7 @@
                   <label><span>Subcategory</span><select id="import-history-subcategory-filter"><option value="">All subcategories</option></select></label>
                 </div>
                 <label class="transaction-filter-wide"><span>Tag</span><select id="import-history-tag-filter"><option value="">All tags</option></select></label>
+                <label class="transaction-filter-wide"><span>Group</span><select id="import-history-group-filter"><option value="">All groups</option></select></label>
               </fieldset>
               <fieldset>
                 <legend>Account</legend>
@@ -236,7 +284,6 @@
               </fieldset>
               <div class="transaction-filter-popover-actions">
                 <button class="text-button" id="reset-import-history-filters" type="button">Reset</button>
-                <button class="primary-button" id="apply-import-history-filters" type="button">Apply</button>
               </div>
             </div>
           </div>
@@ -246,12 +293,26 @@
           <div class="transaction-filter-chips" id="import-history-filter-chips"></div>
           <button class="text-button" id="clear-import-history-filters" type="button">Clear all</button>
         </div>
+        <div class="import-review-filters" id="transfer-review-filters" role="group"
+          aria-label="Visible transfer transaction types" hidden>
+          <span>Show</span>
+          <button class="import-review-filter" id="transfer-review-proposed-filter" type="button"
+            aria-pressed="true">Proposed changes (0)</button>
+          <button class="import-review-filter" id="transfer-review-flagged-filter" type="button"
+            aria-pressed="false">Already flagged (0)</button>
+        </div>
         <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
           role="alert" hidden></p>
         <div class="transaction-list" id="import-history-transactions"></div>
+        <footer class="form-footer" id="transfer-review-footer" hidden>
+          <span class="form-footer-spacer"></span>
+          <button class="secondary-button" id="cancel-transfer-review" type="button">Cancel</button>
+          <button class="primary-button" id="confirm-transfer-review" type="button">Save reviewed changes</button>
+        </footer>
       </div>
     </dialog>
 
+    <!-- Shared review editor: keep fields aligned with classifications.html and transaction-ui.js. -->
     <dialog class="transaction-form-dialog" id="import-history-edit-dialog">
       <form class="transaction-form" id="import-history-edit-form">
         <header class="form-header">
@@ -337,11 +398,11 @@
             <label class="form-field form-field--wide">
               <span>Budget treatment</span>
               <select name="internalTransferTreatment">
-                <option value="automatic">Automatic</option>
+                <option value="automatic">Eligible for detection</option>
                 <option value="internal-transfer">Internal transfer — exclude from budget</option>
                 <option value="include-in-budget">Count normally — override automatic detection</option>
               </select>
-              <small>Automatic detects matching movements between your bank and credit accounts.</small>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
             </label>
           </div>
           <p class="form-error" id="import-history-edit-error" role="alert" hidden></p>
