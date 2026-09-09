@@ -1,5 +1,6 @@
 "use strict";
 const transactionUi = window.LedgerTransactionUI;
+void transactionUi.loadEditorTaxonomy();
 
 const state = {
   extensionReady: false,
@@ -20,6 +21,16 @@ const state = {
   ebaySessionToken: "",
   ebayPollTimer: null,
   ebayStartedAt: 0,
+  walmartExtensionReady: false,
+  walmartSessionToken: "",
+  walmartPollTimer: null,
+  walmartStartedAt: 0,
+  walmartBusy: false,
+  capitalOneExtensionReady: false,
+  capitalOneSessionToken: "",
+  capitalOnePollTimer: null,
+  capitalOneStartedAt: 0,
+  capitalOneBusy: false,
   appleCardBusy: false,
   appleCardExtensionReady: false,
   appleCardSessionToken: "",
@@ -28,8 +39,15 @@ const state = {
   csvImportBusy: false,
   revision: "",
   importedTransactions: [],
+  reviewEditedIds: new Set(),
   reviewSession: null,
   reviewCommitted: false,
+  reviewCommitting: false,
+  reviewRefreshing: false,
+  reviewValidationFailed: false,
+  reviewGeneration: 0,
+  transferPlan: null,
+  existingTransferUpdates: [],
   reviewFilters: {
     duplicate: false,
     unmatched: true,
@@ -44,7 +62,9 @@ const state = {
   availableTransactions: [],
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", applecard: "Apple Card", csv: "CSV" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", walmart: "Walmart", applecard: "Apple Card", capitalone: "Capital One", csv: "CSV" };
+const MIN_WALMART_EXTENSION_VERSION = "0.9.1";
+const MIN_CAPITAL_ONE_EXTENSION_VERSION = "0.9.1";
 const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
 const MIN_VENMO_EXTENSION_VERSION = "0.5.0";
 const MIN_APPLE_CARD_EXTENSION_VERSION = "0.6.2";
@@ -57,6 +77,19 @@ const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 const elements = {
+  capitalOneStartDate: document.querySelector("#capitalone-start-date"),
+  capitalOneEndDate: document.querySelector("#capitalone-end-date"),
+  capitaloneAccountName: document.querySelector("#capitalone-account-name"),
+  capitaloneAccountType: document.querySelector("#capitalone-account-type"),
+  capitaloneProvider: document.querySelector("#capitalone-provider"),
+  capitalOneImportButton: document.querySelector("#capitalone-import-button"),
+  capitalOneCancelButton: document.querySelector("#capitalone-cancel-button"),
+  capitalOneProgress: document.querySelector("#capitalone-progress"),
+  capitalOneProgressBar: document.querySelector("#capitalone-progress-bar"),
+  capitalOneProgressMessage: document.querySelector("#capitalone-progress-message"),
+  capitalOneError: document.querySelector("#capitalone-error"),
+  capitalOneFile: document.querySelector("#capitalone-file"),
+  capitalOneFileButton: document.querySelector("#capitalone-file-import-button"),
   amazonStartDate: document.querySelector("#amazon-start-date"),
   amazonEndDate: document.querySelector("#amazon-end-date"),
   amazonAccountName: document.querySelector("#amazon-account-name"),
@@ -77,6 +110,7 @@ const elements = {
   creditKarmaIgnoreAliExpress: document.querySelector("#creditkarma-ignore-aliexpress"),
   creditKarmaIgnoreVenmo: document.querySelector("#creditkarma-ignore-venmo"),
   creditKarmaIgnoreEbay: document.querySelector("#creditkarma-ignore-ebay"),
+  creditKarmaIgnoreWalmart: document.querySelector("#creditkarma-ignore-walmart"),
   creditKarmaImportButton: document.querySelector("#creditkarma-import-button"),
   creditKarmaCancelButton: document.querySelector("#creditkarma-cancel-button"),
   creditKarmaProgress: document.querySelector("#creditkarma-progress"),
@@ -116,6 +150,17 @@ const elements = {
   ebayProgressBar: document.querySelector("#ebay-progress-bar"),
   ebayProgressMessage: document.querySelector("#ebay-progress-message"),
   ebayError: document.querySelector("#ebay-error"),
+  walmartStartDate: document.querySelector("#walmart-start-date"),
+  walmartEndDate: document.querySelector("#walmart-end-date"),
+  walmartAccountName: document.querySelector("#walmart-account-name"),
+  walmartAccountType: document.querySelector("#walmart-account-type"),
+  walmartProvider: document.querySelector("#walmart-provider"),
+  walmartImportButton: document.querySelector("#walmart-import-button"),
+  walmartCancelButton: document.querySelector("#walmart-cancel-button"),
+  walmartProgress: document.querySelector("#walmart-progress"),
+  walmartProgressBar: document.querySelector("#walmart-progress-bar"),
+  walmartProgressMessage: document.querySelector("#walmart-progress-message"),
+  walmartError: document.querySelector("#walmart-error"),
   appleCardStartDate: document.querySelector("#applecard-start-date"),
   appleCardEndDate: document.querySelector("#applecard-end-date"),
   appleCardFile: document.querySelector("#applecard-file"),
@@ -145,6 +190,7 @@ const elements = {
   reviewSearch: document.querySelector("#import-review-search"),
   reviewFilterButton: document.querySelector("#import-review-filter-button"),
   reviewFilterPopover: document.querySelector("#import-review-filter-popover"),
+  reviewGroupFilter: document.querySelector("#import-review-group-filter"),
   reviewFilterCount: document.querySelector("#import-review-filter-count"),
   reviewCategoryFilter: document.querySelector("#import-review-category-filter"),
   reviewSubcategoryFilter: document.querySelector("#import-review-subcategory-filter"),
@@ -152,7 +198,6 @@ const elements = {
   reviewAccountFilter: document.querySelector("#import-review-account-filter"),
   reviewProviderFilter: document.querySelector("#import-review-provider-filter"),
   resetReviewFieldFilters: document.querySelector("#reset-import-review-filters"),
-  applyReviewFieldFilters: document.querySelector("#apply-import-review-filters"),
   clearReviewFieldFilters: document.querySelector("#clear-import-review-field-filters"),
   reviewActiveFilters: document.querySelector("#import-review-active-filters"),
   reviewFilterChips: document.querySelector("#import-review-filter-chips"),
@@ -199,6 +244,7 @@ function populateReviewSubcategories(category, selected = "") {
 }
 
 function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
+  transactionUi.populateGroupFilter(elements.reviewGroupFilter, state.importedTransactions, filters.group);
   const unique = (field) => [...new Set(state.importedTransactions.map((transaction) => transaction[field]).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
   const tags = new Map();
@@ -222,6 +268,7 @@ function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
   populateReviewFilter(elements.reviewProviderFilter, unique("provider"), "All providers", filters.provider);
   state.reviewFieldFilters = {
     description: elements.reviewSearch.value.trim(),
+    group: elements.reviewGroupFilter.value,
     category: elements.reviewCategoryFilter.value,
     subcategory: elements.reviewSubcategoryFilter.value,
     tag: elements.reviewTagFilter.value,
@@ -233,6 +280,7 @@ function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
 
 function reviewFilterDraft() {
   return {
+    group: elements.reviewGroupFilter.value,
     category: elements.reviewCategoryFilter.value,
     subcategory: elements.reviewSubcategoryFilter.value,
     tag: elements.reviewTagFilter.value,
@@ -242,7 +290,7 @@ function reviewFilterDraft() {
 }
 
 function renderReviewFieldFilterChips() {
-  const definitions = [["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"], ["accountName", "Account"], ["provider", "Provider"]];
+  const definitions = [["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"], ["group", "Group"], ["accountName", "Account"], ["provider", "Provider"]];
   const active = definitions.filter(([field]) => state.reviewFieldFilters[field]);
   elements.reviewFilterCount.textContent = String(active.length);
   elements.reviewFilterCount.hidden = active.length === 0;
@@ -252,8 +300,9 @@ function renderReviewFieldFilterChips() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
-    chip.textContent = `${label}: ${state.reviewFieldFilters[field]} ×`;
-    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${state.reviewFieldFilters[field]}`);
+    const value = field === "group" ? transactionUi.groupFilterLabel(state.reviewFieldFilters[field]) : state.reviewFieldFilters[field];
+    chip.textContent = `${label}: ${value} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
     chip.addEventListener("click", () => {
       state.reviewFieldFilters[field] = "";
       configureReviewFieldFilters(state.reviewFieldFilters);
@@ -266,13 +315,13 @@ function renderReviewFieldFilterChips() {
 function setReviewFilterPopover(open, restore = true) {
   if (!open && restore) configureReviewFieldFilters(state.reviewFieldFilters);
   elements.reviewFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.reviewFilterPopover);
   elements.reviewFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function importedTransactionMatchesFieldFilters(transaction) {
   const filters = state.reviewFieldFilters;
-  const description = filters.description.toLocaleLowerCase();
-  return (!description || transaction.description.toLocaleLowerCase().includes(description))
+  return transactionUi.matchesTransactionSearch(transaction, filters.description)
     && (!filters.category || transaction.category === filters.category)
     && (!filters.subcategory || transaction.subcategory === filters.subcategory)
     && (!filters.tag || importedTags(transaction).some((tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()))
@@ -358,6 +407,14 @@ function initializeDirectImportDates() {
   elements.ebayEndDate.value = todayIso;
   elements.ebayStartDate.max = todayIso;
   elements.ebayEndDate.max = todayIso;
+  elements.walmartStartDate.value = localIsoDate(lookbackStart);
+  elements.capitalOneStartDate.value = localIsoDate(lookbackStart);
+  elements.capitalOneEndDate.value = todayIso;
+  elements.capitalOneStartDate.max = todayIso;
+  elements.capitalOneEndDate.max = todayIso;
+  elements.walmartEndDate.value = todayIso;
+  elements.walmartStartDate.max = todayIso;
+  elements.walmartEndDate.max = todayIso;
   elements.appleCardStartDate.value = localIsoDate(lookbackStart);
   elements.appleCardEndDate.value = todayIso;
   elements.appleCardStartDate.max = todayIso;
@@ -383,6 +440,20 @@ function setExtensionReady(ready, version = "") {
   state.venmoExtensionReady = ready && versionAtLeast(version, MIN_VENMO_EXTENSION_VERSION);
   state.appleCardExtensionReady = ready && versionAtLeast(version, MIN_APPLE_CARD_EXTENSION_VERSION);
   state.ebayExtensionReady = ready && versionAtLeast(version, MIN_EBAY_EXTENSION_VERSION);
+  state.walmartExtensionReady = ready && versionAtLeast(version, MIN_WALMART_EXTENSION_VERSION);
+  state.capitalOneExtensionReady = ready && versionAtLeast(version, MIN_CAPITAL_ONE_EXTENSION_VERSION);
+  elements.capitalOneImportButton.disabled = !state.capitalOneExtensionReady || state.capitalOneBusy;
+  if (ready && !state.capitalOneExtensionReady) {
+    elements.capitalOneError.textContent = `Capital One requires companion extension ${MIN_CAPITAL_ONE_EXTENSION_VERSION} or newer. Reload Ledger Data Importer in chrome://extensions, then reload this page.`;
+    elements.capitalOneError.hidden = false;
+  } else if (!state.capitalOneBusy) elements.capitalOneError.hidden = true;
+  elements.walmartImportButton.disabled = !state.walmartExtensionReady || state.walmartBusy;
+  if (ready && !state.walmartExtensionReady) {
+    elements.walmartError.textContent = `Walmart requires companion extension ${MIN_WALMART_EXTENSION_VERSION} or newer. Reload Ledger Data Importer in chrome://extensions, then reload this page.`;
+    elements.walmartError.hidden = false;
+  } else if (!state.walmartBusy) {
+    elements.walmartError.hidden = true;
+  }
   elements.extensionDot.classList.toggle("extension-dot--ready", ready);
   elements.extensionStatus.textContent = ready
     ? `Companion extension connected · v${version || "unknown"}`
@@ -642,6 +713,7 @@ async function startCreditKarmaImport() {
   const ignoreAliExpress = elements.creditKarmaIgnoreAliExpress.checked;
   const ignoreVenmo = elements.creditKarmaIgnoreVenmo.checked;
   const ignoreEbay = elements.creditKarmaIgnoreEbay.checked;
+  const ignoreWalmart = elements.creditKarmaIgnoreWalmart.checked;
   if (!startDate || !endDate) {
     showCreditKarmaError("Choose both a start date and an end date.");
     return;
@@ -661,7 +733,7 @@ async function startCreditKarmaImport() {
     const response = await fetch("/api/creditkarma-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress, ignoreVenmo, ignoreEbay }),
+      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress, ignoreVenmo, ignoreEbay, ignoreWalmart }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -959,6 +1031,235 @@ async function cancelVenmoImport() {
   } finally {
     renderVenmoProgress(0, "Venmo import cancelled.", "cancelled");
     finishVenmoSession();
+  }
+}
+
+function renderWalmartProgress(progress, message, status = "scraping") {
+  elements.walmartProgress.hidden = false;
+  elements.walmartProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress) || 0))}%`;
+  elements.walmartProgressMessage.textContent = message;
+  elements.walmartProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showWalmartError(message) {
+  elements.walmartError.textContent = message;
+  elements.walmartError.hidden = false;
+  renderWalmartProgress(0, "Walmart import could not continue.", "error");
+}
+
+function finishWalmartSession() {
+  if (state.walmartPollTimer !== null) window.clearTimeout(state.walmartPollTimer);
+  state.walmartPollTimer = null;
+  state.walmartSessionToken = "";
+  state.walmartBusy = false;
+  elements.walmartImportButton.disabled = !state.walmartExtensionReady;
+  elements.walmartCancelButton.hidden = true;
+}
+
+async function walmartRequest(path, payload) {
+  const response = await fetch(`/api/walmart-import-sessions${path}`, payload === undefined
+    ? { cache: "no-store" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || (response.status === 404
+    ? "Restart the Ledger Python server to enable Walmart imports, then retry."
+    : `Walmart import request failed (${response.status}).`));
+  return result;
+}
+
+async function pollWalmartSession(token) {
+  if (state.walmartSessionToken !== token) return;
+  try {
+    const result = await walmartRequest(`/${encodeURIComponent(token)}`);
+    if (state.walmartSessionToken !== token) return; // Ignore replies from a cancelled/older job.
+    const elapsed = Date.now() - state.walmartStartedAt;
+    if (elapsed > 30 * 60 * 1000 || (result.status === "waiting_for_extension" && elapsed > 15000)) {
+      throw new Error("Walmart import timed out. Reload the companion extension, complete any Walmart sign-in/security check, and retry.");
+    }
+    renderWalmartProgress(result.progress, result.message, result.status);
+    if (result.status === "review") {
+      renderResult(result.import, "walmart", token);
+      finishWalmartSession();
+    } else if (["error", "cancelled", "complete"].includes(result.status)) {
+      if (result.status === "error") showWalmartError(result.message);
+      finishWalmartSession();
+    } else {
+      state.walmartPollTimer = window.setTimeout(() => pollWalmartSession(token), 1200);
+    }
+  } catch (error) {
+    if (state.walmartSessionToken !== token) return;
+    await cancelWalmartImport();
+    showWalmartError(error.message || "Walmart import status is unavailable.");
+  }
+}
+
+async function startWalmartImport() {
+  if (state.walmartBusy) return;
+  elements.walmartError.hidden = true;
+  const startDate = elements.walmartStartDate.value;
+  const endDate = elements.walmartEndDate.value;
+  const identity = importAccountIdentity("walmart");
+  if (!startDate || !endDate || startDate > endDate) return showWalmartError("Choose a valid start and end date.");
+  if (!identity) return showWalmartError("Complete all three account fields.");
+  if (!state.walmartExtensionReady) return showWalmartError(`Reload companion extension ${MIN_WALMART_EXTENSION_VERSION} or newer, then reload this page.`);
+  state.walmartBusy = true;
+  elements.walmartImportButton.disabled = true;
+  renderWalmartProgress(0, "Creating a secure import session…");
+  try {
+    const result = await walmartRequest("", { startDate, endDate, ...identity });
+    state.walmartSessionToken = result.token;
+    state.walmartStartedAt = Date.now();
+    elements.walmartCancelButton.hidden = false;
+    window.postMessage({ source: "ledger-web-app", action: "startWalmartImport", payload: {
+      token: result.token, startDate, endDate, ledgerOrigin: window.location.origin,
+    } }, window.location.origin);
+    void pollWalmartSession(result.token);
+  } catch (error) {
+    showWalmartError(error.message || "Could not start Walmart import.");
+    finishWalmartSession();
+  }
+}
+
+async function cancelWalmartImport() {
+  const token = state.walmartSessionToken;
+  finishWalmartSession(); // Invalidate in-flight polling before awaiting cancellation.
+  if (!token) return;
+  window.postMessage({ source: "ledger-web-app", action: "cancelWalmartImport", payload: { token } }, window.location.origin);
+  try { await walmartRequest(`/${encodeURIComponent(token)}/cancel`, {}); }
+  catch { /* No commit was sent; expired sessions cannot change the CSV. */ }
+  renderWalmartProgress(0, "Walmart import cancelled.", "cancelled");
+}
+
+function renderCapitalOneProgress(progress, message, status = "scraping") {
+  elements.capitalOneProgress.hidden = false;
+  elements.capitalOneProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress) || 0))}%`;
+  elements.capitalOneProgressMessage.textContent = message;
+  elements.capitalOneProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showCapitalOneError(message) {
+  elements.capitalOneError.textContent = message;
+  elements.capitalOneError.hidden = false;
+  renderCapitalOneProgress(0, "Capital One import could not continue.", "error");
+}
+
+function finishCapitalOneSession() {
+  if (state.capitalOnePollTimer !== null) window.clearTimeout(state.capitalOnePollTimer);
+  state.capitalOnePollTimer = null;
+  state.capitalOneSessionToken = "";
+  state.capitalOneBusy = false;
+  elements.capitalOneImportButton.disabled = !state.capitalOneExtensionReady;
+  elements.capitalOneCancelButton.hidden = true;
+  elements.capitalOneFileButton.disabled = !elements.capitalOneFile.files?.length;
+}
+
+async function capitalOneRequest(path, payload) {
+  const response = await fetch(`/api/capitalone-import-sessions${path}`, payload === undefined
+    ? { cache: "no-store" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || (response.status === 404
+    ? "Restart the Ledger Python server to enable Capital One imports, then retry."
+    : `Capital One import request failed (${response.status}).`));
+  return result;
+}
+
+async function pollCapitalOneSession(token) {
+  if (state.capitalOneSessionToken !== token) return;
+  try {
+    const result = await capitalOneRequest(`/${encodeURIComponent(token)}`);
+    if (state.capitalOneSessionToken !== token) return; // Ignore replies from a cancelled/older job.
+    const elapsed = Date.now() - state.capitalOneStartedAt;
+    if (elapsed > 30 * 60 * 1000 || (result.status === "waiting_for_extension" && elapsed > 15000)) {
+      throw new Error("Capital One import timed out. Reload the companion extension, complete any Capital One sign-in/security check, and retry.");
+    }
+    renderCapitalOneProgress(result.progress, result.message, result.status);
+    if (result.status === "review") {
+      renderResult(result.import, "capitalone", token);
+      finishCapitalOneSession();
+    } else if (["error", "cancelled", "complete"].includes(result.status)) {
+      if (result.status === "error") showCapitalOneError(result.message);
+      finishCapitalOneSession();
+    } else {
+      state.capitalOnePollTimer = window.setTimeout(() => pollCapitalOneSession(token), 1200);
+    }
+  } catch (error) {
+    if (state.capitalOneSessionToken !== token) return;
+    await cancelCapitalOneImport();
+    showCapitalOneError(error.message || "Capital One import status is unavailable.");
+  }
+}
+
+async function startCapitalOneImport() {
+  if (state.capitalOneBusy) return;
+  elements.capitalOneError.hidden = true;
+  const startDate = elements.capitalOneStartDate.value;
+  const endDate = elements.capitalOneEndDate.value;
+  const identity = importAccountIdentity("capitalone");
+  if (!startDate || !endDate || startDate > endDate) return showCapitalOneError("Choose a valid start and end date.");
+  if (!identity) return showCapitalOneError("Complete all three account fields.");
+  if (!state.capitalOneExtensionReady) return showCapitalOneError(`Reload companion extension ${MIN_CAPITAL_ONE_EXTENSION_VERSION} or newer, then reload this page.`);
+  state.capitalOneBusy = true;
+  elements.capitalOneImportButton.disabled = true;
+  elements.capitalOneFileButton.disabled = true;
+  renderCapitalOneProgress(0, "Creating a secure import session…");
+  try {
+    const result = await capitalOneRequest("", { startDate, endDate, ...identity });
+    state.capitalOneSessionToken = result.token;
+    state.capitalOneStartedAt = Date.now();
+    elements.capitalOneCancelButton.hidden = false;
+    window.postMessage({ source: "ledger-web-app", action: "startCapitalOneImport", payload: {
+      token: result.token, startDate, endDate, ledgerOrigin: window.location.origin,
+    } }, window.location.origin);
+    void pollCapitalOneSession(result.token);
+  } catch (error) {
+    showCapitalOneError(error.message || "Could not start Capital One import.");
+    finishCapitalOneSession();
+  }
+}
+
+async function cancelCapitalOneImport() {
+  const token = state.capitalOneSessionToken;
+  finishCapitalOneSession(); // Invalidate in-flight polling before awaiting cancellation.
+  if (!token) return;
+  window.postMessage({ source: "ledger-web-app", action: "cancelCapitalOneImport", payload: { token } }, window.location.origin);
+  try { await capitalOneRequest(`/${encodeURIComponent(token)}/cancel`, {}); }
+  catch { /* No commit was sent; expired sessions cannot change the CSV. */ }
+  renderCapitalOneProgress(0, "Capital One import cancelled.", "cancelled");
+}
+
+async function importCapitalOneFile() {
+  if (state.capitalOneBusy) return;
+  const file = elements.capitalOneFile.files?.[0];
+  const startDate = elements.capitalOneStartDate.value;
+  const endDate = elements.capitalOneEndDate.value;
+  const identity = importAccountIdentity("capitalone");
+  if (!file || !/\.csv$/i.test(file.name)) return showCapitalOneError("Choose a Capital One CSV export.");
+  if (file.size > 16 * 1024 * 1024) return showCapitalOneError("Capital One CSV cannot exceed 16 MB.");
+  if (!startDate || !endDate || startDate > endDate) return showCapitalOneError("Choose a valid start and end date.");
+  if (!identity) return showCapitalOneError("Complete all three account fields.");
+  state.capitalOneBusy = true;
+  elements.capitalOneImportButton.disabled = true;
+  elements.capitalOneFileButton.disabled = true;
+  elements.capitalOneError.hidden = true;
+  renderCapitalOneProgress(5, "Reading Capital One CSV…");
+  let token = "";
+  try {
+    const content = await file.text();
+    const session = await capitalOneRequest("", { startDate, endDate, ...identity });
+    token = session.token;
+    state.capitalOneSessionToken = token;
+    elements.capitalOneCancelButton.hidden = false;
+    const result = await capitalOneRequest(`/${encodeURIComponent(token)}/complete`, { content });
+    if (state.capitalOneSessionToken !== token) return;
+    if (result.status !== "review") throw new Error(result.message || "Capital One export was not ready to review.");
+    renderResult(result.import, "capitalone", token);
+    renderCapitalOneProgress(98, "Capital One transactions are ready to review.");
+    finishCapitalOneSession();
+  } catch (error) {
+    if (token && state.capitalOneSessionToken !== token) return;
+    await cancelCapitalOneImport();
+    showCapitalOneError(error.message || "Could not read Capital One CSV.");
   }
 }
 
@@ -1320,66 +1621,114 @@ async function importLedgerCsv() {
   }
 }
 
+const importRangeSelection = transactionUi.createCheckboxRangeSelection((ids, checked) => {
+  if (!state.reviewSession || state.reviewCommitted || state.reviewCommitting || importBulk.isActive()) return;
+  const affected = new Set(ids);
+  state.importedTransactions.forEach((row) => { if (affected.has(row._stagedId)) row._selected = checked; });
+  const refresh = refreshEditedImport(state.importedTransactions);
+  renderImportedTransactions();
+  refresh.then(renderImportedTransactions).catch(showReviewValidationError);
+});
+
 function importedTransactionRowOptions(transaction, index) {
   const selection = document.createElement("label");
   selection.className = "import-selection";
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = transaction._selected;
-  checkbox.disabled = state.reviewCommitted;
+  checkbox.disabled = state.reviewCommitted || state.reviewCommitting;
   checkbox.setAttribute("aria-label", `Include ${transaction.description} in import`);
-  checkbox.addEventListener("change", () => {
-    transaction._selected = checkbox.checked;
-    updateReviewSelection();
-  });
+  importRangeSelection.bind(checkbox, transaction._stagedId);
   selection.append(checkbox);
   return {
     currency,
     shortMonthFormatter,
     leadingControl: selection,
     duplicate: transaction._isDuplicate,
+    edited: state.reviewEditedIds.has(transaction._stagedId),
     needsClassification:
       !transactionUi.isInternalTransfer(transaction) && transaction._classificationMatched === false,
-    disabled: state.reviewCommitted,
+    disabled: state.reviewCommitted || state.reviewRefreshing || state.reviewCommitting,
     onEdit: () => openImportedTransactionEditor(index),
   };
 }
 
 const importBulk = window.LedgerTransactionBulk.create({
   container: elements.reviewList, staged: true, importSelection: true,
+  getGroupFilter: () => state.reviewFieldFilters.group,
   getTransactions: () => state.importedTransactions,
   getAllTransactions: () => [...state.availableTransactions, ...state.importedTransactions],
   getKey: (row) => row._stagedId,
   getRevision: () => state.reviewSession?.token,
   render: () => renderImportedTransactions(),
-  onModeChange: () => updateReviewSelection(),
+  onModeChange: () => { importRangeSelection.reset(); updateReviewSelection(); },
   onStage: async (ids, proposed) => {
     const replacements = new Map(proposed.map((row) => [row._stagedId, row]));
     const updated = state.importedTransactions.map((row) => replacements.get(row._stagedId) || row);
-    await refreshEditedImport(updated);
+    await refreshEditedImport(updated, ids);
     // Import inclusion and duplicate markers are not bulk-edit selections.
     configureReviewFieldFilters(state.reviewFieldFilters);
   },
 });
 
-async function refreshEditedImport(transactions) {
-  const response = await fetch("/api/transactions/staged-preview", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ revision: state.revision, transactions }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "Could not validate the edited import.");
-  const checked = new Map(payload.transactions.map((row) => [row._stagedId, row]));
-  state.importedTransactions = transactions.map((row) => ({ ...row, ...checked.get(row._stagedId), _selected: row._selected }));
-  const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
-  const transfers = state.importedTransactions.filter((row) => !row._isDuplicate && transactionUi.isInternalTransfer(row)).length;
-  elements.reviewSubtitle.textContent = `${transactions.length} parsed · ${payload.new} new (${unmatched} no rule matched, ${transfers} internal transfers) · ${payload.duplicates} duplicates`;
+async function refreshEditedImport(transactions, editedIds = []) {
+  // Track explicit user changes only, not inclusion toggles or automatic detection.
+  // Occurrence IDs keep identical transactions independent and never enter the CSV.
+  const originals = new Map(state.importedTransactions.map((row) => [row._stagedId, row]));
+  const edited = new Set(editedIds);
+  const changedIds = transactions.filter((row) => edited.has(row._stagedId)
+    && originals.has(row._stagedId)
+    && window.LedgerTransactionBulk.changedFields(originals.get(row._stagedId), row).length)
+    .map((row) => row._stagedId);
+  const generation = ++state.reviewGeneration;
+  const session = state.reviewSession;
+  state.reviewRefreshing = true;
+  state.reviewValidationFailed = true;
+  updateReviewSelection();
+  try {
+    const response = await fetch("/api/transactions/staged-preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision: state.revision, transactions }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (generation !== state.reviewGeneration || session !== state.reviewSession) return;
+    if (!response.ok) throw new Error(payload.error || "Could not validate the edited import.");
+    if (typeof payload.transferPlan !== "string") {
+      throw new Error("Restart the Ledger Python server to enable persisted transfer detection, then start the import again.");
+    }
+    const checked = new Map(payload.transactions.map((row) => [row._stagedId, row]));
+    state.importedTransactions = transactions.map((row) => ({ ...row, ...checked.get(row._stagedId), _selected: row._selected }));
+    changedIds.forEach((id) => state.reviewEditedIds.add(id));
+    state.transferPlan = payload.transferPlan;
+    state.existingTransferUpdates = payload.existingTransferUpdates || [];
+    state.reviewValidationFailed = false;
+    elements.reviewError.hidden = true;
+    const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
+    const transfers = state.importedTransactions.filter((row) => !row._isDuplicate && transactionUi.isInternalTransfer(row)).length;
+    elements.reviewSubtitle.textContent = `${transactions.length} parsed · ${payload.new} new (${unmatched} no rule matched, ${transfers} internal transfers) · ${payload.duplicates} duplicates`;
+    return true;
+  } catch (error) {
+    if (generation !== state.reviewGeneration || session !== state.reviewSession) return;
+    throw error;
+  } finally {
+    if (generation === state.reviewGeneration) {
+      state.reviewRefreshing = false;
+      updateReviewSelection();
+    }
+  }
+}
+
+function showReviewValidationError(error) {
+  if (!state.reviewSession) return;
+  elements.reviewError.textContent = error.message || "Could not refresh transfer matches. Change the selection to retry.";
+  elements.reviewError.hidden = false;
 }
 
 function updateReviewSelection() {
   const selected = state.importedTransactions.filter((transaction) => transaction._selected).length;
   elements.confirmReview.textContent = `Import selected (${selected})`;
-  elements.confirmReview.disabled = state.reviewCommitted || selected === 0 || importBulk.isActive();
+  elements.confirmReview.disabled = state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing
+    || state.reviewValidationFailed || selected === 0 || importBulk.isActive();
 }
 
 function importReviewType(transaction) {
@@ -1408,6 +1757,7 @@ function renderImportedTransactions() {
   updateReviewSelection();
   updateImportReviewFilters();
   if (count === 0) {
+    importRangeSelection.sync([], state.reviewSession);
     importBulk.render([], importedTransactionRowOptions);
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
@@ -1422,17 +1772,20 @@ function renderImportedTransactions() {
       && importedTransactionMatchesFieldFilters(state.importedTransactions[index])
     ));
   if (visibleIndexes.length === 0) {
+    importRangeSelection.sync([], state.reviewSession);
     importBulk.render([], importedTransactionRowOptions);
     const empty = document.createElement("p");
     empty.className = "empty-import-review";
     empty.textContent = "No transactions match the enabled filters.";
     elements.reviewList.replaceChildren(empty);
+    renderExistingTransferUpdates();
     return;
   }
   const visibleTransactions = transactionUi.sortTransactions(
     visibleIndexes.map((index) => state.importedTransactions[index]),
     importReviewSort.value(),
   );
+  importRangeSelection.sync(importBulk.filter(visibleTransactions).map((row) => row._stagedId), state.reviewSession);
   importBulk.render(
     visibleTransactions,
     (transaction) => importedTransactionRowOptions(
@@ -1440,6 +1793,24 @@ function renderImportedTransactions() {
       state.importedTransactions.indexOf(transaction),
     ),
   );
+  renderExistingTransferUpdates();
+}
+
+function renderExistingTransferUpdates() {
+  if (state.existingTransferUpdates.length && !state.reviewCommitted) {
+    const review = document.createElement("details");
+    review.className = "import-transfer-updates";
+    review.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = `${state.existingTransferUpdates.length} existing transactions will also be flagged as internal transfers`;
+    const note = document.createElement("p");
+    note.textContent = "These are the matching sides already in Ledger. Only their transfer flags change. Uncheck the incoming counterpart to leave an existing row unchanged.";
+    review.append(summary, note);
+    for (const row of transactionUi.sortTransactions(state.existingTransferUpdates, importReviewSort.value())) {
+      review.append(transactionUi.createTransactionRow(row, { currency, shortMonthFormatter, showEdit: false }));
+    }
+    elements.reviewList.prepend(review);
+  }
 }
 
 function editField(name) {
@@ -1476,7 +1847,9 @@ function openImportedTransactionEditor(index) {
       state.availableTransactionTags,
     ),
   );
-  transactionUi.populateTransactionEditor(elements.editForm, transaction);
+  transactionUi.populateTransactionEditor(elements.editForm, transaction, {}, {
+    transactions: [...state.availableTransactions, ...state.importedTransactions],
+  });
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   elements.editDialog.showModal();
   editField("description").focus();
@@ -1511,7 +1884,7 @@ async function saveImportedTransaction(event) {
   };
   setEditBusy(true);
   try {
-    await refreshEditedImport(updated);
+    if (!await refreshEditedImport(updated, [current._stagedId])) return;
     configureReviewFieldFilters(state.reviewFieldFilters);
     renderImportedTransactions();
     elements.editDialog.close();
@@ -1528,6 +1901,7 @@ function renderResult(result, source, token) {
     !Number.isInteger(result.parsed) ||
     !Number.isInteger(result.new) ||
     !Number.isInteger(result.duplicates) ||
+    typeof result.transferPlan !== "string" ||
     !Array.isArray(result.transactions)
   ) {
     throw new Error("Ledger returned an outdated import response. Restart the Ledger server and try again.");
@@ -1555,11 +1929,25 @@ function renderResult(result, source, token) {
     ? ""
     : `${invalid} invalid CSV ${invalid === 1 ? "row was" : "rows were"} skipped. ` +
       "Every row needs a valid date, description, and amount.";
+  if (source === "walmart" && result.skippedOrders) {
+    elements.reviewInvalidNote.hidden = false;
+    elements.reviewInvalidNote.textContent = `${result.skippedOrders} Walmart ${result.skippedOrders === 1 ? "order was" : "orders were"} not imported. `
+      + "Cancelled, pending, and returned/refunded orders need separate review. Keep Credit Karma's Walmart exclusion off to retain uncovered charges. "
+      + (result.warnings || []).slice(0, 3).join(" ")
+      + (result.skippedOrders > 3 ? ` (${result.skippedOrders - 3} more skipped orders.)` : "");
+  }
   elements.reviewError.hidden = true;
   elements.reviewError.textContent = "";
   state.revision = result.revision;
   state.reviewSession = { source, token };
+  state.reviewEditedIds.clear();
   state.reviewCommitted = false;
+  state.reviewCommitting = false;
+  state.reviewRefreshing = false;
+  state.reviewValidationFailed = false;
+  state.reviewGeneration += 1;
+  state.transferPlan = result.transferPlan;
+  state.existingTransferUpdates = result.existingTransferUpdates || [];
   state.reviewFilters = { duplicate: false, unmatched: true, new: true };
   state.importedTransactions = Array.isArray(result.transactions)
     ? result.transactions.map((transaction) => ({
@@ -1589,10 +1977,16 @@ function reviewSessionUrl(action) {
 }
 
 function clearReviewState() {
+  state.reviewGeneration += 1;
+  state.reviewRefreshing = false;
+  state.reviewValidationFailed = false;
+  state.transferPlan = null;
+  state.existingTransferUpdates = [];
   importBulk.reset();
   state.reviewSession = null;
   state.reviewCommitted = false;
   state.importedTransactions = [];
+  state.reviewEditedIds.clear();
   state.editingImportedIndex = null;
   state.reviewFieldFilters = {
     description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
@@ -1614,11 +2008,17 @@ async function loadAvailableTransactionTags() {
 }
 
 async function cancelImportReview() {
+  if (state.reviewCommitting) return;
   if (state.reviewCommitted) {
     if (elements.reviewDialog.open) elements.reviewDialog.close();
     clearReviewState();
     return;
   }
+  if (state.reviewSession && state.importedTransactions.length && !window.confirm(
+    "Discard this import review? No transactions from this review will be saved. " +
+    "Your edits and selections will be lost, and you will need to import the source again. " +
+    "Choose Cancel to keep reviewing.",
+  )) return;
   const cancelUrl = reviewSessionUrl("cancel");
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   clearReviewState();
@@ -1637,19 +2037,23 @@ async function cancelImportReview() {
 
 async function confirmImportReview() {
   const commitUrl = reviewSessionUrl("commit");
-  if (!commitUrl || state.reviewCommitted) return;
+  if (!commitUrl || state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing || state.reviewValidationFailed) return;
   const transactions = state.importedTransactions.filter((transaction) => transaction._selected);
   if (transactions.length === 0) return;
 
   elements.reviewError.hidden = true;
+  state.reviewCommitting = true;
+  elements.closeReview.disabled = true;
   elements.confirmReview.disabled = true;
   elements.cancelReview.disabled = true;
+  renderImportedTransactions();
+  elements.reviewDialog.querySelectorAll(".bulk-mode-button").forEach((button) => { button.disabled = true; });
   elements.confirmReview.textContent = "Importing…";
   try {
     const response = await fetch(commitUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transactions }),
+      body: JSON.stringify({ transactions, transferPlan: state.transferPlan }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
@@ -1661,7 +2065,7 @@ async function confirmImportReview() {
     const committed = payload.import?.committed ?? transactions.length;
     elements.reviewSubtitle.textContent = `${committed} ${
       committed === 1 ? "transaction was" : "transactions were"
-    } added to Ledger.`;
+    } added to Ledger. ${payload.import?.existingTransfersUpdated || 0} existing transactions flagged as internal transfers.`;
     elements.cancelReview.hidden = true;
     elements.confirmReview.hidden = true;
     elements.reviewDashboardLink.hidden = false;
@@ -1672,6 +2076,11 @@ async function confirmImportReview() {
     elements.confirmReview.disabled = false;
     elements.cancelReview.disabled = false;
     updateReviewSelection();
+  } finally {
+    state.reviewCommitting = false;
+    elements.closeReview.disabled = false;
+    elements.reviewDialog.querySelectorAll(".bulk-mode-button").forEach((button) => { button.disabled = false; });
+    renderImportedTransactions();
   }
 }
 
@@ -1685,6 +2094,14 @@ elements.venmoImportButton.addEventListener("click", startVenmoImport);
 elements.venmoCancelButton.addEventListener("click", cancelVenmoImport);
 elements.ebayImportButton.addEventListener("click", startEbayImport);
 elements.ebayCancelButton.addEventListener("click", cancelEbayImport);
+elements.walmartImportButton.addEventListener("click", startWalmartImport);
+elements.capitalOneImportButton.addEventListener("click", startCapitalOneImport);
+elements.capitalOneCancelButton.addEventListener("click", cancelCapitalOneImport);
+elements.capitalOneFile.addEventListener("change", () => {
+  elements.capitalOneFileButton.disabled = state.capitalOneBusy || !elements.capitalOneFile.files?.length;
+});
+elements.capitalOneFileButton.addEventListener("click", importCapitalOneFile);
+elements.walmartCancelButton.addEventListener("click", cancelWalmartImport);
 elements.appleCardImportButton.addEventListener("click", startAppleCardImport);
 elements.appleCardCancelButton.addEventListener("click", cancelAppleCardImport);
 elements.appleCardFileImportButton.addEventListener("click", importAppleCardFile);
@@ -1713,6 +2130,7 @@ elements.reviewCategoryFilter.addEventListener("change", () => {
   );
 });
 elements.resetReviewFieldFilters.addEventListener("click", () => {
+  elements.reviewGroupFilter.value = "";
   elements.reviewCategoryFilter.value = "";
   populateReviewSubcategories("");
   elements.reviewTagFilter.value = "";
@@ -1720,15 +2138,14 @@ elements.resetReviewFieldFilters.addEventListener("click", () => {
   elements.reviewProviderFilter.value = "";
   elements.reviewCategoryFilter.focus();
 });
-elements.applyReviewFieldFilters.addEventListener("click", () => {
+transactionUi.bindLiveTransactionFilters(elements.reviewFilterPopover, () => {
   state.reviewFieldFilters = { ...state.reviewFieldFilters, ...reviewFilterDraft() };
-  setReviewFilterPopover(false, false);
   renderImportedTransactions();
-  elements.reviewFilterButton.focus();
-});
+}, elements.resetReviewFieldFilters);
 elements.clearReviewFieldFilters.addEventListener("click", () => {
   state.reviewFieldFilters = {
     ...state.reviewFieldFilters,
+    group: "",
     category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
   configureReviewFieldFilters(state.reviewFieldFilters);
@@ -1777,6 +2194,20 @@ window.addEventListener("message", (event) => {
   }
   if (event.data.action === "ready") {
     setExtensionReady(true, event.data.payload?.version || "");
+  } else if (event.data.action === "capitalOneProgress" && state.capitalOneSessionToken
+    && event.data.payload?.token === state.capitalOneSessionToken) {
+    renderCapitalOneProgress(event.data.payload.progress, event.data.payload.message);
+  } else if (event.data.action === "capitalOneError" && state.capitalOneSessionToken
+    && (!event.data.payload?.token || event.data.payload.token === state.capitalOneSessionToken)) {
+    const message = event.data.payload?.message || "Capital One import failed.";
+    void cancelCapitalOneImport().then(() => showCapitalOneError(message));
+  } else if (event.data.action === "walmartProgress" && state.walmartSessionToken
+    && event.data.payload?.token === state.walmartSessionToken) {
+    renderWalmartProgress(event.data.payload.progress, event.data.payload.message);
+  } else if (event.data.action === "walmartError" && state.walmartSessionToken
+    && (!event.data.payload?.token || event.data.payload.token === state.walmartSessionToken)) {
+    const message = event.data.payload?.message || "Walmart import failed.";
+    void cancelWalmartImport().then(() => showWalmartError(message));
   } else if (event.data.action === "progress" && state.amazonSessionToken) {
     const { progress, message, status } = event.data.payload ?? {};
     renderAmazonProgress(progress, message || "Importing Amazon orders…", status);

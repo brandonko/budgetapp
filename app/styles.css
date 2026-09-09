@@ -143,9 +143,27 @@ button {
 }
 
 .period-controls {
+  --period-control-height: 48px;
   display: flex;
   gap: 8px;
   align-items: flex-end;
+}
+
+.period-controls .select-wrap select,
+.period-controls .period-today {
+  height: var(--period-control-height);
+  min-height: var(--period-control-height);
+}
+
+.period-controls .period-today {
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+.period-controls .period-today:hover {
+  transform: none;
 }
 
 .site-menu {
@@ -540,8 +558,7 @@ h1 {
   border: 0;
 }
 
-.comparison-metric-control legend,
-.comparison-period-control > span {
+.comparison-metric-control legend {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
@@ -574,17 +591,6 @@ h1 {
 .comparison-segmented-buttons button[aria-pressed="true"] {
   color: white;
   background: var(--primary);
-}
-
-.comparison-period-control select {
-  min-height: 44px;
-  padding: 9px 34px 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--ink);
-  background: var(--surface);
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .comparison-summary {
@@ -1343,6 +1349,19 @@ html[data-theme="dark"] .comparison-chart-tooltip {
 
 .settings-card-heading .primary-button {
   flex: 0 0 auto;
+}
+
+.internal-transfer-settings-card > .settings-card-heading {
+  padding-bottom: 24px;
+  border-bottom: 0;
+}
+
+.internal-transfer-settings-card > .internal-transfer-guide {
+  margin: 0;
+}
+
+.internal-transfer-guide-upgrade {
+  grid-column: 1 / -1;
 }
 
 .export-settings-form {
@@ -3039,11 +3058,11 @@ h2 {
 .import-review-filter {
   min-height: 34px;
   padding: 7px 12px;
-  border: 1px solid #d9dedb;
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  color: #7a827d;
+  color: var(--muted);
   cursor: pointer;
-  background: #eef0ef;
+  background: var(--surface-muted);
   font: inherit;
   font-size: 12px;
   font-weight: 700;
@@ -3144,6 +3163,20 @@ h2 {
   color: #775b16 !important;
   background: #f5e5ad;
   font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transaction-description .transaction-edited-badge {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3730,7 +3763,7 @@ h2 {
 
 .importer-tabs {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 4px;
   margin-bottom: 10px;
   padding: 5px;
@@ -3789,7 +3822,8 @@ h2 {
   letter-spacing: -0.03em;
 }
 
-.amazon-direct-copy > p:last-child {
+.amazon-direct-copy > p:last-child,
+.amazon-direct-copy > .import-source-description {
   margin: 0;
   color: var(--muted);
   font-size: 13px;
@@ -4202,7 +4236,8 @@ h2 {
   padding-top: 16px;
 }
 
-.import-guide-content h2 {
+.import-guide-content h2,
+.import-guide-content h3 {
   margin: 0 0 7px;
   color: var(--ink);
   font-family: inherit;
@@ -4384,6 +4419,8 @@ body:has(dialog[open]) {
   }
 
   .period-controls {
+    --period-control-height: 40px;
+    font-size: 13px;
     display: grid;
     grid-column: 1 / -1;
     grid-row: 2;
@@ -4398,6 +4435,14 @@ body:has(dialog[open]) {
 
   .period-controls:has(#comparison-start-year-control:not([hidden])) {
     grid-template-columns: 1.15fr 0.85fr 0.85fr;
+  }
+
+  .period-controls .period-today,
+  .period-controls .period-today:hover {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
   }
 
   .period-control,
@@ -4516,10 +4561,6 @@ body:has(dialog[open]) {
 
   .comparison-segmented-buttons button {
     flex: 1;
-  }
-
-  .comparison-period-control select {
-    width: 100%;
   }
 
   .comparison-summary {

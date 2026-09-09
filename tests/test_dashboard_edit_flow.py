@@ -8,6 +8,49 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DashboardEditFlowTests(unittest.TestCase):
+    def test_all_search_bars_describe_notes_and_load_the_shared_matcher_before_controllers(self) -> None:
+        for page in ("index", "transactions", "upload", "settings", "classifications"):
+            with self.subTest(page=page):
+                html = (ROOT / "app" / f"{page}.html").read_text(encoding="utf-8")
+                self.assertIn('placeholder="Search descriptions and notes"', html)
+                self.assertEqual(html.count('src="/transactions-model.js?'), 1)
+                self.assertLess(html.index('src="/transactions-model.js?'), html.index('src="/transaction-ui.js?'))
+        shared = (ROOT / "app" / "transaction-ui.js").read_text(encoding="utf-8")
+        self.assertIn("globalObject.LedgerTransactionsModel.matchesTransactionSearch(transaction, query)", shared)
+        for page in ("app", "settings", "upload"):
+            javascript = (ROOT / "app" / f"{page}.js").read_text(encoding="utf-8")
+            self.assertIn("transactionUi.matchesTransactionSearch(transaction,", javascript)
+            self.assertNotIn("transaction.description.toLocaleLowerCase().includes(", javascript)
+
+    def test_today_and_period_dropdowns_share_sizing_on_desktop_and_mobile(self) -> None:
+        css = (ROOT / "app" / "styles.css").read_text(encoding="utf-8")
+        shared = css.split('.period-controls .select-wrap select,', 1)[1].split('}', 1)[0]
+        self.assertIn('.period-controls .period-today', shared)
+        self.assertIn('height: var(--period-control-height)', shared)
+        self.assertIn('min-height: var(--period-control-height)', shared)
+        self.assertRegex(css, r'\.period-controls \{[^}]*--period-control-height: 48px')
+        mobile = css.split('@media (max-width: 600px)', 1)[1]
+        self.assertIn('--period-control-height: 40px', mobile)
+        self.assertIn('.period-controls .period-today:hover', mobile)
+        self.assertIn('transform: translateX(-50%)', mobile)
+        today = css.split('.period-controls .period-today {', 2)[2].split('}', 1)[0]
+        self.assertIn('font-size: inherit', today)
+        self.assertIn('padding: 0 14px', today)
+
+    def test_today_button_uses_the_existing_period_controller_and_respects_setup(self) -> None:
+        html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
+        header = html.split('<header', 1)[1].split('</header>', 1)[0]
+        self.assertIn('id="today-button" type="button"', header)
+        self.assertIn('disabled>Today</button>', header)
+        self.assertIn('elements.todayButton.addEventListener("click", goToToday)', javascript)
+        for start, end in [('function setError(', 'function clearError('),
+                           ('async function loadTransactions(', 'elements.viewModeSelect.addEventListener')]:
+            block = javascript.split(start, 1)[1].split(end, 1)[0]
+            self.assertIn('elements.todayButton.disabled = true', block)
+        loaded = javascript.split('function applyPayload(', 1)[1].split('async function saveTransaction(', 1)[0]
+        self.assertIn('elements.todayButton.disabled = false', loaded)
+
     def test_transaction_forms_include_subcategory_notes_and_tags(self) -> None:
         index_html = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
         upload_html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
@@ -110,8 +153,8 @@ class DashboardEditFlowTests(unittest.TestCase):
         dashboard_javascript = (ROOT / "app" / "app.js").read_text(encoding="utf-8")
         import_javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
         shared_javascript = (ROOT / "app" / "transaction-ui.js").read_text(encoding="utf-8")
-        self.assertIn('<script src="/transaction-ui.js?v=20260906-groups-1" defer>', index_html)
-        self.assertIn('<script src="/transaction-ui.js?v=20260906-groups-1" defer>', upload_html)
+        self.assertRegex(index_html, r'<script src="/transaction-ui\.js(?:\?[^\"]*)?" defer>')
+        self.assertRegex(upload_html, r'<script src="/transaction-ui\.js(?:\?[^\"]*)?" defer>')
         self.assertIn("dashboardBulk.render", dashboard_javascript)
         self.assertIn("importBulk.render", import_javascript)
         self.assertIn("ui.renderTransactionList", (ROOT / "app" / "transaction-bulk.js").read_text(encoding="utf-8"))
@@ -139,10 +182,11 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('id="transaction-filter-popover"', html)
         self.assertIn('id="transaction-filter-chips"', html)
         self.assertIn('id="reset-transaction-filters"', html)
-        self.assertIn('id="apply-transaction-filters"', html)
+        self.assertNotIn('id="apply-transaction-filters"', html)
+        self.assertIn('transactionUi.bindLiveTransactionFilters(elements.transactionFilterPopover', javascript)
         self.assertIn('id="subcategory-summary"', html)
         self.assertIn(
-            "transaction.description.toLocaleLowerCase().includes(descriptionQuery)",
+            "transactionUi.matchesTransactionSearch(transaction, filters.description)",
             javascript,
         )
         self.assertIn("transaction.category === filters.category", javascript)
@@ -178,14 +222,16 @@ class DashboardEditFlowTests(unittest.TestCase):
             "import-history-subcategory-filter", "import-history-tag-filter",
             "import-history-account-filter", "import-history-provider-filter",
             "import-history-filter-chips", "reset-import-history-filters",
-            "apply-import-history-filters", "clear-import-history-filters",
+            "clear-import-history-filters",
         ):
             self.assertIn(f'id="{control_id}"', html[dialog_start:])
         self.assertIn("function configureImportHistoryFilters", javascript)
+        self.assertNotIn('id="apply-import-history-filters"', html)
+        self.assertIn('transactionUi.bindLiveTransactionFilters(elements.importHistoryFilterPopover', javascript)
         self.assertIn("function renderImportHistoryFilterChips", javascript)
         self.assertIn("function setImportHistoryFilterPopover", javascript)
         self.assertIn("No transactions match these filters.", javascript)
-        self.assertIn("transaction.description.toLocaleLowerCase().includes(description)", javascript)
+        self.assertIn("transactionUi.matchesTransactionSearch(transaction, filters.description)", javascript)
         self.assertIn("tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()", javascript)
 
         # History filters must compose with shared group filtering and bulk edits.
@@ -339,7 +385,8 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('data-comparison-metric="net"', html)
         self.assertIn('data-comparison-chart-mode="cumulative"', html)
         self.assertIn('data-comparison-chart-mode="monthly"', html)
-        self.assertIn('id="comparison-period-mode"', html)
+        self.assertNotIn('id="comparison-period-mode"', html)
+        self.assertNotIn("Comparable months", html)
         self.assertIn('id="comparison-year-picker"', html)
         self.assertIn('id="comparison-chart"', html)
         self.assertIn('id="comparison-chart-tooltip"', html)
@@ -348,10 +395,13 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('selectedComparisonYears: []', javascript)
         self.assertIn('VISUALIZATION_COLOR_COUNT = 12', javascript)
         self.assertIn('function visualizationColor(index)', javascript)
-        self.assertIn('comparisonPeriodMode: "comparable"', javascript)
+        self.assertNotIn("comparisonPeriodMode", javascript)
         self.assertIn('comparisonChartMode: "cumulative"', javascript)
         self.assertIn('comparisonChartMode: state.comparisonChartMode', javascript)
         self.assertIn('function comparisonSeries()', javascript)
+        self.assertIn("const cutoff = comparisonCutoffForYear(year);", javascript)
+        self.assertIn("return lastObservedMonth(year);", javascript)
+        self.assertIn("Each line continues through the latest month available in that year.", javascript)
         self.assertIn('state.comparisonChartMode === "cumulative" ? runningTotal : monthlyTotal', javascript)
         self.assertIn('function animateComparisonChart(updates, enabled)', javascript)
         self.assertNotIn('prefers-reduced-motion: reduce', javascript)
@@ -365,7 +415,10 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('function showComparisonTooltip(point, year, clientX, clientY)', javascript)
         self.assertIn('circle.addEventListener("pointerenter"', javascript)
         self.assertIn('circle.addEventListener("focus"', javascript)
-        self.assertIn('series.forEach((yearSeries, seriesIndex)', javascript)
+        self.assertIn('series.forEach((yearSeries)', javascript)
+        self.assertIn('colorForComparisonYear(yearSeries.year)', javascript)
+        self.assertIn('colorForComparisonYear(item.year)', javascript)
+        self.assertIn('colorForComparisonYear(year)', javascript)
         self.assertNotIn('Number(year) % comparisonYearColors.length', javascript)
         self.assertIn('type: "comparison-month"', javascript)
         self.assertIn('transactionUi.isInternalTransfer(transaction)', javascript)
