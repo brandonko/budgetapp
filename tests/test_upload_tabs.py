@@ -16,7 +16,7 @@ class UploadTabsTests(unittest.TestCase):
             r'[^>]*aria-controls="([^"]+)"[^>]*>',
             html,
         )
-        self.assertEqual(len(tabs), 6)
+        self.assertEqual(len(tabs), 9)
         self.assertEqual(sum(selected == "true" for _tab, selected, _panel in tabs), 1)
         for tab_id, _selected, panel_id in tabs:
             with self.subTest(tab_id=tab_id):
@@ -47,9 +47,11 @@ class UploadTabsTests(unittest.TestCase):
             "aliexpress": "description contains “alipay”, “ali express”, or “aliexpress”",
             "venmo": "description contains “venmo”",
             "ebay": "description contains “ebay”",
+            "walmart": "description contains “walmart”, “wal-mart”, “wal mart”, or “wm supercenter”",
         }
         for source, copy in expected_matches.items():
             self.assertEqual(html.count(f'id="creditkarma-ignore-{source}"'), 1)
+            self.assertIn(f'id="creditkarma-ignore-{source}" type="checkbox" checked', html)
             self.assertIn(copy, html)
         self.assertRegex(
             css,
@@ -73,6 +75,21 @@ class UploadTabsTests(unittest.TestCase):
             javascript,
         )
 
+    def test_ledger_csv_import_uses_staged_review_and_reports_invalid_rows(self) -> None:
+        html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
+        javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
+        self.assertIn('id="csv-import-tab" role="tab"', html)
+        self.assertIn('id="csv-import-panel" role="tabpanel"', html)
+        self.assertIn('id="csv-import-file" type="file" accept=".csv,text/csv"', html)
+        self.assertIn('id="csv-import-button" type="button" disabled', html)
+        self.assertIn('id="csv-apply-classifications" type="checkbox" checked', html)
+        self.assertIn('id="import-review-invalid-note" hidden', html)
+        self.assertIn("/api/csv-import-sessions", javascript)
+        self.assertIn('renderResult(payload.import, "csv", payload.token)', javascript)
+        self.assertIn('source === "csv"', javascript)
+        self.assertIn("invalid CSV", javascript)
+        self.assertIn("applyClassifications: elements.csvApplyClassifications.checked", javascript)
+
     def test_import_guide_explains_review_dates_accounts_and_classification(self) -> None:
         html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
         self.assertIn('class="import-note import-guide"', html)
@@ -81,8 +98,8 @@ class UploadTabsTests(unittest.TestCase):
         self.assertIn("Start and end dates are inclusive", html)
         self.assertIn("usernames or credentials", html)
         self.assertIn("automatic importing is currently broken", html)
-        self.assertIn("Amazon, AliExpress, and", html)
-        self.assertIn("eBay start as Shopping", html)
+        self.assertIn("Amazon, AliExpress, eBay, and Walmart start as Shopping", html)
+        self.assertIn("Credit Karma, Apple Card, and Capital One retain their source categories", html)
         self.assertIn("saved classification rule", html)
 
     def test_importers_without_account_metadata_have_editable_defaults(self) -> None:
@@ -93,12 +110,13 @@ class UploadTabsTests(unittest.TestCase):
             "venmo": ("Checking Account", "BANK", "Bank of America"),
             "ebay": ("eBay", "CREDIT CARD", "eBay"),
             "applecard": ("Apple Card", "CREDIT CARD", "Goldman Sachs"),
+            "capitalone": ("Capital One", "CREDIT CARD", "Capital One"),
         }
         for source, values in expected.items():
             for field, value in zip(("account-name", "account-type", "provider"), values):
                 with self.subTest(source=source, field=field):
-                    self.assertIn(
-                        f'id="{source}-{field}" type="text" value="{value}" required', html
+                    self.assertRegex(
+                        html, rf'id="{source}-{field}" type="text" value="{re.escape(value)}"[^>]*\brequired\b'
                     )
 
     def test_import_preview_requires_confirmation_and_supports_cancellation(self) -> None:
@@ -140,7 +158,8 @@ class UploadTabsTests(unittest.TestCase):
         self.assertIn('${unmatched} no rule matched, ${internalTransfers} internal transfers', javascript)
         self.assertIn('.import-review-filter[aria-pressed="true"]', css)
         self.assertIn('checkbox.checked = transaction._selected', javascript)
-        self.assertIn("state.reviewCommitted || selected === 0", javascript)
+        self.assertIn("state.reviewValidationFailed || selected === 0", javascript)
+        self.assertIn("state.reviewCommitting || state.reviewRefreshing", javascript)
         self.assertIn(
             '_selected: !transaction._isDuplicate && Number(transaction.amount) !== 0',
             javascript,

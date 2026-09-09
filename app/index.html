@@ -3,12 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Clear monthly and annual views of your spending." />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <meta name="description" content="Clear monthly, annual, and year-over-year views of your money." />
     <title>Ledger — Spending overview</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/app.js" defer></script>
+    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+    <script src="/app.js?v=20260907-notes-search-1" defer></script>
   </head>
   <body>
     <header class="site-header site-header--dashboard">
@@ -20,17 +24,27 @@
           <div class="period-control">
             <label for="view-mode-select">View</label>
             <div class="select-wrap select-wrap--compact">
-              <select id="view-mode-select" aria-label="Select monthly or annual view">
+              <select id="view-mode-select" aria-label="Select dashboard view">
                 <option value="monthly">Monthly</option>
                 <option value="annual">Annual</option>
+                <option value="year-over-year">Year over year</option>
               </select>
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
               </svg>
             </div>
           </div>
-          <div class="period-control">
-            <label for="year-select">Year</label>
+          <div class="period-control" id="comparison-start-year-control" hidden>
+            <label for="comparison-start-year">Start year</label>
+            <div class="select-wrap select-wrap--year">
+              <select id="comparison-start-year" aria-label="Select comparison start year"></select>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m6 8 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+            </div>
+          </div>
+          <div class="period-control" id="year-control">
+            <label for="year-select" id="year-control-label">Year</label>
             <div class="select-wrap select-wrap--year">
               <select id="year-select" aria-label="Select reporting year"></select>
               <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -47,6 +61,8 @@
               </svg>
             </div>
           </div>
+          <button class="secondary-button period-today" id="today-button" type="button"
+            title="Go to the current month" disabled>Today</button>
       </div>
       <details class="site-menu">
         <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false">
@@ -56,6 +72,7 @@
         </summary>
         <nav class="menu-panel" aria-label="Main navigation">
           <a href="/" aria-current="page">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import">Import data</a>
           <a href="/classifications">Classifications</a>
           <a href="/settings">Settings</a>
@@ -89,7 +106,7 @@
             <span class="summary-icon summary-icon--spent" aria-hidden="true">&nearr;</span>
           </div>
           <p class="summary-value" id="total-spent">—</p>
-          <p class="summary-note">Internal transfers are excluded</p>
+          <p class="summary-note" id="spending-summary-note">Internal transfers are excluded</p>
         </article>
         <article class="summary-card">
           <div class="summary-label">
@@ -106,6 +123,122 @@
           </div>
           <p class="summary-value" id="net-total">—</p>
           <p class="summary-note" id="net-total-note">Income minus spending</p>
+        </article>
+      </section>
+
+      <section class="tag-explorer" id="tag-explorer" aria-labelledby="tag-explorer-title" hidden>
+        <div class="tag-explorer-heading">
+          <div>
+            <p class="eyebrow">Tag explorer</p>
+            <h2 id="tag-explorer-title">Combine tags without double-counting.</h2>
+            <p>Tag totals can overlap. Matching transactions are counted once in the combined result.</p>
+          </div>
+          <button class="text-button" id="clear-tag-selection" type="button" hidden>Clear selection</button>
+        </div>
+        <div class="tag-explorer-controls">
+          <label class="tag-search-field">
+            <span>Find tags</span>
+            <input id="tag-search" type="search" autocomplete="off" placeholder="Search tags" />
+          </label>
+          <fieldset class="tag-match-control">
+            <legend>Match selected tags</legend>
+            <div class="tag-match-buttons">
+              <button type="button" data-tag-match-mode="any" aria-pressed="true">Match any</button>
+              <button type="button" data-tag-match-mode="all" aria-pressed="false">Match all</button>
+            </div>
+          </fieldset>
+        </div>
+        <div class="tag-options" id="tag-options" role="group" aria-label="Select tags"></div>
+        <div class="tag-query-summary">
+          <div>
+            <strong id="tag-query-expression">Select one or more tags</strong>
+            <span id="tag-query-result">Choose tags to build a combined spending view.</span>
+          </div>
+          <button class="secondary-button" id="view-tag-query-transactions" type="button" disabled>
+            View matching transactions
+          </button>
+        </div>
+      </section>
+
+      <section class="year-comparison" id="year-comparison" aria-labelledby="year-comparison-heading" hidden>
+        <div class="section-heading year-comparison-heading">
+          <div>
+            <p class="eyebrow">Year-over-year trends</p>
+            <h2 id="year-comparison-heading">Compare your financial pace.</h2>
+            <p id="year-comparison-description">Cumulative totals make it easy to compare years month by month.</p>
+          </div>
+          <button class="excluded-note excluded-button" id="view-comparison-excluded-button" type="button" hidden>
+            <span aria-hidden="true">&#10003;</span>
+            <span id="comparison-excluded-button-label">View 0 excluded internal transfer transactions</span>
+          </button>
+        </div>
+
+        <div class="comparison-toolbar">
+          <div class="comparison-toolbar-groups">
+            <fieldset class="comparison-metric-control">
+              <legend>Compare</legend>
+              <div class="comparison-segmented-buttons">
+                <button type="button" data-comparison-metric="spending" aria-pressed="true">Spending</button>
+                <button type="button" data-comparison-metric="income" aria-pressed="false">Income</button>
+                <button type="button" data-comparison-metric="net" aria-pressed="false">Net</button>
+              </div>
+            </fieldset>
+            <fieldset class="comparison-metric-control">
+              <legend>Values</legend>
+              <div class="comparison-segmented-buttons">
+                <button type="button" data-comparison-chart-mode="cumulative" aria-pressed="true">Cumulative</button>
+                <button type="button" data-comparison-chart-mode="monthly" aria-pressed="false">Per month</button>
+              </div>
+            </fieldset>
+          </div>
+        </div>
+
+        <div class="comparison-summary" aria-label="Year-over-year summary">
+          <article>
+            <span id="comparison-primary-label">Latest period</span>
+            <strong id="comparison-primary-value">&mdash;</strong>
+          </article>
+          <article>
+            <span id="comparison-change-label">Change from prior year</span>
+            <strong id="comparison-change-value">&mdash;</strong>
+          </article>
+          <article>
+            <span id="comparison-average-label">Monthly average</span>
+            <strong id="comparison-average-value">&mdash;</strong>
+          </article>
+        </div>
+
+        <article class="chart-card comparison-chart-card" aria-labelledby="comparison-chart-title">
+          <div class="chart-card-heading comparison-chart-heading">
+            <div>
+              <h3 id="comparison-chart-title">Cumulative spending</h3>
+              <p id="comparison-chart-subtitle">Each line follows one year through the same number of months.</p>
+            </div>
+          </div>
+          <div class="comparison-year-picker" id="comparison-year-picker" role="group" aria-label="Years shown on chart"></div>
+          <div class="comparison-chart-scroll">
+            <svg class="comparison-chart" id="comparison-chart" viewBox="0 0 1000 430" role="img" aria-labelledby="comparison-chart-title comparison-chart-subtitle"></svg>
+            <div class="comparison-chart-tooltip" id="comparison-chart-tooltip" role="status" hidden>
+              <span id="comparison-tooltip-label"></span>
+              <strong id="comparison-tooltip-value"></strong>
+            </div>
+          </div>
+          <p class="comparison-chart-help">Select a point to review that month's transactions.</p>
+        </article>
+
+        <article class="chart-card comparison-table-card" aria-labelledby="comparison-table-title">
+          <div class="chart-card-heading">
+            <div>
+              <h3 id="comparison-table-title">Exact comparison</h3>
+              <p id="comparison-table-description">Totals and changes use the same time span as the chart.</p>
+            </div>
+          </div>
+          <div class="comparison-table-scroll">
+            <table class="comparison-table">
+              <thead id="comparison-table-head"></thead>
+              <tbody id="comparison-table-body"></tbody>
+            </table>
+          </div>
         </article>
       </section>
 
@@ -126,6 +259,7 @@
             </button>
           </div>
         </div>
+        <div class="tag-explorer-slot" id="annual-tag-explorer-slot"></div>
 
         <article class="chart-card" aria-labelledby="spending-chart-title">
           <div class="chart-card-heading">
@@ -147,7 +281,7 @@
             </div>
           </div>
           <div class="annual-breakdown-scroll">
-            <table class="annual-breakdown-table">
+            <table class="annual-breakdown-table" id="annual-breakdown-table">
               <thead id="annual-breakdown-head"></thead>
               <tbody id="annual-breakdown-body"></tbody>
             </table>
@@ -182,6 +316,7 @@
             </button>
           </div>
         </div>
+        <div class="tag-explorer-slot" id="monthly-tag-explorer-slot"></div>
         <div class="category-grid" id="category-grid" aria-live="polite"></div>
       </section>
 
@@ -218,16 +353,17 @@
               Ledger pairs transactions from different accounts when at least one is categorized
               as Transfer or its description looks like a transfer or account payment, their
               nonzero amounts are exact opposites, and their dates are within five days. Closest
-              matches are paired once.
+              matches are paired once during imports or a Settings scan. After confirmation, the
+              internal-transfer flags are saved in the CSV; opening this page never reruns detection.
               A transaction’s Budget treatment can always exclude it manually or force it to count normally.
             </p>
           </div>
         </aside>
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
-            <span>Description</span>
+            <span>Search</span>
             <input id="transaction-search" type="search" autocomplete="off"
-              placeholder="Search descriptions" />
+              placeholder="Search descriptions and notes" />
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="transaction-filter-button" type="button"
@@ -262,6 +398,7 @@
                     <option value="">All tags</option>
                   </select>
                 </label>
+                <label class="transaction-filter-wide"><span>Group</span><select id="transaction-group-filter"><option value="">All groups</option></select></label>
               </fieldset>
               <fieldset>
                 <legend>Account</legend>
@@ -282,7 +419,6 @@
               </fieldset>
               <div class="transaction-filter-popover-actions">
                 <button class="text-button" id="reset-transaction-filters" type="button">Reset</button>
-                <button class="primary-button" id="apply-transaction-filters" type="button">Apply</button>
               </div>
             </div>
           </div>
@@ -332,7 +468,7 @@
             </label>
             <label class="form-field">
               <span>Category</span>
-              <input id="field-category" name="category" type="text" list="category-options" autocomplete="off" required />
+              <input id="field-category" name="category" type="text" list="category-options" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Subcategory</span>
@@ -340,21 +476,34 @@
             </label>
             <label class="form-field">
               <span>Account name</span>
-              <input id="field-account-name" name="accountName" type="text" list="account-name-options" autocomplete="off" required />
+              <input id="field-account-name" name="accountName" type="text" list="account-name-options" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Account type</span>
-              <input id="field-account-type" name="accountType" type="text" list="account-type-options" autocomplete="off" required />
+              <input id="field-account-type" name="accountType" type="text" list="account-type-options" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Provider</span>
-              <input id="field-provider" name="provider" type="text" list="provider-options" autocomplete="off" required />
+              <input id="field-provider" name="provider" type="text" list="provider-options" autocomplete="off" />
             </label>
-            <label class="form-field form-field--wide">
-              <span>Tags</span>
-              <input id="field-tags" name="tags" type="text" autocomplete="off" />
-              <small>Separate multiple tags with commas.</small>
-            </label>
+            <div class="form-field">
+              <span>Group</span>
+              <input type="hidden" name="group" />
+              <div data-transaction-group-picker></div>
+            </div>
+            <fieldset class="form-field form-field--wide transaction-tag-field" data-transaction-tag-picker>
+              <legend>Tags</legend>
+              <input id="field-tags" name="tags" type="hidden" />
+              <div class="transaction-tag-controls" data-tag-controls>
+                <span class="transaction-tag-empty" data-tag-empty>No existing tags yet.</span>
+                <span class="transaction-tag-create">
+                  <input type="text" data-new-tag-input maxlength="100" placeholder="New tag"
+                    aria-label="New tag name" autocomplete="off" />
+                  <button type="button" data-new-tag-button aria-label="Add new tag" disabled>+</button>
+                </span>
+              </div>
+              <small>Select existing tags or create a new one. Selected tags are highlighted.</small>
+            </fieldset>
             <label class="form-field form-field--wide">
               <span>Notes</span>
               <textarea id="field-notes" name="notes" rows="4"
@@ -370,11 +519,11 @@
             <label class="form-field form-field--wide">
               <span>Budget treatment</span>
               <select id="field-internal-transfer-treatment" name="internalTransferTreatment">
-                <option value="automatic">Automatic</option>
+                <option value="automatic">Eligible for detection</option>
                 <option value="internal-transfer">Internal transfer — exclude from budget</option>
                 <option value="include-in-budget">Count normally — override automatic detection</option>
               </select>
-              <small>Automatic detects matching movements between your bank and credit accounts.</small>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
             </label>
           </div>
           <p class="form-error" id="form-error" role="alert" hidden></p>
