@@ -173,7 +173,8 @@ importer is visible at a time:
 - **Apple Card** opens `card.apple.com`, selects **Export Transactions**, applies
   the chosen dates and CSV format, and captures the official export. A manual
   CSV picker remains available as a fallback. Purchases are expenses, refunds
-  are negative adjustments, and card payments are transfers. Its editable
+  are negative adjustments, and card payments are transfers. Unknown transaction
+  types are rejected instead of inferring an amount direction. Its editable
   defaults are `Apple Card`, `CREDIT CARD`, and `Goldman Sachs`.
 - **Capital One** imports official account CSV exports over the selected
   Transaction Date range, through the companion extension or a manual CSV

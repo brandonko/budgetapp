@@ -42,6 +42,16 @@ class AppleCardParserTests(unittest.TestCase):
         with self.assertRaises(ImportDataError):
             parse_apple_card("date,merchant,amount\n2026-08-20,Coffee,5.00\n")
 
+    def test_rejects_unknown_or_blank_transaction_types(self) -> None:
+        template = (
+            "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD)\n"
+            "08/20/2026,08/21/2026,ADJUSTMENT,Apple,Other,{transaction_type},5.25\n"
+        )
+        for transaction_type in ("Adjustment", ""):
+            with self.subTest(transaction_type=transaction_type or "blank"):
+                with self.assertRaisesRegex(ImportDataError, r"Type is not supported"):
+                    parse_apple_card(template.format(transaction_type=transaction_type))
+
 
 class AppleCardDirectImportTests(unittest.TestCase):
     def setUp(self) -> None:
