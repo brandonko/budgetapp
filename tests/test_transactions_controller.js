@@ -39,6 +39,11 @@ class Element {
   set className(value) { this.attributes.class = value; }
   get name() { return this.attributes.name || ""; }
   set name(value) { this.attributes.name = value; }
+  get href() { return this.attributes.href || ""; }
+  set href(value) { this.attributes.href = value; }
+  get target() { return this.attributes.target || ""; }
+  set target(value) { this.attributes.target = value; }
+  hasAttribute(name) { return name in this.attributes; }
   get options() { return this.tagName === "SELECT" ? this.children : []; }
   get type() { return this.attributes.type || (this.tagName === "INPUT" ? "text" : ""); }
   set type(value) { this.attributes.type = value; }
@@ -102,6 +107,8 @@ class Element {
     return null;
   }
   matches(selector) {
+    const tagAttribute = selector.match(/^([a-z][\w-]*)(\[[^\]]+\])$/);
+    if (tagAttribute) return this.matches(tagAttribute[1]) && this.matches(tagAttribute[2]);
     if (/^(\[[^\]]+\]){2,}$/.test(selector)) {
       return selector.match(/\[[^\]]+\]/g).every((part) => this.matches(part));
     }
@@ -427,21 +434,62 @@ async function start(rows, { stored = null, comparisonStored = null, mutationSta
       ...(url === "/api/transactions/bulk-delete" ? { deleted: JSON.parse(options.body).ids.length, backup: "synthetic.csv" } : {}) }) };
   };
   const windowEvents = new Map();
+  const navigations = [];
   const window = { confirm: () => false,
+    location: { href: "http://127.0.0.1:8000/transactions", origin: "http://127.0.0.1:8000",
+      assign: (destination) => navigations.push(destination) },
     addEventListener: (type, handler) => { const handlers = windowEvents.get(type) || []; handlers.push(handler); windowEvents.set(type, handlers); },
     dispatch: (type, event) => windowEvents.get(type)?.forEach(handler => handler(event)),
   };
-  const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
+  const context = { window, document, localStorage, fetch, URL, HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
-  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "group-comparison.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
+  for (const file of ["navigation.js", "transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "group-comparison.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
   await flush();
   const el = (id) => document.getElementById(id);
   const field = (name) => el("transaction-form").elements.namedItem(name);
   const writes = () => requests.filter((request) => request.method);
   const edits = () => el("alltime-list").querySelectorAll("button");
-  return { document, el, field, writes, edits, requests, window, storage, shared: window.LedgerTransactionUI };
+  return { document, el, field, writes, edits, requests, window, storage, navigations, shared: window.LedgerTransactionUI };
 }
+
+test("navigation disclosure closes while pending flags save before leaving the page", async () => {
+  const app = await start([tx({ id: "navigation-test" })]);
+  app.el("alltime-list").querySelector(".transaction-flag-toggle").click();
+  const menu = app.document.querySelector(".site-menu");
+  const toggle = menu.querySelector(".menu-button");
+  menu.open = true;
+  menu.dispatch("toggle", { bubbles: false });
+  const link = menu.querySelectorAll("a").find((element) => element.href === "/settings");
+  const event = link.click();
+  assert.equal(event.defaultPrevented, true, "The new flag guard still delays navigation");
+  assert.equal(menu.open, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(toggle.getAttribute("aria-label"), "Open navigation menu");
+  assert.deepEqual(app.navigations, [], "Do not leave before the flag save completes");
+  await flush();
+  assert.equal(app.writes().length, 1);
+  assert.equal(app.writes()[0].url, "/api/transactions/flags");
+  assert.deepEqual(app.navigations, ["http://127.0.0.1:8000/settings"]);
+});
+
+test("failed flag saves keep navigation on the page without losing queued changes", async () => {
+  const app = await start([tx({ id: "navigation-test" })], { mutationStatus: 409 });
+  app.el("alltime-list").querySelector(".transaction-flag-toggle").click();
+  const menu = app.document.querySelector(".site-menu");
+  menu.open = true;
+  menu.dispatch("toggle", { bubbles: false });
+  menu.querySelectorAll("a").find((element) => element.href === "/settings").click();
+  await flush();
+  assert.deepEqual(app.navigations, []);
+  assert.equal(menu.querySelector(".menu-button").getAttribute("aria-expanded"), "false");
+  assert.equal(app.writes().length, 1);
+  assert.equal(textButton(app.document, "Save flags").hidden, false);
+  assert.match(app.document.textContent, /pending flags are kept/);
+  let warned = false;
+  app.window.dispatch("beforeunload", { preventDefault() { warned = true; } });
+  assert.equal(warned, true, "The unsaved-change guard must remain active");
+});
 
 test("comparison selection is searchable, live, limited to four and stored separately from browsing", async () => {
   const app = await start(["Bike A", "Bike B", "Trip C", "Trip D", "Build E"].map((group, i) => tx({ _id: i, group, amount: i * 10 })));
