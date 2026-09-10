@@ -408,7 +408,18 @@ action clears that value. A rule has separate matchers for the transaction's
 current category, subcategory, description, account name, and provider using case-insensitive regular expressions. Empty
 matchers are ignored; when a rule has several populated matchers, all must
 match. To keep matching responsive, Ledger rejects backreferences and repeated
-groups that contain another repetition or alternation. Each rule can also include optional freeform notes explaining its
+groups that contain another repetition or alternation, including patterns using
+Python's verbose-mode whitespace and comments. This conservative policy blocks
+known high-risk structures; it is not a guarantee of linear-time regex matching.
+Safe Python features such as scoped flags, named groups, and character classes
+remain supported. If an older saved library contains a now-rejected pattern,
+Classifications still shows every rule for repair and Export still works;
+opening the page does not change the file. Matching, import previews, and
+applying rules remain blocked until the library passes validation. Edit and save
+an affected rule normally. If several matchers need repair, export the library,
+correct all reported matchers in that JSON copy, then use Import to explicitly
+replace the library. Rejected rules are never saved or executed.
+Each rule can also include optional freeform notes explaining its
 rationale; notes appear as subtitle text beneath the rule title and never
 participate in matching.
 Ledger sorts classifications alphabetically by category and subcategory, places
