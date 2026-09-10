@@ -210,6 +210,14 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Test mutations against an isolated copy or synthetic database, never the
   canonical master file.
 - Bind the server to `127.0.0.1` by default.
+- When bound to loopback, reject requests with non-loopback or mismatched-port
+  `Host` values. Reject browser mutations whose HTTP origin does not exactly
+  match Ledger, normalizing an omitted HTTP port to 80. Permit extension origins
+  only for POST progress/complete/cancel callbacks with a source-scoped import
+  token; session creation, committing imports, and all other mutations remain
+  same-origin. Callback handlers must still validate token/source/expiry. Send a
+  restrictive framing policy, content-type sniffing protection, and no-referrer
+  policy on every response.
 
 ## Amount conventions
 

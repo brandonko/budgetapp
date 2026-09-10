@@ -7,6 +7,7 @@ import argparse
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -22,7 +23,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 import transfers
 
 from importers import (
@@ -1493,6 +1494,143 @@ def imported_transaction_state(
 
 class BudgetRequestHandler(BaseHTTPRequestHandler):
     server_version = "BudgetDashboard/2.0"
+
+    def end_headers(self) -> None:
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
+        )
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        super().end_headers()
+
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+        try:
+            self.validate_request_authority()
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.MISDIRECTED_REQUEST, {"error": str(exc)})
+            return False
+        try:
+            self.validate_mutation_origin()
+        except PermissionError as exc:
+            self.send_json(HTTPStatus.FORBIDDEN, {"error": str(exc)})
+            return False
+        return True
+
+    @staticmethod
+    def parse_host_header(value: str) -> tuple[str, int | None]:
+        if not value or any(character.isspace() for character in value):
+            raise CsvDataError("invalid Host header")
+        try:
+            parsed = urlsplit(f"//{value}")
+            port = parsed.port
+        except ValueError as exc:
+            raise CsvDataError("invalid Host header") from exc
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.hostname is None
+        ):
+            raise CsvDataError("invalid Host header")
+        return parsed.hostname.casefold().rstrip("."), port
+
+    @staticmethod
+    def is_loopback_host(hostname: str) -> bool:
+        if hostname == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            return False
+
+    def validate_request_authority(self) -> None:
+        bound_host = str(self.server.server_address[0]).casefold().rstrip(".")
+        if not self.is_loopback_host(bound_host):
+            return
+        host_headers = self.headers.get_all("Host", [])
+        if len(host_headers) != 1:
+            raise CsvDataError("exactly one Host header is required")
+        hostname, port = self.parse_host_header(host_headers[0])
+        if not self.is_loopback_host(hostname):
+            raise CsvDataError("Host must identify the local Ledger server")
+        if (80 if port is None else port) != self.server.server_port:
+            raise CsvDataError("Host port does not match the Ledger server")
+
+    def is_extension_import_callback(self) -> bool:
+        """Extensions may stage/cancel a token-scoped import, never commit it."""
+        if self.command != "POST":
+            return False
+        try:
+            path = urlsplit(self.path).path
+        except ValueError:
+            return False
+        for pattern in (
+            AMAZON_IMPORT_ACTION_PATH, CREDIT_KARMA_IMPORT_ACTION_PATH,
+            ALIEXPRESS_IMPORT_ACTION_PATH, VENMO_IMPORT_ACTION_PATH,
+            APPLE_CARD_IMPORT_ACTION_PATH, EBAY_IMPORT_ACTION_PATH,
+            WALMART_IMPORT_ACTION_PATH, CAPITAL_ONE_IMPORT_ACTION_PATH,
+        ):
+            match = pattern.fullmatch(path)
+            if match is not None:
+                return match.group(2) in {"progress", "complete", "cancel"}
+        return False
+
+    def validate_mutation_origin(self) -> None:
+        if self.command not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return
+        origin_headers = self.headers.get_all("Origin", [])
+        if not origin_headers:
+            return
+        if len(origin_headers) != 1:
+            raise PermissionError("exactly one Origin header is required")
+        if any(character.isspace() for character in origin_headers[0]):
+            raise PermissionError("invalid request origin")
+        try:
+            origin = urlsplit(origin_headers[0])
+            origin_port = origin.port
+        except ValueError as exc:
+            raise PermissionError("invalid request origin") from exc
+        if origin.scheme == "chrome-extension":
+            if (
+                origin.hostname
+                and origin.username is None
+                and origin.password is None
+                and origin_port is None
+                and not origin.path
+                and not origin.query
+                and not origin.fragment
+            ):
+                if self.is_extension_import_callback():
+                    return
+                raise PermissionError("extension origin is only allowed for import session callbacks")
+            raise PermissionError("invalid extension origin")
+        host_headers = self.headers.get_all("Host", [])
+        if len(host_headers) != 1:
+            raise PermissionError("exactly one Host header is required")
+        try:
+            hostname, _port = self.parse_host_header(host_headers[0])
+        except CsvDataError as exc:
+            raise PermissionError("invalid request Host") from exc
+        if origin.scheme == "http" and origin_port is None:
+            origin_port = 80
+        if (
+            origin.scheme != "http"
+            or origin.username is not None
+            or origin.password is not None
+            or origin.hostname is None
+            or origin.hostname.casefold().rstrip(".") != hostname
+            or origin_port != self.server.server_port
+            or origin.path
+            or origin.query
+            or origin.fragment
+        ):
+            raise PermissionError("request origin does not match the local Ledger server")
 
     @property
     def csv_path(self) -> Path:
