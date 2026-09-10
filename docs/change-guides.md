@@ -32,7 +32,7 @@ cases. An unknown financial interpretation needs a product decision, not a guess
    lock/revision/backup protocol. The extension must never call commit.
 3. Add source form controls in [upload.html](../app/upload.html) and adapters in
    [upload.js](../app/upload.js). Reuse preference defaults, staged rows, shared
-   editor/list controls, progress and cancellation. Add to accessible source tabs
+   editor/list controls, progress and cancellation. Add to the searchable source picker
    and supported-source displays without creating another review implementation.
 4. For browser ingestion, isolate source capture under
    `ledger_data_importer_extension/<source>_extension/`, connect it through the

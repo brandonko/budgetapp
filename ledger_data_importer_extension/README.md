@@ -1,5 +1,11 @@
 # Ledger Data Importer
 
+**American Express** is available in companion **0.12.2+**. Reload the extension,
+allow access to `global.americanexpress.com`, and refresh Ledger. **Import from
+Amex** opens Activity. Choose the card, click **Use this card** in the Ledger
+guide, and follow any export instructions. Captured XLSX/CSV returns directly
+to Ledger review. [Amex integration details](amex_extension/README.md).
+
 **Schwab Checking** is available in companion **0.11.0+**. Reload the extension,
 accept the `client.schwab.com` permission, restart the Ledger backend, and refresh
 Import data. Start from the Schwab Checking tab, select one checking account in
@@ -14,9 +20,9 @@ forms can be operated manually, or the downloaded CSV can be selected in Ledger.
 Nothing is saved before the shared transaction review is confirmed. See
 [Capital One details](capitalone_extension/README.md) for limitations and privacy.
 
-This unpacked Chrome extension connects Ledger's **Import data** page to nine
+This unpacked Chrome extension connects Ledger's **Import data** page to ten
 authenticated website sources: Credit Karma, Amazon, AliExpress, eBay, Walmart,
-Venmo, Apple Card, Capital One, and Schwab Checking. The page may be on loopback
+Venmo, Apple Card, Capital One, Schwab Checking, and American Express. The page may be on loopback
 or an explicitly trusted server with current Chrome site permission. Ledger CSV
 is a separate app import option, not an extension source.
 
@@ -35,7 +41,7 @@ Ledger will show **Companion extension connected** when the bridge is ready.
 Version **0.10.2** replaces the old Amazon-only toolbar popup with Ledger's own
 launcher. Reload the extension in `chrome://extensions`, then click its Ledger
 icon. Choose your **Ledger server** and **Open Import data** to start any source
-import. The popup lists all nine website sources and links to **Ledger
+import. The popup lists all ten website sources and links to **Ledger
 connection settings**; you do not need to visit Amazon first.
 
 The popup prefers the current trusted Ledger page, then your last chosen server,
@@ -128,6 +134,7 @@ walmart_extension/      Walmart receipt reader, passive list observer, and coord
 apple_card_extension/   Apple Card official CSV export automation
 capitalone_extension/   Capital One CSV capture and export-form assistance
 schwab_extension/       Schwab Checking user-guided CSV capture and normalization
+amex_extension/         Amex activity export assistance and XLSX/CSV capture
 shared/                  Ledger popup, connection settings, icons, bridge, and coordinator
 _locales/                Amazon popup catalogs (Chrome requires this root path)
 manifest.json            Permissions and module registration

@@ -175,3 +175,66 @@ section. Source-specific policies add to that shared review and write boundary.
 - Keep the existing cross-account date/amount duplicate rule and explain its
   collision limitation in the Schwab tab. Do not add account identity to the key
   or introduce persistent account identifiers as part of this source addition.
+
+### American Express ingestion
+
+- Make browser-assisted import the primary action, with companion 0.12.2+.
+  Keep Amex integration isolated under `amex_extension/`, limited to
+  `https://global.americanexpress.com/*`. Open Activity in one owned tab; ask
+  the user to select/confirm the card before arming capture. Assist only
+  recognizable export controls, recheck date/format values before submission,
+  and guide unfamiliar forms without guessing account selectors/private APIs.
+  Login and security checks stay with the user. Capture XLSX/CSV Blob, fetch,
+  and XHR exports plus clicked export links (data URLs, same-origin blob URLs,
+  and explicitly named same-origin CSV/XLSX files, including detached anchors).
+  Also handle the observed extensionless GET activity export at exactly
+  `/api/servicing/v1/financials/documents` with `file_format=csv|excel|xlsx` and
+  `application/force-download`: observe export window.open/anchors and use a
+  narrow, non-blocking `webRequest.onBeforeRequest` navigation observer for the
+  confirmed owned tab. Never request headers/bodies or blocking capabilities.
+  Persist only confirmation time with the job; require current document/nonce,
+  an Amex initiator, a request after confirmation, and current Ledger trust.
+  Send an observed URL only to that confirmed document for a bounded GET read;
+  never log/store its account-specific query or send it to Ledger. Reject PDF,
+  other endpoints/origins/tabs, duplicate format parameters, stale events and
+  redirects. Register the observer on worker startup; confirmation must finish
+  in the worker before the page listener arms. Cancel/disarm/new documents stop
+  navigation capture. Test this path with synthetic exports, never private HARs.
+  Never read local Downloads, replay POSTs, follow redirects, or fetch other
+  origins. Wait for the MAIN listener's armed acknowledgement before driving
+  export controls. Show capture progress and privacy-safe diagnostic stages,
+  never URLs, filenames, credentials, tokens, or transaction data in diagnostics.
+  If capture fails, retain the manual file fallback.
+  Do not claim unattended automation has been verified on a live account.
+  Source nonce/document/tab checks and current exact Ledger-origin trust guard
+  delivery. Store only short-lived job metadata in extension session storage.
+  Strip cover/account/reference fields in the isolated browser reader, before
+  relaying allowlisted transaction CSV to the worker or server. Never send raw
+  workbooks or read credentials, authentication headers, arbitrary account APIs,
+  or local files.
+- Support manual US Activity CSV and XLSX uploads as the fallback.
+  XLSX is preferred because it retains source categories and merchant details;
+  three-column CSV supplies Date, Description, and Amount only. Do not imply
+  support for arbitrary regional/legacy export formats.
+- Preserve charge-positive/credit-negative source signs. Default missing category
+  to Uncategorized, leave subcategory blank, and run shared classifications.
+  Use editable American Express / CREDIT CARD / American Express account defaults.
+- **Include merchant details in Notes** defaults on. Save labeled statement name,
+  address, city/state, postal code, country, and extended details when available.
+  When off, do not import those details; leave Notes blank for classification/user
+  edits. Never include workbook cover/account/cardholder information or reference
+  columns. The option is snapshotted and strictly boolean in the source session;
+  it must not alter source amounts, categories, descriptions, or existing Notes.
+- Browser sessions always apply inclusive dates using global lookback defaults.
+  Read all uploaded file rows by default. **Limit uploaded file to the dates above** opts into inclusive
+  transaction-date filtering using the global lookback defaults. Both file formats
+  use shared review, editing, linking suggestions, duplicate counts, and confirmed
+  commit. No writes before confirmation; cancellation and late replies cannot
+  reopen a review. Dedup ignores descriptions/Notes and preserves same-day equal
+  occurrences, including cross-source matches and CSV/XLSX re-imports.
+- Keep the app dependency-free. Read only the Transaction Details sheet with a
+  bounded ZIP/XML reader: no extraction, external links, or formula evaluation.
+  Enforce 16 MB input, archive/expanded XML limits, a transaction row cap, and
+  reject unsafe declarations, ambiguous money, malformed rows, and non-USD data.
+  Synthetic in-memory workbooks are the only checked-in test fixtures. Skip and
+  report explicitly pending rows. Never import worksheet summaries as transactions.

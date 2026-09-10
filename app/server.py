@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import transfers
 import refunds
 import reconciliation
+from amex import AMEX_DEFAULT_ACCOUNT, parse_amex
 
 from importers import (
     ALIEXPRESS_DEFAULT_ACCOUNT,
@@ -173,6 +174,8 @@ SCHWAB_IMPORT_SESSION_PATH = re.compile(
 SCHWAB_IMPORT_ACTION_PATH = re.compile(
     r"^/api/schwab-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
+AMEX_IMPORT_SESSION_PATH = re.compile(r"^/api/amex-import-sessions/([A-Za-z0-9_-]{32,})$")
+AMEX_IMPORT_ACTION_PATH = re.compile(r"^/api/amex-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$")
 WALMART_IMPORT_ACTION_PATH = re.compile(
     r"^/api/walmart-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
@@ -192,6 +195,7 @@ IMPORT_SOURCE_LABELS = {
     "walmart": "Walmart",
     "capitalone": "Capital One",
     "schwab": "Schwab Checking",
+    "amex": "American Express",
     "csv": "CSV",
 }
 IMPORT_ACCOUNT_DEFAULTS = {
@@ -203,6 +207,7 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "walmart": WALMART_DEFAULT_ACCOUNT,
     "capitalone": CAPITAL_ONE_DEFAULT_ACCOUNT,
     "schwab": SCHWAB_DEFAULT_ACCOUNT,
+    "amex": AMEX_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
     "/": APP_DIR / "index.html",
@@ -1897,6 +1902,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if schwab_session_match is not None:
             self.get_amazon_import_session(schwab_session_match.group(1), source="schwab")
             return
+        amex_session_match = AMEX_IMPORT_SESSION_PATH.fullmatch(path)
+        if amex_session_match is not None:
+            self.get_amazon_import_session(amex_session_match.group(1), source="amex")
+            return
         walmart_session_match = WALMART_IMPORT_SESSION_PATH.fullmatch(path)
         if walmart_session_match is not None:
             self.get_amazon_import_session(walmart_session_match.group(1), source="walmart")
@@ -1960,6 +1969,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.create_amazon_import_session(source="capitalone")
         elif path == "/api/schwab-import-sessions":
             self.create_amazon_import_session(source="schwab")
+        elif path == "/api/amex-import-sessions":
+            self.create_amazon_import_session(source="amex")
         elif path == "/api/csv-import-sessions":
             self.create_csv_import_session()
         else:
@@ -2024,6 +2035,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             if schwab_action_match is not None:
                 self.update_amazon_import_session(
                     schwab_action_match.group(1), schwab_action_match.group(2), source="schwab"
+                )
+                return
+            amex_action_match = AMEX_IMPORT_ACTION_PATH.fullmatch(path)
+            if amex_action_match is not None:
+                self.update_amazon_import_session(
+                    amex_action_match.group(1), amex_action_match.group(2), source="amex"
                 )
                 return
             walmart_action_match = WALMART_IMPORT_ACTION_PATH.fullmatch(path)
@@ -2126,6 +2143,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             response["accountName"] = session["accountName"]
             response["accountType"] = session["accountType"]
             response["provider"] = session["provider"]
+        if session.get("source") == "amex":
+            response["includeMerchantDetails"] = session.get("includeMerchantDetails", True)
+            response["filterDateRange"] = session.get("filterDateRange", False)
         return response
 
     def create_amazon_import_session(self, source: str = "amazon") -> None:
@@ -2159,9 +2179,17 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 or not isinstance(ignore_walmart, bool)
             ):
                 raise CsvDataError("Credit Karma ignore options must be true or false")
-            filter_date_range = payload.get("filterDateRange", True)
-            if source == "applecard" and not isinstance(filter_date_range, bool):
-                raise CsvDataError("Apple Card filterDateRange must be true or false")
+            filter_date_range = payload.get("filterDateRange", source != "amex")
+            if source in {"applecard", "amex"} and not isinstance(filter_date_range, bool):
+                raise CsvDataError("filterDateRange must be true or false")
+            include_merchant_details = payload.get("includeMerchantDetails", True)
+            if source == "amex" and not isinstance(include_merchant_details, bool):
+                raise CsvDataError("includeMerchantDetails must be true or false")
+            browser_import = payload.get("browserImport", False) if source == "amex" else False
+            if not isinstance(browser_import, bool):
+                raise CsvDataError("browserImport must be true or false")
+            if browser_import:
+                filter_date_range = True
 
             account_identity: tuple[str, str, str] | None = None
             if source in IMPORT_ACCOUNT_DEFAULTS:
@@ -2186,11 +2214,11 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             now = time.time()
             source_label = IMPORT_SOURCE_LABELS.get(source, source)
             waiting_status = (
-                "waiting_for_file" if source == "applecard" else "waiting_for_extension"
+                "waiting_for_file" if source in {"applecard", "amex"} and not browser_import else "waiting_for_extension"
             )
             waiting_message = (
-                "Waiting for the Apple Card CSV."
-                if source == "applecard"
+                f"Waiting for the {source_label} export file."
+                if source in {"applecard", "amex"} and not browser_import
                 else f"Waiting for the {source_label} importer extension."
             )
             session: dict[str, Any] = {
@@ -2218,8 +2246,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     accountType=account_identity[1],
                     provider=account_identity[2],
                 )
-                if source == "applecard":
+                if source in {"applecard", "amex"}:
                     session["filterDateRange"] = filter_date_range
+                if source == "amex":
+                    session["includeMerchantDetails"] = include_merchant_details
             with self.amazon_import_lock:
                 self.amazon_import_sessions[token] = session
             response = self.public_amazon_import_session(session)
@@ -2921,6 +2951,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "waiting_for_capitalone",
                         "opening_schwab",
                         "waiting_for_schwab",
+                        "opening_amex",
+                        "waiting_for_amex",
                         "scraping",
                         "importing",
                         "error",
@@ -3020,6 +3052,15 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     transaction for transaction in parsed_transactions
                     if session["startDate"] <= transaction["date"] <= session["endDate"]
                 ]
+            elif source == "amex":
+                credit_karma = None
+                parsed_transactions, warnings = parse_amex(
+                    content, account_identity, file_format=payload.get("fileFormat", "csv"),
+                    include_merchant_details=session.get("includeMerchantDetails", True),
+                )
+                if session.get("filterDateRange", False):
+                    parsed_transactions = [transaction for transaction in parsed_transactions
+                                           if session["startDate"] <= transaction["date"] <= session["endDate"]]
             elif source == "capitalone":
                 credit_karma = None
                 parsed_transactions = [
@@ -3693,7 +3734,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, message_format: str, *args: object) -> None:
         message = message_format % args
         message = re.sub(
-            r"(/api/(?:amazon|creditkarma|aliexpress|venmo|applecard|ebay|walmart|capitalone|schwab|csv)-import-sessions/)[A-Za-z0-9_-]{32,}",
+            r"(/api/(?:amazon|creditkarma|aliexpress|venmo|applecard|ebay|walmart|capitalone|schwab|amex|csv)-import-sessions/)[A-Za-z0-9_-]{32,}",
             r"\1[redacted]",
             message,
         )
