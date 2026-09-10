@@ -8,6 +8,11 @@ __pycache__/
 .venv/
 venv/
 
+# Contributor-only browser tooling and synthetic test artifacts
+node_modules/
+test-results/
+playwright-report/
+
 # Local configuration and editor files
 .env
 .DS_Store

@@ -1,2 +1,3 @@
-# Require the repository owner to approve changes across the repository.
+# Default ownership; branch protection determines whether approval is required.
+# Ownership does not replace executed checks or independent review.
 * @brandonko

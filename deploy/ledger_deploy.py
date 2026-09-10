@@ -123,8 +123,7 @@ def deploy() -> None:
     unpack_release(archive, release)
     (release / ".ledger-revision").write_text(revision + "\n")
     print(f"Testing {revision[:12]} before changing the running service...", flush=True)
-    run("runuser", "-u", "ledger", "--", "/usr/bin/python3", "-B", "-m", "unittest",
-        "discover", "-s", "tests", "-v", cwd=release)
+    run("runuser", "-u", "ledger", "--", "/usr/bin/python3", "-B", "scripts/verify.py", cwd=release)
     # Pending import reviews are in memory. Finish/cancel them before invoking deployment.
     run("systemctl", "stop", SERVICE)
     try:

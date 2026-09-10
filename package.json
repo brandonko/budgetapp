@@ -1,0 +1,14 @@
+{
+  "name": "ledger-development-checks",
+  "private": true,
+  "description": "Development-only browser checks; Ledger runs without Node or npm packages.",
+  "scripts": {
+    "test:browser": "playwright test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
