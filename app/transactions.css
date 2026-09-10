@@ -6,11 +6,11 @@
 .transactions-workspace .settings-status--error { color: var(--danger-ink); background: var(--danger-soft); }
 .transactions-query { position: relative; z-index: 2; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .transactions-query .transaction-toolbar { border-radius: 14px 14px 0 0; padding: 20px; }
-.transactions-query .transaction-filter-popover { right: 20px; width: min(520px, calc(100% - 40px)); max-height: 70vh; overflow-y: auto; }
-.transactions-query .transaction-filter-popover label { display: block; min-width: 0; }
+.transactions-query .transaction-filter-panel { padding: 20px; }
+.transactions-query .transaction-filter-panel label:not(.transaction-flag-filter) { display: block; min-width: 0; }
 .transactions-query .alltime-excluded-toggle { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .transactions-query .alltime-excluded-toggle input { width: 16px; min-height: 16px; flex-shrink: 0; accent-color: var(--accent); }
-.transactions-query .transaction-filter-popover-actions { position: sticky; bottom: -18px; padding: 12px 0; border-top: 1px solid var(--line); background: var(--surface); }
+
 .alltime-tag-filter .alltime-tag-mode { margin-top: 10px; flex-wrap: wrap; width: fit-content; }
 .alltime-tag-filter .alltime-hint { margin: 8px 0 0; overflow-wrap: anywhere; }
 .alltime-tag-options { display: flex; flex-wrap: wrap; gap: 8px; max-height: none; overflow: visible; padding: 3px; margin-top: 10px; }

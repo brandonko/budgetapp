@@ -31,6 +31,11 @@ const state = {
   capitalOnePollTimer: null,
   capitalOneStartedAt: 0,
   capitalOneBusy: false,
+  schwabExtensionReady: false,
+  schwabSessionToken: "",
+  schwabPollTimer: null,
+  schwabStartedAt: 0,
+  schwabBusy: false,
   appleCardBusy: false,
   appleCardExtensionReady: false,
   appleCardSessionToken: "",
@@ -40,6 +45,9 @@ const state = {
   revision: "",
   importedTransactions: [],
   reviewEditedIds: new Set(),
+  refundSelections: new Map(),
+  refundDetailsOpen: new Set(),
+  refundCandidateChoices: new Map(),
   reviewSession: null,
   reviewCommitted: false,
   reviewCommitting: false,
@@ -62,8 +70,9 @@ const state = {
   availableTransactions: [],
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", walmart: "Walmart", applecard: "Apple Card", capitalone: "Capital One", csv: "CSV" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", walmart: "Walmart", applecard: "Apple Card", capitalone: "Capital One", schwab: "Schwab Checking", csv: "CSV" };
 const MIN_WALMART_EXTENSION_VERSION = "0.9.1";
+const MIN_SCHWAB_EXTENSION_VERSION = "0.11.0";
 const MIN_CAPITAL_ONE_EXTENSION_VERSION = "0.9.1";
 const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
 const MIN_VENMO_EXTENSION_VERSION = "0.5.0";
@@ -90,6 +99,17 @@ const elements = {
   capitalOneError: document.querySelector("#capitalone-error"),
   capitalOneFile: document.querySelector("#capitalone-file"),
   capitalOneFileButton: document.querySelector("#capitalone-file-import-button"),
+  schwabStartDate: document.querySelector("#schwab-start-date"),
+  schwabEndDate: document.querySelector("#schwab-end-date"),
+  schwabAccountName: document.querySelector("#schwab-account-name"),
+  schwabAccountType: document.querySelector("#schwab-account-type"),
+  schwabProvider: document.querySelector("#schwab-provider"),
+  schwabImportButton: document.querySelector("#schwab-import-button"),
+  schwabCancelButton: document.querySelector("#schwab-cancel-button"),
+  schwabProgress: document.querySelector("#schwab-progress"),
+  schwabProgressBar: document.querySelector("#schwab-progress-bar"),
+  schwabProgressMessage: document.querySelector("#schwab-progress-message"),
+  schwabError: document.querySelector("#schwab-error"),
   amazonStartDate: document.querySelector("#amazon-start-date"),
   amazonEndDate: document.querySelector("#amazon-end-date"),
   amazonAccountName: document.querySelector("#amazon-account-name"),
@@ -191,6 +211,7 @@ const elements = {
   reviewFilterButton: document.querySelector("#import-review-filter-button"),
   reviewFilterPopover: document.querySelector("#import-review-filter-popover"),
   reviewGroupFilter: document.querySelector("#import-review-group-filter"),
+  reviewFlaggedFilter: document.querySelector("#import-review-flagged-filter"),
   reviewFilterCount: document.querySelector("#import-review-filter-count"),
   reviewCategoryFilter: document.querySelector("#import-review-category-filter"),
   reviewSubcategoryFilter: document.querySelector("#import-review-subcategory-filter"),
@@ -244,6 +265,7 @@ function populateReviewSubcategories(category, selected = "") {
 }
 
 function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
+  transactionUi.setFlagFilter(elements.reviewFlaggedFilter, filters.flagged || "");
   transactionUi.populateGroupFilter(elements.reviewGroupFilter, state.importedTransactions, filters.group);
   const unique = (field) => [...new Set(state.importedTransactions.map((transaction) => transaction[field]).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));
@@ -267,6 +289,7 @@ function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
   populateReviewFilter(elements.reviewAccountFilter, unique("accountName"), "All accounts", filters.accountName);
   populateReviewFilter(elements.reviewProviderFilter, unique("provider"), "All providers", filters.provider);
   state.reviewFieldFilters = {
+    flagged: transactionUi.flagFilterValue(elements.reviewFlaggedFilter),
     description: elements.reviewSearch.value.trim(),
     group: elements.reviewGroupFilter.value,
     category: elements.reviewCategoryFilter.value,
@@ -280,6 +303,7 @@ function configureReviewFieldFilters(filters = state.reviewFieldFilters) {
 
 function reviewFilterDraft() {
   return {
+    flagged: transactionUi.flagFilterValue(elements.reviewFlaggedFilter),
     group: elements.reviewGroupFilter.value,
     category: elements.reviewCategoryFilter.value,
     subcategory: elements.reviewSubcategoryFilter.value,
@@ -290,7 +314,7 @@ function reviewFilterDraft() {
 }
 
 function renderReviewFieldFilterChips() {
-  const definitions = [["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"], ["group", "Group"], ["accountName", "Account"], ["provider", "Provider"]];
+  const definitions = [["flagged", "Flag status"], ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"], ["group", "Group"], ["accountName", "Account"], ["provider", "Provider"]];
   const active = definitions.filter(([field]) => state.reviewFieldFilters[field]);
   elements.reviewFilterCount.textContent = String(active.length);
   elements.reviewFilterCount.hidden = active.length === 0;
@@ -300,7 +324,7 @@ function renderReviewFieldFilterChips() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
-    const value = field === "group" ? transactionUi.groupFilterLabel(state.reviewFieldFilters[field]) : state.reviewFieldFilters[field];
+    const value = field === "flagged" ? transactionUi.flagFilterLabel(state.reviewFieldFilters[field]) : field === "group" ? transactionUi.groupFilterLabel(state.reviewFieldFilters[field]) : state.reviewFieldFilters[field];
     chip.textContent = `${label}: ${value} ×`;
     chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
     chip.addEventListener("click", () => {
@@ -314,14 +338,13 @@ function renderReviewFieldFilterChips() {
 
 function setReviewFilterPopover(open, restore = true) {
   if (!open && restore) configureReviewFieldFilters(state.reviewFieldFilters);
-  elements.reviewFilterPopover.hidden = !open;
-  if (open) transactionUi.fitTransactionFilterPopover(elements.reviewFilterPopover);
-  elements.reviewFilterButton.setAttribute("aria-expanded", String(open));
+  transactionUi.setTransactionFilterPanel(elements.reviewFilterPopover, elements.reviewFilterButton, open);
 }
 
 function importedTransactionMatchesFieldFilters(transaction) {
   const filters = state.reviewFieldFilters;
   return transactionUi.matchesTransactionSearch(transaction, filters.description)
+    && transactionUi.matchesFlagFilter(transaction, filters.flagged)
     && (!filters.category || transaction.category === filters.category)
     && (!filters.subcategory || transaction.subcategory === filters.subcategory)
     && (!filters.tag || importedTags(transaction).some((tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase()))
@@ -382,43 +405,24 @@ function localIsoDate(value) {
   return `${year}-${month}-${day}`;
 }
 
-function initializeDirectImportDates() {
+function suggestRefundMatches() {
+  return window.LedgerPreferences?.imports?.().matchRefunds !== false;
+}
+
+const defaultImportDates = new Map();
+function initializeDirectImportDates({ preserveEdits = false } = {}) {
   const today = new Date();
-  const lookbackStart = new Date(today);
-  lookbackStart.setDate(lookbackStart.getDate() - 14);
+  const lookbackStart = window.LedgerPreferences?.importStartDate?.(today) || new Date(today);
+  if (!window.LedgerPreferences?.importStartDate) lookbackStart.setDate(lookbackStart.getDate() - 14);
   const todayIso = localIsoDate(today);
-  elements.amazonStartDate.value = localIsoDate(lookbackStart);
-  elements.amazonEndDate.value = todayIso;
-  elements.amazonStartDate.max = todayIso;
-  elements.amazonEndDate.max = todayIso;
-  elements.creditKarmaStartDate.value = localIsoDate(lookbackStart);
-  elements.creditKarmaEndDate.value = todayIso;
-  elements.creditKarmaStartDate.max = todayIso;
-  elements.creditKarmaEndDate.max = todayIso;
-  elements.aliExpressStartDate.value = localIsoDate(lookbackStart);
-  elements.aliExpressEndDate.value = todayIso;
-  elements.aliExpressStartDate.max = todayIso;
-  elements.aliExpressEndDate.max = todayIso;
-  elements.venmoStartDate.value = localIsoDate(lookbackStart);
-  elements.venmoEndDate.value = todayIso;
-  elements.venmoStartDate.max = todayIso;
-  elements.venmoEndDate.max = todayIso;
-  elements.ebayStartDate.value = localIsoDate(lookbackStart);
-  elements.ebayEndDate.value = todayIso;
-  elements.ebayStartDate.max = todayIso;
-  elements.ebayEndDate.max = todayIso;
-  elements.walmartStartDate.value = localIsoDate(lookbackStart);
-  elements.capitalOneStartDate.value = localIsoDate(lookbackStart);
-  elements.capitalOneEndDate.value = todayIso;
-  elements.capitalOneStartDate.max = todayIso;
-  elements.capitalOneEndDate.max = todayIso;
-  elements.walmartEndDate.value = todayIso;
-  elements.walmartStartDate.max = todayIso;
-  elements.walmartEndDate.max = todayIso;
-  elements.appleCardStartDate.value = localIsoDate(lookbackStart);
-  elements.appleCardEndDate.value = todayIso;
-  elements.appleCardStartDate.max = todayIso;
-  elements.appleCardEndDate.max = todayIso;
+  // Discover every importer's date controls, including future import tabs.
+  for (const [name, field] of Object.entries(elements)) {
+    if (!field || !/(Start|End)Date$/.test(name)) continue;
+    const value = name.endsWith("StartDate") ? localIsoDate(lookbackStart) : todayIso;
+    if (!preserveEdits || field.value === defaultImportDates.get(name)) field.value = value;
+    field.max = todayIso;
+    defaultImportDates.set(name, value);
+  }
 }
 
 function versionAtLeast(version, minimum) {
@@ -447,6 +451,12 @@ function setExtensionReady(ready, version = "") {
     elements.capitalOneError.textContent = `Capital One requires companion extension ${MIN_CAPITAL_ONE_EXTENSION_VERSION} or newer. Reload Ledger Data Importer in chrome://extensions, then reload this page.`;
     elements.capitalOneError.hidden = false;
   } else if (!state.capitalOneBusy) elements.capitalOneError.hidden = true;
+  state.schwabExtensionReady = ready && versionAtLeast(version, MIN_SCHWAB_EXTENSION_VERSION);
+  elements.schwabImportButton.disabled = !state.schwabExtensionReady || state.schwabBusy;
+  if (ready && !state.schwabExtensionReady) {
+    elements.schwabError.textContent = `Schwab requires companion extension ${MIN_SCHWAB_EXTENSION_VERSION} or newer. Reload Ledger Data Importer in chrome://extensions, then reload this page.`;
+    elements.schwabError.hidden = false;
+  } else if (!state.schwabBusy) elements.schwabError.hidden = true;
   elements.walmartImportButton.disabled = !state.walmartExtensionReady || state.walmartBusy;
   if (ready && !state.walmartExtensionReady) {
     elements.walmartError.textContent = `Walmart requires companion extension ${MIN_WALMART_EXTENSION_VERSION} or newer. Reload Ledger Data Importer in chrome://extensions, then reload this page.`;
@@ -457,7 +467,9 @@ function setExtensionReady(ready, version = "") {
   elements.extensionDot.classList.toggle("extension-dot--ready", ready);
   elements.extensionStatus.textContent = ready
     ? `Companion extension connected · v${version || "unknown"}`
-    : "Companion extension not detected";
+    : (["localhost", "127.0.0.1"].includes(window.location.hostname) && window.location.protocol === "http:"
+      ? "Companion extension not detected"
+      : "Extension not connected — check Ledger connection settings");
   elements.extensionHelp.open = !ready;
   elements.amazonImportButton.disabled = !ready || Boolean(state.amazonSessionToken);
   elements.creditKarmaImportButton.disabled =
@@ -593,7 +605,7 @@ async function startAmazonImport() {
     const response = await fetch("/api/amazon-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the Amazon import (${response.status}).`);
@@ -714,6 +726,7 @@ async function startCreditKarmaImport() {
   const ignoreVenmo = elements.creditKarmaIgnoreVenmo.checked;
   const ignoreEbay = elements.creditKarmaIgnoreEbay.checked;
   const ignoreWalmart = elements.creditKarmaIgnoreWalmart.checked;
+  const matchRefunds = suggestRefundMatches();
   if (!startDate || !endDate) {
     showCreditKarmaError("Choose both a start date and an end date.");
     return;
@@ -733,11 +746,14 @@ async function startCreditKarmaImport() {
     const response = await fetch("/api/creditkarma-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress, ignoreVenmo, ignoreEbay, ignoreWalmart }),
+      body: JSON.stringify({ startDate, endDate, ignoreAmazon, ignoreAliExpress, ignoreVenmo, ignoreEbay, ignoreWalmart, matchRefunds }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.error || `Could not start the Credit Karma import (${response.status}).`);
+    }
+    if (matchRefunds && payload.matchRefunds !== true) {
+      throw new Error("Restart the Ledger Python server to enable refund matching, then try this import again.");
     }
 
     state.creditKarmaSessionToken = payload.token;
@@ -874,7 +890,7 @@ async function startAliExpressImport() {
     const response = await fetch("/api/aliexpress-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the AliExpress import (${response.status}).`);
@@ -997,7 +1013,7 @@ async function startVenmoImport() {
     const response = await fetch("/api/venmo-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the Venmo import (${response.status}).`);
@@ -1106,7 +1122,7 @@ async function startWalmartImport() {
   elements.walmartImportButton.disabled = true;
   renderWalmartProgress(0, "Creating a secure import session…");
   try {
-    const result = await walmartRequest("", { startDate, endDate, ...identity });
+    const result = await walmartRequest("", { startDate, endDate, ...identity, matchRefunds: suggestRefundMatches() });
     state.walmartSessionToken = result.token;
     state.walmartStartedAt = Date.now();
     elements.walmartCancelButton.hidden = false;
@@ -1128,6 +1144,102 @@ async function cancelWalmartImport() {
   try { await walmartRequest(`/${encodeURIComponent(token)}/cancel`, {}); }
   catch { /* No commit was sent; expired sessions cannot change the CSV. */ }
   renderWalmartProgress(0, "Walmart import cancelled.", "cancelled");
+}
+
+function renderSchwabProgress(progress, message, status = "scraping") {
+  elements.schwabProgress.hidden = false;
+  elements.schwabProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress) || 0))}%`;
+  elements.schwabProgressMessage.textContent = message;
+  elements.schwabProgress.classList.toggle("amazon-progress--error", status === "error");
+}
+
+function showSchwabError(message) {
+  elements.schwabError.textContent = message;
+  elements.schwabError.hidden = false;
+  renderSchwabProgress(0, "Schwab import could not continue.", "error");
+}
+
+function finishSchwabSession() {
+  if (state.schwabPollTimer !== null) window.clearTimeout(state.schwabPollTimer);
+  state.schwabPollTimer = null;
+  state.schwabSessionToken = "";
+  state.schwabBusy = false;
+  elements.schwabImportButton.disabled = !state.schwabExtensionReady;
+  elements.schwabCancelButton.hidden = true;
+}
+
+async function schwabRequest(path, payload) {
+  const response = await fetch(`/api/schwab-import-sessions${path}`, payload === undefined
+    ? { cache: "no-store" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || (response.status === 404
+    ? "Restart the Ledger Python server to enable Schwab imports, then retry."
+    : `Schwab import request failed (${response.status}).`));
+  return result;
+}
+
+async function pollSchwabSession(token) {
+  if (state.schwabSessionToken !== token) return;
+  try {
+    const result = await schwabRequest(`/${encodeURIComponent(token)}`);
+    if (state.schwabSessionToken !== token) return; // Ignore replies from a cancelled/older job.
+    const elapsed = Date.now() - state.schwabStartedAt;
+    if (elapsed > 30 * 60 * 1000 || (result.status === "waiting_for_extension" && elapsed > 15000)) {
+      throw new Error("Schwab import timed out. Reload the companion extension, complete any Schwab sign-in/security check, and retry.");
+    }
+    renderSchwabProgress(result.progress, result.message, result.status);
+    if (result.status === "review") {
+      renderResult(result.import, "schwab", token);
+      finishSchwabSession();
+    } else if (["error", "cancelled", "complete"].includes(result.status)) {
+      if (result.status === "error") showSchwabError(result.message);
+      finishSchwabSession();
+    } else {
+      state.schwabPollTimer = window.setTimeout(() => pollSchwabSession(token), 1200);
+    }
+  } catch (error) {
+    if (state.schwabSessionToken !== token) return;
+    await cancelSchwabImport();
+    showSchwabError(error.message || "Schwab import status is unavailable.");
+  }
+}
+
+async function startSchwabImport() {
+  if (state.schwabBusy) return;
+  elements.schwabError.hidden = true;
+  const startDate = elements.schwabStartDate.value;
+  const endDate = elements.schwabEndDate.value;
+  const identity = importAccountIdentity("schwab");
+  if (!startDate || !endDate || startDate > endDate) return showSchwabError("Choose a valid start and end date.");
+  if (!identity) return showSchwabError("Complete all three account fields.");
+  if (!state.schwabExtensionReady) return showSchwabError(`Reload companion extension ${MIN_SCHWAB_EXTENSION_VERSION} or newer, then reload this page.`);
+  state.schwabBusy = true;
+  elements.schwabImportButton.disabled = true;
+  renderSchwabProgress(0, "Creating a secure import session…");
+  try {
+    const result = await schwabRequest("", { startDate, endDate, ...identity, matchRefunds: suggestRefundMatches() });
+    state.schwabSessionToken = result.token;
+    state.schwabStartedAt = Date.now();
+    elements.schwabCancelButton.hidden = false;
+    window.postMessage({ source: "ledger-web-app", action: "startSchwabImport", payload: {
+      token: result.token, startDate, endDate, ledgerOrigin: window.location.origin,
+    } }, window.location.origin);
+    void pollSchwabSession(result.token);
+  } catch (error) {
+    showSchwabError(error.message || "Could not start Schwab import.");
+    finishSchwabSession();
+  }
+}
+
+async function cancelSchwabImport() {
+  const token = state.schwabSessionToken;
+  finishSchwabSession(); // Invalidate in-flight polling before awaiting cancellation.
+  if (!token) return;
+  window.postMessage({ source: "ledger-web-app", action: "cancelSchwabImport", payload: { token } }, window.location.origin);
+  try { await schwabRequest(`/${encodeURIComponent(token)}/cancel`, {}); }
+  catch { /* No commit was sent; expired sessions cannot change the CSV. */ }
+  renderSchwabProgress(0, "Schwab import cancelled.", "cancelled");
 }
 
 function renderCapitalOneProgress(progress, message, status = "scraping") {
@@ -1204,7 +1316,7 @@ async function startCapitalOneImport() {
   elements.capitalOneFileButton.disabled = true;
   renderCapitalOneProgress(0, "Creating a secure import session…");
   try {
-    const result = await capitalOneRequest("", { startDate, endDate, ...identity });
+    const result = await capitalOneRequest("", { startDate, endDate, ...identity, matchRefunds: suggestRefundMatches() });
     state.capitalOneSessionToken = result.token;
     state.capitalOneStartedAt = Date.now();
     elements.capitalOneCancelButton.hidden = false;
@@ -1246,7 +1358,7 @@ async function importCapitalOneFile() {
   let token = "";
   try {
     const content = await file.text();
-    const session = await capitalOneRequest("", { startDate, endDate, ...identity });
+    const session = await capitalOneRequest("", { startDate, endDate, ...identity, matchRefunds: suggestRefundMatches() });
     token = session.token;
     state.capitalOneSessionToken = token;
     elements.capitalOneCancelButton.hidden = false;
@@ -1349,7 +1461,7 @@ async function startEbayImport() {
     const response = await fetch("/api/ebay-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the eBay import (${response.status}).`);
@@ -1478,7 +1590,7 @@ async function startAppleCardImport() {
     const response = await fetch("/api/applecard-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not start the Apple Card import (${response.status}).`);
@@ -1542,7 +1654,7 @@ async function importAppleCardFile() {
     const sessionResponse = await fetch("/api/applecard-import-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate, endDate, filterDateRange: false, ...accountIdentity }),
+      body: JSON.stringify({ startDate, endDate, filterDateRange: false, ...accountIdentity, matchRefunds: suggestRefundMatches() }),
     });
     const session = await sessionResponse.json().catch(() => ({}));
     if (!sessionResponse.ok) {
@@ -1605,6 +1717,7 @@ async function importLedgerCsv() {
       body: JSON.stringify({
         content,
         applyClassifications: elements.csvApplyClassifications.checked,
+        matchRefunds: suggestRefundMatches(),
       }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -1624,7 +1737,9 @@ async function importLedgerCsv() {
 const importRangeSelection = transactionUi.createCheckboxRangeSelection((ids, checked) => {
   if (!state.reviewSession || state.reviewCommitted || state.reviewCommitting || importBulk.isActive()) return;
   const affected = new Set(ids);
-  state.importedTransactions.forEach((row) => { if (affected.has(row._stagedId)) row._selected = checked; });
+  state.importedTransactions.forEach((row) => {
+    if (affected.has(row._stagedId) && !state.refundSelections.has(row._stagedId)) row._selected = checked;
+  });
   const refresh = refreshEditedImport(state.importedTransactions);
   renderImportedTransactions();
   refresh.then(renderImportedTransactions).catch(showReviewValidationError);
@@ -1636,7 +1751,7 @@ function importedTransactionRowOptions(transaction, index) {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = transaction._selected;
-  checkbox.disabled = state.reviewCommitted || state.reviewCommitting;
+  checkbox.disabled = state.reviewCommitted || state.reviewCommitting || state.refundSelections.has(transaction._stagedId);
   checkbox.setAttribute("aria-label", `Include ${transaction.description} in import`);
   importRangeSelection.bind(checkbox, transaction._stagedId);
   selection.append(checkbox);
@@ -1646,11 +1761,124 @@ function importedTransactionRowOptions(transaction, index) {
     leadingControl: selection,
     duplicate: transaction._isDuplicate,
     edited: state.reviewEditedIds.has(transaction._stagedId),
+    detailContent: refundReviewControl(transaction),
+    detailPlacement: "row",
     needsClassification:
-      !transactionUi.isInternalTransfer(transaction) && transaction._classificationMatched === false,
+      !transaction._refundAlreadyHandled && !state.refundSelections.has(transaction._stagedId)
+      && !transactionUi.isInternalTransfer(transaction) && transaction._classificationMatched === false,
     disabled: state.reviewCommitted || state.reviewRefreshing || state.reviewCommitting,
     onEdit: () => openImportedTransactionEditor(index),
   };
+}
+
+function refundSelectionPayload(selections = state.refundSelections) {
+  return [...selections].map(([stagedId, purchaseId]) => ({ stagedId, purchaseId }));
+}
+
+function importRowsForRequest(rows) {
+  // Candidate purchases are server-owned suggestions, not client transaction edits.
+  return rows.map(({ _refundCandidates, ...row }) => row);
+}
+
+async function chooseRefundMatch(transaction, purchaseId) {
+  if (state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing || importBulk.isActive()) return;
+  const choices = new Map(state.refundSelections);
+  if (purchaseId === null) choices.delete(transaction._stagedId);
+  else choices.set(transaction._stagedId, purchaseId);
+  const rows = state.importedTransactions.map((row) => row._stagedId === transaction._stagedId
+    ? { ...row, _selected: purchaseId === null } : row);
+  try {
+    const request = refreshEditedImport(rows, [], choices);
+    renderImportedTransactions();
+    await request;
+  } catch (error) { showReviewValidationError(error); }
+  renderImportedTransactions();
+}
+
+function refundReviewControl(transaction) {
+  const candidates = transaction._refundCandidates || [];
+  const purchaseId = state.refundSelections.get(transaction._stagedId);
+  const matched = purchaseId !== undefined;
+  if (!candidates.length && !matched && !transaction._refundAlreadyHandled) return null;
+  const box = document.createElement("section");
+  box.className = "import-refund-match";
+  const id = transaction._stagedId;
+  const busy = state.reviewRefreshing || state.reviewCommitting || importBulk.isActive();
+  const controls = document.createElement("div");
+  controls.className = "import-refund-controls";
+  const panel = document.createElement("div");
+  panel.id = `refund-details-${id}`;
+  panel.className = "import-refund-details";
+  panel.hidden = !state.refundDetailsOpen.has(id);
+  const title = document.createElement("h4");
+  title.textContent = matched
+    ? (state.reviewCommitted ? "Purchase marked refunded" : "Purchase will be marked refunded")
+    : transaction._refundAlreadyHandled ? "Refund already handled"
+      : `Possible refund · ${candidates.length === 1 ? "same-price purchase found" : `${candidates.length} same-price purchases found`}`;
+  const explanation = document.createElement("p");
+  explanation.textContent = transaction._refundAlreadyHandled
+    ? "A prior import matched this credit to a purchase. It is a duplicate and is unchecked; importing it again would also count the credit."
+    : matched
+    ? (state.reviewCommitted ? "The refund credit was saved and linked to the original purchase." : "On confirmation: save this credit linked to the purchase, reducing its net cost without counting the credit twice. Nothing is saved yet.")
+    : "Check the purchase below: the exact price within 90 days is only a suggestion. On confirmation, both transactions stay in the CSV with a one-to-one refund link. The purchase shows the net cost and the credit is not counted twice.";
+  panel.append(title, explanation);
+  const detailToggle = document.createElement("button");
+  detailToggle.type = "button";
+  detailToggle.className = "import-refund-expand";
+  detailToggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>';
+  detailToggle.setAttribute("aria-label", `Refund match details for ${transaction.description}`);
+  detailToggle.setAttribute("aria-controls", panel.id);
+  const setExpanded = (open) => {
+    if (open) state.refundDetailsOpen.add(id); else state.refundDetailsOpen.delete(id);
+    panel.hidden = !open;
+    detailToggle.setAttribute("aria-expanded", String(open));
+  };
+  setExpanded(!panel.hidden);
+  detailToggle.addEventListener("click", () => setExpanded(panel.hidden));
+  const chosenId = () => purchaseId ?? (candidates.length === 1 ? candidates[0]._id : state.refundCandidateChoices.get(id));
+  const purchaseRows = document.createElement("div");
+  purchaseRows.className = "import-refund-purchases";
+  for (const purchase of candidates.filter((row) => !matched || row._id === purchaseId)) {
+    let selection = null;
+    if (!matched && candidates.length > 1) {
+      selection = document.createElement("label");
+      selection.className = "import-selection";
+      const radio = document.createElement("input");
+      radio.type = "radio"; radio.name = `refund-purchase-${id}`;
+      radio.value = String(purchase._id); radio.checked = chosenId() === purchase._id;
+      radio.disabled = busy || state.reviewCommitted;
+      radio.setAttribute("aria-label", `Match refund to ${purchase.description} on ${purchase.date}`);
+      radio.addEventListener("change", () => { if (radio.checked) state.refundCandidateChoices.set(id, purchase._id); });
+      selection.append(radio);
+    }
+    purchaseRows.append(transactionUi.createTransactionRow(purchase, {
+      currency, shortMonthFormatter, showYear: true, showEdit: false, leadingControl: selection,
+    }));
+  }
+  panel.append(purchaseRows);
+  if (!state.reviewCommitted && !transaction._refundAlreadyHandled) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "import-refund-action";
+    button.textContent = matched ? "Undo match" : "Mark as refunded";
+    button.title = matched ? "Undo this staged refund match" : "Match this credit to a saved purchase; saved only on import confirmation";
+    button.disabled = busy;
+    button.addEventListener("click", () => {
+      if (!matched && !candidates.some((purchase) => purchase._id === chosenId())) {
+        setExpanded(true); purchaseRows.querySelector("input")?.focus(); return;
+      }
+      chooseRefundMatch(transaction, matched ? null : chosenId());
+    });
+    controls.append(button);
+  } else {
+    const status = document.createElement("span");
+    status.className = "import-refund-status";
+    status.textContent = transaction._refundAlreadyHandled ? "Refund already handled" : "Purchase marked refunded";
+    controls.append(status);
+  }
+  controls.append(detailToggle);
+  box.append(controls, panel);
+  return box;
 }
 
 const importBulk = window.LedgerTransactionBulk.create({
@@ -1662,6 +1890,7 @@ const importBulk = window.LedgerTransactionBulk.create({
   getRevision: () => state.reviewSession?.token,
   render: () => renderImportedTransactions(),
   onModeChange: () => { importRangeSelection.reset(); updateReviewSelection(); },
+  onFlagChange: (row) => state.reviewEditedIds.add(row._stagedId),
   onStage: async (ids, proposed) => {
     const replacements = new Map(proposed.map((row) => [row._stagedId, row]));
     const updated = state.importedTransactions.map((row) => replacements.get(row._stagedId) || row);
@@ -1671,7 +1900,7 @@ const importBulk = window.LedgerTransactionBulk.create({
   },
 });
 
-async function refreshEditedImport(transactions, editedIds = []) {
+async function refreshEditedImport(transactions, editedIds = [], refundSelections = state.refundSelections) {
   // Track explicit user changes only, not inclusion toggles or automatic detection.
   // Occurrence IDs keep identical transactions independent and never enter the CSV.
   const originals = new Map(state.importedTransactions.map((row) => [row._stagedId, row]));
@@ -1680,6 +1909,17 @@ async function refreshEditedImport(transactions, editedIds = []) {
     && originals.has(row._stagedId)
     && window.LedgerTransactionBulk.changedFields(originals.get(row._stagedId), row).length)
     .map((row) => row._stagedId);
+  refundSelections = new Map(refundSelections);
+  for (const id of changedIds) {
+    const before = originals.get(id);
+    const after = transactions.find((row) => row._stagedId === id);
+    const withoutFollowUpFlag = (row) => ({ ...row, flags: transactionUi.transactionFlags(row).filter((flag) => flag !== "flagged").sort().join(",") });
+    if (!window.LedgerTransactionBulk.changedFields(withoutFollowUpFlag(before), withoutFollowUpFlag(after)).length) continue;
+    // An editor change discards just this row's refund decision; it can be reviewed again.
+    if (refundSelections.delete(id)) {
+      transactions = transactions.map((row) => row._stagedId === id ? { ...row, _selected: true } : row);
+    }
+  }
   const generation = ++state.reviewGeneration;
   const session = state.reviewSession;
   state.reviewRefreshing = true;
@@ -1688,7 +1928,9 @@ async function refreshEditedImport(transactions, editedIds = []) {
   try {
     const response = await fetch("/api/transactions/staged-preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ revision: state.revision, transactions }),
+      body: JSON.stringify({ revision: state.revision, transactions: importRowsForRequest(transactions),
+        ...(session?.source === "creditkarma" ? { importToken: session.token } : {}),
+        refundSelections: refundSelectionPayload(refundSelections) }),
     });
     const payload = await response.json().catch(() => ({}));
     if (generation !== state.reviewGeneration || session !== state.reviewSession) return;
@@ -1698,12 +1940,13 @@ async function refreshEditedImport(transactions, editedIds = []) {
     }
     const checked = new Map(payload.transactions.map((row) => [row._stagedId, row]));
     state.importedTransactions = transactions.map((row) => ({ ...row, ...checked.get(row._stagedId), _selected: row._selected }));
+    state.refundSelections = refundSelections;
     changedIds.forEach((id) => state.reviewEditedIds.add(id));
     state.transferPlan = payload.transferPlan;
     state.existingTransferUpdates = payload.existingTransferUpdates || [];
     state.reviewValidationFailed = false;
     elements.reviewError.hidden = true;
-    const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
+    const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !state.refundSelections.has(row._stagedId) && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
     const transfers = state.importedTransactions.filter((row) => !row._isDuplicate && transactionUi.isInternalTransfer(row)).length;
     elements.reviewSubtitle.textContent = `${transactions.length} parsed · ${payload.new} new (${unmatched} no rule matched, ${transfers} internal transfers) · ${payload.duplicates} duplicates`;
     return true;
@@ -1726,13 +1969,17 @@ function showReviewValidationError(error) {
 
 function updateReviewSelection() {
   const selected = state.importedTransactions.filter((transaction) => transaction._selected).length;
-  elements.confirmReview.textContent = `Import selected (${selected})`;
+  const matched = state.refundSelections.size;
+  elements.confirmReview.textContent = matched
+    ? `Confirm ${selected} ${selected === 1 ? "import" : "imports"} · ${matched} ${matched === 1 ? "refund" : "refunds"}`
+    : `Import selected (${selected})`;
   elements.confirmReview.disabled = state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing
-    || state.reviewValidationFailed || selected === 0 || importBulk.isActive();
+    || state.reviewValidationFailed || (selected === 0 && matched === 0) || importBulk.isActive();
 }
 
 function importReviewType(transaction) {
   if (transaction._isDuplicate) return "duplicate";
+  if (state.refundSelections.has(transaction._stagedId)) return "new";
   if (transactionUi.isInternalTransfer(transaction)) return "new";
   if (transaction._classificationMatched === false) return "unmatched";
   return "new";
@@ -1753,6 +2000,7 @@ function toggleImportReviewFilter(event) {
 }
 
 function renderImportedTransactions() {
+  renderReviewFieldFilterChips();
   const count = state.importedTransactions.length;
   updateReviewSelection();
   updateImportReviewFilters();
@@ -1785,7 +2033,7 @@ function renderImportedTransactions() {
     visibleIndexes.map((index) => state.importedTransactions[index]),
     importReviewSort.value(),
   );
-  importRangeSelection.sync(importBulk.filter(visibleTransactions).map((row) => row._stagedId), state.reviewSession);
+  importRangeSelection.sync(importBulk.filter(visibleTransactions).filter((row) => !state.refundSelections.has(row._stagedId)).map((row) => row._stagedId), state.reviewSession);
   importBulk.render(
     visibleTransactions,
     (transaction) => importedTransactionRowOptions(
@@ -1936,11 +2184,18 @@ function renderResult(result, source, token) {
       + (result.warnings || []).slice(0, 3).join(" ")
       + (result.skippedOrders > 3 ? ` (${result.skippedOrders - 3} more skipped orders.)` : "");
   }
+  if (source === "schwab" && result.warnings?.length) {
+    elements.reviewInvalidNote.hidden = false;
+    elements.reviewInvalidNote.textContent = result.warnings.join(" ");
+  }
   elements.reviewError.hidden = true;
   elements.reviewError.textContent = "";
   state.revision = result.revision;
   state.reviewSession = { source, token };
   state.reviewEditedIds.clear();
+  state.refundSelections.clear();
+  state.refundDetailsOpen.clear();
+  state.refundCandidateChoices.clear();
   state.reviewCommitted = false;
   state.reviewCommitting = false;
   state.reviewRefreshing = false;
@@ -1977,6 +2232,7 @@ function reviewSessionUrl(action) {
 }
 
 function clearReviewState() {
+  importBulk.discardFlags();
   state.reviewGeneration += 1;
   state.reviewRefreshing = false;
   state.reviewValidationFailed = false;
@@ -1987,6 +2243,9 @@ function clearReviewState() {
   state.reviewCommitted = false;
   state.importedTransactions = [];
   state.reviewEditedIds.clear();
+  state.refundSelections.clear();
+  state.refundDetailsOpen.clear();
+  state.refundCandidateChoices.clear();
   state.editingImportedIndex = null;
   state.reviewFieldFilters = {
     description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
@@ -2015,7 +2274,7 @@ async function cancelImportReview() {
     return;
   }
   if (state.reviewSession && state.importedTransactions.length && !window.confirm(
-    "Discard this import review? No transactions from this review will be saved. " +
+    "Discard this import review? No transactions or refund changes from this review will be saved. " +
     "Your edits and selections will be lost, and you will need to import the source again. " +
     "Choose Cancel to keep reviewing.",
   )) return;
@@ -2038,8 +2297,10 @@ async function cancelImportReview() {
 async function confirmImportReview() {
   const commitUrl = reviewSessionUrl("commit");
   if (!commitUrl || state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing || state.reviewValidationFailed) return;
+  if (!await importBulk.flushFlags()) return;
+  if (state.reviewCommitting || state.reviewCommitted || reviewSessionUrl("commit") !== commitUrl) return;
   const transactions = state.importedTransactions.filter((transaction) => transaction._selected);
-  if (transactions.length === 0) return;
+  if (transactions.length === 0 && state.refundSelections.size === 0) return;
 
   elements.reviewError.hidden = true;
   state.reviewCommitting = true;
@@ -2053,7 +2314,7 @@ async function confirmImportReview() {
     const response = await fetch(commitUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transactions, transferPlan: state.transferPlan }),
+      body: JSON.stringify({ transactions: importRowsForRequest(transactions), transferPlan: state.transferPlan, refundSelections: refundSelectionPayload() }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
@@ -2061,11 +2322,12 @@ async function confirmImportReview() {
     state.reviewCommitted = true;
     state.revision = payload.import?.revision || state.revision;
     elements.reviewEyebrow.textContent = "Import complete";
-    elements.reviewTitle.textContent = "Transactions imported";
+    elements.reviewTitle.textContent = state.refundSelections.size ? "Import review saved" : "Transactions imported";
     const committed = payload.import?.committed ?? transactions.length;
     elements.reviewSubtitle.textContent = `${committed} ${
       committed === 1 ? "transaction was" : "transactions were"
-    } added to Ledger. ${payload.import?.existingTransfersUpdated || 0} existing transactions flagged as internal transfers.`;
+    } added to Ledger. ${payload.import?.existingTransfersUpdated || 0} existing transactions flagged as internal transfers.`
+      + (payload.import?.purchasesRefunded ? ` ${payload.import.purchasesRefunded} ${payload.import.purchasesRefunded === 1 ? "purchase" : "purchases"} marked refunded; matching credits were not imported.` : "");
     elements.cancelReview.hidden = true;
     elements.confirmReview.hidden = true;
     elements.reviewDashboardLink.hidden = false;
@@ -2095,6 +2357,8 @@ elements.venmoCancelButton.addEventListener("click", cancelVenmoImport);
 elements.ebayImportButton.addEventListener("click", startEbayImport);
 elements.ebayCancelButton.addEventListener("click", cancelEbayImport);
 elements.walmartImportButton.addEventListener("click", startWalmartImport);
+elements.schwabImportButton.addEventListener("click", startSchwabImport);
+elements.schwabCancelButton.addEventListener("click", cancelSchwabImport);
 elements.capitalOneImportButton.addEventListener("click", startCapitalOneImport);
 elements.capitalOneCancelButton.addEventListener("click", cancelCapitalOneImport);
 elements.capitalOneFile.addEventListener("change", () => {
@@ -2130,6 +2394,7 @@ elements.reviewCategoryFilter.addEventListener("change", () => {
   );
 });
 elements.resetReviewFieldFilters.addEventListener("click", () => {
+  transactionUi.setFlagFilter(elements.reviewFlaggedFilter, "");
   elements.reviewGroupFilter.value = "";
   elements.reviewCategoryFilter.value = "";
   populateReviewSubcategories("");
@@ -2145,6 +2410,7 @@ transactionUi.bindLiveTransactionFilters(elements.reviewFilterPopover, () => {
 elements.clearReviewFieldFilters.addEventListener("click", () => {
   state.reviewFieldFilters = {
     ...state.reviewFieldFilters,
+    flagged: "",
     group: "",
     category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
@@ -2152,12 +2418,7 @@ elements.clearReviewFieldFilters.addEventListener("click", () => {
   renderImportedTransactions();
   elements.reviewFilterButton.focus();
 });
-document.addEventListener("click", (event) => {
-  if (
-    elements.reviewFilterButton.getAttribute("aria-expanded") === "true"
-    && !event.target.closest(".transaction-filter-menu")
-  ) setReviewFilterPopover(false);
-});
+
 elements.reviewDialog.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && elements.reviewFilterButton.getAttribute("aria-expanded") === "true") {
     event.preventDefault();
@@ -2201,6 +2462,13 @@ window.addEventListener("message", (event) => {
     && (!event.data.payload?.token || event.data.payload.token === state.capitalOneSessionToken)) {
     const message = event.data.payload?.message || "Capital One import failed.";
     void cancelCapitalOneImport().then(() => showCapitalOneError(message));
+  } else if (event.data.action === "schwabProgress" && state.schwabSessionToken
+    && event.data.payload?.token === state.schwabSessionToken) {
+    renderSchwabProgress(event.data.payload.progress, event.data.payload.message);
+  } else if (event.data.action === "schwabError" && state.schwabSessionToken
+    && (!event.data.payload?.token || event.data.payload.token === state.schwabSessionToken)) {
+    const message = event.data.payload?.message || "Schwab import failed.";
+    void cancelSchwabImport().then(() => showSchwabError(message));
   } else if (event.data.action === "walmartProgress" && state.walmartSessionToken
     && event.data.payload?.token === state.walmartSessionToken) {
     renderWalmartProgress(event.data.payload.progress, event.data.payload.message);
@@ -2295,6 +2563,7 @@ window.addEventListener("message", (event) => {
 
 initializeImporterTabs();
 initializeDirectImportDates();
+window.addEventListener("ledger-import-preferences-change", () => initializeDirectImportDates({ preserveEdits: true }));
 loadAvailableTransactionTags();
 setExtensionReady(false);
 for (const delay of [0, 400, 1200]) {

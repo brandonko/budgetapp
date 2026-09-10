@@ -60,7 +60,7 @@ export function registerWalmartImporter({ validateRequest, broadcast }) {
     serialize(async () => {
       let job = await pending();
       if (message.action === "ledgerStartWalmartImport") {
-        validateRequest(message.data, sender);
+        await validateRequest(message.data, sender);
         if (job) throw new Error("Another Walmart import is already running.");
         // Whitelist fields: no arbitrary source URLs or credentials in recovery storage.
         job = { token: message.data.token, startDate: message.data.startDate, endDate: message.data.endDate,
@@ -77,7 +77,7 @@ export function registerWalmartImporter({ validateRequest, broadcast }) {
       }
       if (message.action === "ledgerCancelWalmartImport") {
         if (!job || job.token !== message.data?.token) return { success: true };
-        validateRequest({ ...job }, sender);
+        await validateRequest({ ...job }, sender);
         try { await chrome.tabs.sendMessage(job.tabId, { action: "ledgerCancelWalmart" }); } catch { /* Still opening. */ }
         try { await update(job, {}, "cancel"); } finally { await clear(); }
         return { success: true };

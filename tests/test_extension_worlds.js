@@ -37,7 +37,7 @@ function loadWorlds(source, href, { initialHistory = true, omitFiles = [] } = {}
         onMessage: { addListener(handler) { listeners.push(handler); } },
         async sendMessage(message) {
           messages.push(plain(message));
-          return message.action === "ledgerCapitalOneReady"
+          return ["ledgerCapitalOneReady", "ledgerSchwabReady"].includes(message.action)
             ? { success: true, nonce: "12345678-1234-1234-1234-123456789abc", startDate: "2026-08-20", endDate: "2026-08-21" }
             : { success: true };
         },
@@ -122,4 +122,23 @@ test("manifest never reuses a JavaScript path across different execution worlds"
       paths.set(file, world);
     }
   }
+});
+
+
+test("Schwab manifest loads separate capture and sanitizer worlds; late downloads are ignored", async () => {
+  const env = loadWorlds("schwab", "https://client.schwab.com/");
+  await flush();
+  vm.runInContext(`URL.createObjectURL(new Blob(['Date,Type,Check #,Description,Withdrawal (-),Deposit (+),RunningBalance\\n09/01/2026,VISA,PRIVATE,Test shop,12.34,,999999\\n']));`, env.worlds.MAIN);
+  await flush();
+  const completed = env.messages.filter((message) => message.action === "ledgerSchwabComplete");
+  assert.equal(completed.length, 1, JSON.stringify(env.messages));
+  assert.doesNotMatch(completed[0].data.content, /PRIVATE|999999|check #|runningbalance/i);
+  assert.equal(env.skipped.length, 0);
+  assert.equal(env.requests.length, 0, "Capture does not initiate bank requests");
+  const cancelled = loadWorlds("schwab", "https://client.schwab.com/");
+  await flush();
+  cancelled.send({ action: "ledgerCancelSchwab" });
+  vm.runInContext(`URL.createObjectURL(new Blob(['Date,Type,Description,Withdrawal,Deposit\\n09/01/2026,VISA,Test,5,\\n']));`, cancelled.worlds.MAIN);
+  await flush();
+  assert.equal(cancelled.messages.some((m) => m.action === "ledgerSchwabComplete"), false);
 });

@@ -2350,7 +2350,10 @@ h2 {
 
 .transaction-dialog {
   width: min(820px, calc(100% - 28px));
-  max-height: min(82vh, 820px);
+  /* A definite height lets the row scroller fill the available space instead
+     of collapsing to its flex basis. Editors use transaction-form-dialog. */
+  height: min(88dvh, 960px);
+  max-height: calc(100dvh - 28px);
   padding: 0;
   border: 0;
   border-radius: 18px;
@@ -2366,8 +2369,94 @@ h2 {
 
 .dialog-shell {
   display: flex;
-  max-height: min(82vh, 820px);
+  height: 100%;
+  max-height: 100%;
   flex-direction: column;
+}
+
+.transaction-dialog-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Controls never move with the transaction list. On short screens they have
+   their own scroll area, leaving space for rows and the confirmation footer. */
+.transaction-dialog-controls {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-top: 104px;
+}
+
+.transaction-dialog-controls > .transaction-toolbar,
+.transaction-dialog-controls > .transaction-sort-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.dialog-shell > .dialog-header,
+.dialog-shell > .form-footer,
+.dialog-shell > .import-review-actions,
+.transaction-dialog-body > .transaction-bulk-toolbar {
+  flex-shrink: 0;
+}
+
+/* A nonzero row viewport also keeps expanded filters usable on empty results. */
+.transaction-dialog-body > .transaction-list,
+.transaction-dialog-body > .classification-preview-list {
+  flex: 1 1 160px;
+  min-height: min(140px, 18vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.transaction-flag-filter {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  align-self: start;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+.transaction-filter-panel .transaction-flag-filter input {
+  appearance: none;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 20px;
+  min-height: 0;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  cursor: pointer;
+}
+.transaction-flag-filter input::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.transaction-filter-panel .transaction-flag-filter input:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.transaction-flag-filter input:checked::before {
+  transform: translateX(14px);
+  background: white;
+}
+.transaction-flag-filter input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
 }
 
 .dialog-header {
@@ -2431,7 +2520,8 @@ h2 {
 }
 
 .transaction-toolbar label > span,
-.transaction-filter-popover-heading > span {
+.transaction-filter-panel label:not(.transaction-flag-filter) > span,
+.transaction-filter-panel-heading > span {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
@@ -2442,7 +2532,8 @@ h2 {
 }
 
 .transaction-toolbar input,
-.transaction-filter-popover select {
+.transaction-filter-panel input:not([type="checkbox"]),
+.transaction-filter-panel select {
   width: 100%;
   min-height: 40px;
   padding: 0 10px;
@@ -2455,7 +2546,8 @@ h2 {
 }
 
 .transaction-toolbar input:focus,
-.transaction-filter-popover select:focus,
+.transaction-filter-panel input:not([type="checkbox"]):focus,
+.transaction-filter-panel select:focus,
 .transaction-filter-button:focus-visible {
   outline: 2px solid rgb(46 106 80 / 18%);
   border-color: var(--accent);
@@ -2480,6 +2572,11 @@ h2 {
   background: var(--accent-soft);
 }
 
+.transaction-filter-button[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--surface-strong);
+}
+
 .transaction-filter-button span {
   display: inline-grid;
   min-width: 20px;
@@ -2493,49 +2590,57 @@ h2 {
   font-size: 10px;
 }
 
-.transaction-filter-popover {
-  position: absolute;
-  z-index: 5;
-  top: calc(100% - 8px);
-  right: 32px;
-  width: min(520px, calc(100% - 64px));
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 18px 50px rgb(10 24 17 / 20%);
+.transaction-filter-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  width: 100%;
+  padding: 18px 32px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
 }
 
-.transaction-filter-popover[hidden],
+.transaction-filter-panel[hidden],
 .transaction-active-filters[hidden] {
   display: none;
 }
 
-.transaction-filter-popover-heading {
-  margin-bottom: 16px;
+/* The toolbar already names this disclosure. Keep fixed controls compact so
+   the transaction viewport does not disappear when filters are expanded. */
+.transaction-dialog-controls .transaction-filter-panel {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  row-gap: 10px;
+}
+.transaction-dialog-controls .transaction-filter-panel-heading {
+  display: none;
 }
 
-.transaction-filter-popover-heading strong {
+.transaction-filter-panel-heading {
+  grid-column: 1 / -1;
+}
+
+.transaction-filter-panel-heading strong {
   display: block;
   margin-bottom: 3px;
   font-size: 14px;
 }
 
-.transaction-filter-popover-heading > span {
+.transaction-filter-panel-heading > span {
   margin: 0;
   letter-spacing: 0;
   text-transform: none;
   font-weight: 500;
 }
 
-.transaction-filter-popover fieldset {
+.transaction-filter-panel fieldset {
+  min-width: 0;
   margin: 0;
-  padding: 14px 0;
+  padding: 0;
   border: 0;
-  border-top: 1px solid var(--line);
 }
 
-.transaction-filter-popover legend {
+.transaction-filter-panel legend {
   padding: 0;
   color: var(--accent-deep);
   font-size: 11px;
@@ -2556,7 +2661,8 @@ h2 {
   margin-top: 10px;
 }
 
-.transaction-filter-popover-actions {
+.transaction-filter-panel-actions {
+  grid-column: 1 / -1;
   display: flex;
   gap: 10px;
   justify-content: flex-end;
@@ -2564,7 +2670,7 @@ h2 {
   padding-top: 4px;
 }
 
-.transaction-filter-popover-actions .primary-button {
+.transaction-filter-panel-actions .primary-button {
   min-height: 38px;
   padding: 9px 16px;
 }
@@ -3021,10 +3127,7 @@ h2 {
 }
 
 #import-review-list .transaction-row--duplicate {
-  margin: 6px -14px;
-  padding: 14px;
-  border: 1px solid #e8c5c1;
-  border-radius: 10px;
+  border-color: #e8c5c1;
   background: #fff2f0;
 }
 
@@ -3055,10 +3158,7 @@ h2 {
 }
 
 #import-review-list .transaction-row--needs-classification:not(.transaction-row--duplicate) {
-  margin: 6px -14px;
-  padding: 14px;
-  border: 1px solid #ead8a5;
-  border-radius: 10px;
+  border-color: #ead8a5;
   background: #fff9e8;
 }
 
@@ -3114,17 +3214,160 @@ h2 {
   text-transform: uppercase;
 }
 
+.transaction-filter-panel > fieldset:first-of-type {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.transaction-filter-panel > fieldset:first-of-type > .transaction-filter-pair {
+  grid-column: 1 / -1;
+}
+.transaction-filter-panel .transaction-flag-filter {
+  margin-top: 16px;
+}
+
+.import-refund-match {
+  grid-column: 3 / -1;
+  min-width: 0;
+  margin-top: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.import-refund-controls {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: stretch;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.import-refund-action, .import-refund-expand {
+  min-height: 32px;
+  border: 0;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 6px 10px;
+}
+.import-refund-expand {
+  flex: 0 0 32px;
+  border-left: 1px solid var(--line);
+  padding: 6px;
+}
+.import-refund-expand svg, .transaction-flag-toggle svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.import-refund-expand[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.import-refund-action:hover, .import-refund-expand:hover {
+  background: var(--surface-muted);
+}
+.import-refund-action:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.import-refund-controls .import-refund-status {
+  padding: 7px 10px;
+  color: var(--accent-deep);
+  font-size: 12px;
+  background: var(--surface);
+  white-space: normal;
+}
+.import-refund-details {
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.import-refund-details[hidden] {
+  display: none;
+}
+.import-refund-details h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 700;
+}
+.import-refund-details p {
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.transaction-flag-toggle {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.transaction-flag-toggle:hover {
+  border-color: var(--danger);
+  color: var(--danger-ink);
+}
+.transaction-flag-toggle[aria-pressed="true"] {
+  color: var(--danger-ink);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+.transaction-flag-toggle[aria-pressed="true"] svg {
+  fill: currentColor;
+}
+.transaction-flag-toggle:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.transaction-flag-toggle:focus-visible, .import-refund-controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.transaction-flag-error {
+  color: var(--danger-ink);
+  background: var(--danger-soft);
+  padding: 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
 .transaction-row {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
   padding: 18px 0;
-  border-bottom: 1px solid #e9ece9;
+  border-bottom: 1px solid var(--line);
 }
 
-.transaction-row:last-child {
-  border-bottom: 0;
+/* Every top-level transaction is a card; state colors never change its shape.
+   Nested read-only counterparts keep their compact, inset layout. */
+.transaction-list > .transaction-row,
+.classification-preview-list > .transaction-row,
+.classification-preview-list > .classification-preview-row,
+.bulk-delete-list > .transaction-row {
+  margin: 6px -14px;
+  padding: 14px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--line);
+  border-radius: 10px;
+  background: var(--surface-subtle);
 }
 
 .transaction-date {
@@ -3150,25 +3393,41 @@ h2 {
   letter-spacing: 0;
 }
 
+.transaction-date.transaction-date--with-year {
+  width: 100%;
+  height: 64px;
+  padding: 6px 4px;
+  align-content: center;
+  row-gap: 2px;
+}
+
+.transaction-date > .transaction-date-year {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.03em;
+}
+
 .transaction-description {
   overflow: hidden;
 }
 
-.transaction-description strong,
-.transaction-description span {
+.transaction-description > strong,
+.transaction-description > span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.transaction-description strong {
+.transaction-description > strong {
   margin-bottom: 5px;
   font-size: 14px;
   font-weight: 650;
 }
 
-.transaction-description span {
+.transaction-description > span {
   color: var(--muted);
   font-size: 11px;
 }
@@ -3180,9 +3439,6 @@ h2 {
   white-space: nowrap;
 }
 
-.transaction-amount.is-credit {
-  color: var(--income);
-}
 
 .transaction-actions {
   display: flex;
@@ -3535,11 +3791,7 @@ h2 {
   gap: 22px;
   align-items: center;
   padding: 18px 0;
-  border-bottom: 1px solid #e9ece9;
-}
-
-.classification-preview-row:last-child {
-  border-bottom: 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .classification-preview-details,
@@ -3622,7 +3874,7 @@ h2 {
 
 .transaction-description .transaction-note {
   margin-top: 3px;
-  color: #59645e;
+  color: var(--muted);
   font-size: 11px;
   font-style: italic;
   white-space: pre-wrap;
@@ -4693,10 +4945,13 @@ body:has(dialog[open]) {
     width: 100%;
   }
 
-  .transaction-filter-popover {
-    right: 20px;
-    left: 20px;
-    width: auto;
+  .transaction-filter-panel {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px 20px;
+  }
+
+  .transaction-dialog-controls {
+    scroll-padding-top: 160px;
   }
 
   .transaction-filter-pair {
@@ -4902,6 +5157,24 @@ body:has(dialog[open]) {
   align-items: flex-start;
 }
 
+#import-lookback {
+  width: 140px;
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+}
+
+@media (max-width: 600px) {
+  .settings-preference-row:has(#import-lookback) {
+    flex-wrap: wrap;
+  }
+}
+
 .number-abbreviation-control {
   width: min(100%, 340px);
   flex: 0 0 min(100%, 340px);
@@ -5045,7 +5318,7 @@ html[data-theme="dark"] .annual-subcategory-row td,
 html[data-theme="dark"] .taxonomy-category-card,
 html[data-theme="dark"] .classification-card,
 html[data-theme="dark"] .transaction-filter-bar,
-html[data-theme="dark"] .transaction-filter-popover,
+html[data-theme="dark"] .transaction-filter-panel,
 html[data-theme="dark"] .transaction-toolbar,
 html[data-theme="dark"] .transaction-sort-bar,
 html[data-theme="dark"] .refund-toggle,
@@ -5195,6 +5468,150 @@ html[data-theme="dark"] .category-bar,
 html[data-theme="dark"] .net-zero-axis,
 html[data-theme="dark"] .breakdown-tabs {
   background: var(--surface-strong);
+}
+
+/* Follow-up flags take precedence over yellow review highlights, not budget treatment. */
+.transaction-row.transaction-row--flagged,
+#import-review-list .transaction-row.transaction-row--flagged,
+html[data-theme] #import-review-list .transaction-row.transaction-row--flagged {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--ink);
+}
+.transaction-row--flagged .transaction-description > strong {
+  color: var(--ink);
+}
+.transaction-row--flagged > .transaction-description > .transaction-metadata,
+.transaction-row--flagged > .transaction-description > .transaction-note {
+  color: var(--danger-ink);
+}
+
+.transaction-row--linked-credit > .transaction-actions > .transaction-amount {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.transaction-linked-details {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  white-space: normal;
+}
+.transaction-linked-details > summary,
+.transaction-link-editor > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--accent-deep);
+}
+.transaction-linked-details > p,
+.transaction-link-editor p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+/* Matched purchases and linked counterparts use the same inset card. Keep
+   colors low-specificity so a counterpart's follow-up flag still wins. */
+:where(.import-refund-purchases, .transaction-linked-details) > .transaction-row {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+:is(.import-refund-purchases, .transaction-linked-details) > .transaction-row,
+#import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row {
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0 0;
+  padding: 12px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 9px;
+}
+:is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection),
+#import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection) {
+  grid-template-columns: 20px 48px minmax(0, 1fr) auto;
+}
+:is(.import-refund-purchases, .transaction-linked-details) .transaction-description > strong,
+:is(.import-refund-purchases, .transaction-linked-details) .transaction-description > .transaction-metadata {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.transaction-link-editor {
+  grid-column: 1 / -1;
+  display: block;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+
+.reconciliation-refund-match {
+  margin-top: 8px;
+}
+.reconciliation-refund-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.reconciliation-refund-actions button {
+  min-height: 40px;
+  padding: 10px 16px;
+  font-size: 12px;
+}
+.transaction-link-editor > input,
+.transaction-link-editor > select {
+  margin-top: 10px;
+  width: 100%;
+}
+.transaction-link-editor { font-size: 14px; font-weight: 400; }
+.transaction-link-editor > summary { font-weight: 700; }
+.transaction-link-editor > p { color: var(--muted); font-size: 13px; line-height: 1.6; font-weight: 400; }
+:where(.transaction-link-editor) :where(.transaction-linked-selections, .transaction-link-choices) > .transaction-row {
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+.transaction-link-editor :is(.transaction-linked-selections, .transaction-link-choices) > .transaction-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  margin: 10px 0;
+  padding: 14px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 10px;
+}
+.transaction-link-editor .transaction-description > :is(strong, span) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.transaction-link-choices { max-height: 360px; overflow-y: auto; }
+.transaction-link-action { padding: 8px 12px; min-height: 36px; font-size: 12px; }
+.reconciliation-decimal-option { display: flex; gap: 10px; align-items: flex-start; margin: 20px 0; }
+.reconciliation-decimal-option small { display: block; margin-top: 5px; color: var(--muted); font-weight: 400; }
+@media (max-width: 650px) {
+  .transaction-link-editor :is(.transaction-linked-selections, .transaction-link-choices) > .transaction-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .transaction-link-editor .transaction-actions { grid-column: 2; }
+  .transaction-actions > .transaction-amount { margin-right: auto; }
+  .transaction-actions { justify-content: flex-end; gap: 8px; }
+  .import-refund-match { grid-column: 1 / -1; }
+  :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row,
+  #import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row { grid-template-columns: 48px minmax(0, 1fr); }
+  :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection),
+  #import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection) { grid-template-columns: 20px 48px minmax(0, 1fr); }
+  :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row .transaction-actions,
+  #import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row .transaction-actions { grid-column: 2; }
+  :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection) .transaction-actions,
+  #import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row:has(> .import-selection) .transaction-actions { grid-column: 3; }
 }
 
 html[data-theme="dark"] dialog::backdrop {

@@ -27,22 +27,12 @@
 .transaction-list-header-actions .bulk-mode-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent); }
 .dialog-header:has(.transaction-list-header-actions) { gap: 16px; }
 .dialog-header > div:first-child { min-width: 0; }
-.transaction-filter-popover { max-height: min(560px, 65vh); overflow-y: auto; }
-.transaction-filter-popover .transaction-filter-popover-actions { position: sticky; bottom: -18px; margin: 0 -18px -18px; padding: 12px 18px; background: var(--surface); border-top: 1px solid var(--line); }
-.classification-preview-filters { position: relative; }
-.classification-preview-filters > summary { display: flex; align-items: center; list-style: none; cursor: pointer; }
-.classification-preview-filters > summary::-webkit-details-marker { display: none; }
-.classification-preview-filters .transaction-filter-popover { top: calc(100% + 6px); right: 0; width: 260px; max-width: calc(100vw - 80px); }
-.classification-preview-filters .transaction-filter-wide > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
-.classification-preview-filters .transaction-filter-popover-actions { margin-top: 16px; }
 .transaction-bulk-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
 .transaction-bulk-controls button { min-height: 34px; padding: 7px 11px; font-size: 12px; }
 .bulk-selection-count { color: var(--muted); font-size: 12px; }
 .transaction-bulk-controls .bulk-delete-button:disabled { opacity: 0.5; cursor: not-allowed; }
 .bulk-delete-dialog .form-header { gap: 16px; }
 .bulk-delete-dialog .dialog-subtitle { max-width: 60ch; line-height: 1.6; }
-.bulk-delete-list .transaction-row { border-color: var(--line); }
-.bulk-delete-list .transaction-row:last-child { border-bottom: 0; }
 .bulk-import-hint { flex-basis: 100%; color: var(--muted); margin: 0; font-size: 12px; line-height: 1.5; }
 .transaction-row--bulk-selectable { grid-template-columns: 24px 48px minmax(0, 1fr) auto; }
 .bulk-row-selection { display: flex; justify-content: center; align-items: center; cursor: pointer; }

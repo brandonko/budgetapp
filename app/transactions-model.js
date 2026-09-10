@@ -35,9 +35,16 @@
     return matchKey(transaction.category) === "income";
   }
 
+  function matchesFlagFilter(transaction, filter) {
+    if (!filter) return true;
+    const flagged = String(transaction.flags ?? "").split(",").map(matchKey).includes("flagged");
+    return filter === "flagged" ? flagged : true;
+  }
+
   // Keep treatment precedence identical to LedgerTransactionUI.isInternalTransfer.
   // Detection runs on import or an explicit scan; queries use persisted treatment.
   function isExcluded(transaction) {
+    if (transaction._linkRole) return transaction._linkRole === "credit" || transaction._linkType === "transfer" || transaction._budgetAmount === 0;
     const flags = new Set(String(transaction.flags ?? "").split(",").map(matchKey));
     if (flags.has("refunded") || flags.has("internal-transfer")) return true;
     if (flags.has("include-in-budget")) return false;
@@ -51,7 +58,7 @@
   }
 
   function amountInCents(transaction) {
-    const amount = Number(transaction.amount);
+    const amount = Number(transaction._budgetAmount ?? transaction.amount);
     if (!Number.isFinite(amount)) throw new TypeError("Transaction amounts must be finite numbers.");
     // Round each row before adding; ordinary negative refunds reduce spending.
     return Math.sign(amount) * Math.round((Math.abs(amount) + Number.EPSILON) * 100);
@@ -70,6 +77,7 @@
 
     return transactions.filter((transaction) => {
       if (!matchesTransactionSearch(transaction, description)) return false;
+      if (!matchesFlagFilter(transaction, filters.flagged)) return false;
       for (const [field, value] of exactFields) {
         const current = matchKey(transaction[field]);
         if (value === BLANK_VALUE && (field === "category" || field === "subcategory")) {
@@ -186,5 +194,5 @@
         cells: groups.map((group) => entry.cells.get(group.key) || { category: entry.category, total: 0, count: 0 }) })) };
   }
 
-  return Object.freeze({ matchesTransactionSearch, filterTransactions, summarizeTransactions, spendingByCategory, compareGroups });
+  return Object.freeze({ matchesFlagFilter, matchesTransactionSearch, filterTransactions, summarizeTransactions, spendingByCategory, compareGroups });
 });

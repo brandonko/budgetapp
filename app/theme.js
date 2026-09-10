@@ -4,6 +4,8 @@
   const themeStorageKey = "ledger.color-theme.v1";
   const numberAbbreviationStorageKey = "ledger.number-abbreviation.v1";
   const numberAbbreviationOptions = ["none", "k", "m", "b", "t"];
+  const importStorageKey = "ledger.import-preferences.v1";
+  const lookbackOptions = ["1w", "2w", "3w", "1m", "2m", "3m"];
   const root = document.documentElement;
 
   function storedTheme() {
@@ -72,12 +74,59 @@
     return normalized;
   }
 
+  function storedImportPreferences() {
+    try {
+      const saved = JSON.parse(globalObject.localStorage.getItem(importStorageKey) || "null");
+      return {
+        lookback: lookbackOptions.includes(saved?.lookback) ? saved.lookback : "2w",
+        matchRefunds: typeof saved?.matchRefunds === "boolean" ? saved.matchRefunds
+          : globalObject.localStorage.getItem("ledger.creditkarma-refund-matching.v1") !== "false",
+      };
+    } catch (_error) {
+      return { lookback: "2w", matchRefunds: true };
+    }
+  }
+  let importPreferences = storedImportPreferences();
+  function setImportPreferences(changes, { persist = true } = {}) {
+    importPreferences = {
+      lookback: lookbackOptions.includes(changes.lookback) ? changes.lookback : importPreferences.lookback,
+      matchRefunds: typeof changes.matchRefunds === "boolean" ? changes.matchRefunds : importPreferences.matchRefunds,
+    };
+    if (persist) {
+      try { globalObject.localStorage.setItem(importStorageKey, JSON.stringify(importPreferences)); }
+      catch (_error) { /* Keep the preference for this page when storage is unavailable. */ }
+    }
+    if (typeof globalObject.CustomEvent === "function") {
+      globalObject.dispatchEvent(new globalObject.CustomEvent("ledger-import-preferences-change", {
+        detail: { ...importPreferences },
+      }));
+    }
+    return { ...importPreferences };
+  }
   globalObject.LedgerPreferences = {
+    imports: () => ({ ...importPreferences }),
+    setImports: setImportPreferences,
+    importStartDate: (today = new Date()) => {
+      const start = new Date(today);
+      const count = Number(importPreferences.lookback[0]);
+      if (importPreferences.lookback.endsWith("w")) start.setDate(start.getDate() - count * 7);
+      else {
+        const day = start.getDate();
+        start.setDate(1);
+        start.setMonth(start.getMonth() - count);
+        const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+        start.setDate(Math.min(day, lastDay));
+      }
+      return start;
+    },
     numberAbbreviation: () => numberAbbreviation,
     setNumberAbbreviation: (value) => setNumberAbbreviation(value),
   };
 
   globalObject.addEventListener("storage", (event) => {
+    if (event.key === importStorageKey || event.key === null) {
+      setImportPreferences(storedImportPreferences(), { persist: false });
+    }
     if (event.key === themeStorageKey) apply(storedTheme());
     if (event.key === numberAbbreviationStorageKey) {
       setNumberAbbreviation(storedNumberAbbreviation(), { persist: false });

@@ -119,6 +119,7 @@ class Element {
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   addEventListener(name, listener) { (this.listeners[name] ||= []).push(listener); }
+  removeEventListener(name, listener) { this.listeners[name] = (this.listeners[name] || []).filter(item=>item !== listener); }
   dispatch(name, values = {}) {
     if (this.disabled && name === "click") return;
     const eventPath = [];
@@ -192,6 +193,210 @@ function tx(overrides = {}) {
 
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 
+test("received amounts use plus signs across shared row states without relying on green", async () => {
+  const app = await start([]);
+  const options = {currency:new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}),
+    shortMonthFormatter:new Intl.DateTimeFormat("en-US",{month:"short"}),showEdit:false};
+  const cases = [
+    [{amount:-25,category:"Income"}, "+$25.00"],
+    [{amount:-25,category:"Shopping"}, "+$25.00"],
+    [{amount:-25,flags:"internal-transfer",_budgetAmount:0}, "+$25.00"],
+    [{amount:-25,flags:"refunded",_budgetAmount:0}, "+$25.00"],
+    [{amount:-25,_linkRole:"credit",_budgetAmount:0}, "+$25.00"],
+    [{amount:100,_linkRole:"primary",_budgetAmount:20}, "$20.00"],
+    [{amount:100,_linkRole:"primary",_budgetAmount:-5}, "+$5.00"],
+    [{amount:25,flags:"refunded",_budgetAmount:0}, "$25.00"],
+    [{amount:25}, "$25.00"], [{amount:0}, "$0.00"],
+  ];
+  for (const [values, expected] of cases) {
+    for (const state of [{}, {needsClassification:true}, {duplicate:true}, {edited:true}]) {
+      for (const flag of ["", "flagged"]) {
+        const transaction=tx({...values,flags:[values.flags,flag].filter(Boolean).join(",")});
+        const before=JSON.stringify(transaction);
+        const row=app.shared.createTransactionRow(transaction,{...options,...state});
+        const amount=row.querySelector(".transaction-amount");
+        assert.equal(amount.textContent,expected,JSON.stringify({values,state,flag}));
+        assert.equal(amount.classList.contains("is-credit"),false);
+        assert.equal(JSON.stringify(transaction),before,"Formatting never mutates stored signs or flags");
+      }
+    }
+  }
+});
+
+test("every modal keeps filter controls outside its independent transaction scroller", async () => {
+  const app=await start([]);
+  const surfaces=[
+    ["index.html","transaction-filter-popover","transaction-filter-button","transaction-list"],
+    ["upload.html","import-review-filter-popover","import-review-filter-button","import-review-list"],
+    ["settings.html","import-history-filter-popover","import-history-filter-button","import-history-transactions"],
+    ["classifications.html","unclassified-filter-popover","unclassified-filter-button","unclassified-list"],
+    ["classifications.html","classification-preview-filters","classification-preview-filter-button","classification-preview-list"],
+    ["transactions.html","alltime-filter-popover","alltime-filter-button",null],
+  ];
+  for(const [page,panelId,buttonId,listId] of surfaces){
+    const document=parseDocument(read(page));const panel=document.getElementById(panelId),button=document.getElementById(buttonId);
+    assert.equal(panel.className,"transaction-filter-panel",page);
+    assert.equal(panel.closest(".transaction-filter-menu"),null,"Panel must not live in the button wrapper");
+    assert.equal(button.getAttribute("aria-controls"),panelId);
+    assert.equal(button.getAttribute("aria-haspopup"),null);
+    if(listId){
+      const list=document.getElementById(listId),body=list.closest(".transaction-dialog-body");
+      const controls = panel.closest(".transaction-dialog-controls");
+      assert(body && controls && controls.parentElement === body,page);
+      assert.equal(list.parentElement,body,page);
+      assert(!controls.contains(list), "Rows scroll independently of all filters");
+      assert(body.children.indexOf(controls)<body.children.indexOf(list),page);
+      assert(!body.contains(body.closest(".dialog-shell").querySelector("header")),"Header stays outside the scroll area");
+    }
+    const flag=panel.querySelector('[name="flagged"]');
+    assert.equal(flag.type,"checkbox",page);assert.equal(flag.getAttribute("role"),"switch");
+    assert.match(flag.parentElement.textContent,/Flagged only/);
+    assert(!panel.textContent.includes("Not flagged"));
+    app.shared.setTransactionFilterPanel(panel,button,true);
+    assert.equal(panel.hidden,false);assert.equal(button.getAttribute("aria-expanded"),"true");
+    app.shared.setFlagFilter(flag,"flagged");assert.equal(app.shared.flagFilterValue(flag),"flagged");
+    app.shared.setFlagFilter(flag,"unflagged");assert.equal(app.shared.flagFilterValue(flag),"");
+    app.shared.setTransactionFilterPanel(panel,button,false);
+    assert.equal(panel.hidden,true);assert.equal(button.getAttribute("aria-expanded"),"false");
+  }
+});
+
+test("empty import results keep inline filters usable, with immediate switch, Reset and Escape", async () => {
+  const original=tx({subcategory:""});
+  const app=await reviewPageFixture("upload",url=>url==="/api/transactions"?{transactions:[],revision:"r1"}:{});
+  app.run(`renderResult(${JSON.stringify({parsed:1,new:1,duplicates:0,revision:"r1",transferPlan:"p",transactions:[original]})},"csv","test-token")`);
+  const panel=app.el("import-review-filter-popover"),button=app.el("import-review-filter-button");
+  button.click();const flag=app.el("import-review-flagged-filter");flag.checked=true;flag.dispatch("change");
+  assert.equal(app.el("import-review-list").querySelectorAll(".transaction-row").length,0);
+  assert.equal(panel.hidden,false);app.document.dispatch("click");assert.equal(panel.hidden,false);
+  const included=app.run("JSON.stringify(state.importedTransactions.map(row=>row._selected))");
+  app.el("reset-import-review-filters").click();
+  assert.equal(flag.checked,false);assert.equal(app.el("import-review-list").querySelectorAll(".transaction-row").length,1);
+  assert.equal(app.run("JSON.stringify(state.importedTransactions.map(row=>row._selected))"),included);
+  const event=app.el("import-review-dialog").dispatch("keydown",{key:"Escape"});
+  assert.equal(event.defaultPrevented,true);assert.equal(panel.hidden,true);
+  assert.equal(app.el("import-review-dialog").open,true,"Escape retracts filters before dismissing the review");
+  assert.equal(app.requests.some(request=>request.url.includes("commit")),false);
+});
+
+test("shared link editor stages multiple repayments, preserves IDs, and discards cancelled edits", async () => {
+  const purchase = tx({id:"purchase",_id:1,amount:100});
+  const credits = [tx({id:"credit-a",_id:2,description:"Alex repayment",amount:-30}),
+    tx({id:"credit-b",_id:3,description:"Sam repayment",amount:-20})];
+  const app = await start([purchase,...credits]);
+  const form=app.el("transaction-form");
+  app.shared.populateTransactionEditor(form,purchase,{}, {transactions:[purchase,...credits]});
+  const search=form.querySelector('[aria-label="Find a transaction to link"]');
+  search.value="repayment";search.dispatch("input");
+  form.querySelector(".transaction-link-choices").querySelector(".transaction-link-action").click();
+  search.value="repayment";search.dispatch("input");
+  form.querySelector(".transaction-link-choices").querySelector(".transaction-link-action").click();
+  const updated=app.shared.transactionFromEditor(form,purchase);
+  assert.equal(updated.id,"purchase");
+  assert.deepEqual(JSON.parse(updated.links),[{transactionId:"credit-a",type:"repayment"},{transactionId:"credit-b",type:"repayment"}]);
+  assert.match(form.querySelector(".transaction-link-editor").textContent,/Net cost: \$50\.00/);
+  assert.equal(app.field("refunded").disabled,true);
+  assert.equal(app.field("internalTransferTreatment").disabled,true);
+  const type=form.querySelector('[aria-label="Link type"]');type.value="refund";type.dispatch("change");
+  assert.equal(type.value,"repayment");
+  assert.equal(app.writes().length,0);
+  app.shared.populateTransactionEditor(form,purchase,{}, {transactions:[purchase,...credits]});
+  assert.equal(app.shared.transactionFromEditor(form,purchase).links,"");
+  assert.equal(form.querySelectorAll(".transaction-link-editor").length,1);
+  assert.equal(app.field("refunded").disabled,false);
+  assert.equal(app.field("amount").listeners.input.length,1,"Reopening does not accumulate handlers");
+});
+
+test("credit-side repayment editor searches purchases and stages one target without mutating either side", async () => {
+  const purchase = tx({id:"purchase", amount:100, notes:"Dinner with friends", links:JSON.stringify([{transactionId:"old-credit",type:"repayment"}])});
+  const credit = tx({id:"credit", amount:-30, description:"Alex repayment"});
+  const app = await start([purchase, credit]);
+  const form = app.el("transaction-form");
+  const available = [purchase, credit, tx({id:"refund-purchase",amount:100,_linkType:"refund",description:"Dinner refunded"})];
+  app.shared.populateTransactionEditor(form, credit, {}, {transactions:available});
+  const search = form.querySelector('[aria-label="Find the original purchase"]');
+  search.value = "Dinner"; search.dispatch("input");
+  assert.equal(form.querySelector(".transaction-link-choices").children.length, 1);
+  form.querySelector(".transaction-link-choices").querySelector(".transaction-link-action").click();
+  assert.equal(app.shared.transactionFromEditor(form, credit).repaymentTo, "purchase");
+  assert.equal(app.shared.transactionFromEditor(form, credit).links, undefined);
+  assert.equal(app.field("refunded").disabled, true);
+  assert.equal(JSON.parse(purchase.links).length, 1);
+  assert.equal(app.writes().length, 0);
+  app.shared.populateTransactionEditor(form, credit, {}, {transactions:available});
+  assert.equal(app.shared.transactionFromEditor(form, credit).repaymentTo, undefined, "Reopening discards unsaved choice");
+  const linked = {...credit, _linkRole:"credit", _linkType:"repayment", _linkedTo:purchase};
+  app.shared.populateTransactionEditor(form, linked, {}, {transactions:available});
+  assert.equal(app.shared.transactionFromEditor(form, linked).repaymentTo, undefined, "Unchanged link is not another mutation");
+  form.querySelector('[aria-label="Unlink original purchase"]').click();
+  assert.equal(app.shared.transactionFromEditor(form, linked).repaymentTo, "");
+  assert.equal(app.field("refunded").disabled, false);
+});
+
+test("shared linked rows show net cost and expandable source rows; credits cannot create a second link", async () => {
+  const credit=tx({id:"credit",_id:2,amount:-80,description:"Partial refund"});
+  const purchase=tx({id:"purchase",_id:1,amount:100,_budgetAmount:20,_netAmount:20,_linkRole:"primary",_linkType:"refund",
+    links:JSON.stringify([{transactionId:"credit",type:"refund"}]),_linkedTransactions:[credit]});
+  const linkedCredit={...credit,_budgetAmount:0,_linkRole:"credit",_linkType:"refund",_linkedTo:purchase};
+  const app=await start([purchase,linkedCredit]);
+  const row=app.el("alltime-list").children.find(row=>row.querySelector(".transaction-description")?.querySelector("strong")?.textContent === "Bike purchase");
+  assert.equal(row.querySelector(".transaction-actions").querySelector(".transaction-amount").textContent,"$20.00");
+  const disclosure=row.querySelector(".transaction-linked-details");
+  assert.ok(disclosure);assert.match(disclosure.textContent,/Partial refund/);
+  assert.equal(disclosure.querySelectorAll("button").length,0,"Nested records are read-only, without extra bulk/flag controls");
+  app.shared.populateTransactionEditor(app.el("transaction-form"),linkedCredit,{}, {transactions:[purchase,linkedCredit]});
+  assert.match(app.el("transaction-form").querySelector(".transaction-link-editor").textContent,/Money received · choose one original expense/);
+  assert.ok(app.el("transaction-form").querySelector('[aria-label="Unlink original purchase"]'));
+  assert.equal(app.el("transaction-form").querySelector('[aria-label="Find a transaction to link"]'),null);
+  assert.equal(app.field("refunded").disabled,true);
+});
+
+test("one-to-one editor types block extra credits and credit-side cards allow unlinking either kind", async () => {
+  const purchase = tx({id:"purchase", amount:100});
+  const credits = [tx({id:"a",amount:-100,description:"Credit A",accountName:"Checking"}),
+    tx({id:"b",amount:-30,description:"Credit B"})];
+  const app = await start([purchase,...credits]); const form = app.el("transaction-form");
+  app.shared.populateTransactionEditor(form,purchase,{}, {transactions:[purchase,...credits]});
+  let type = form.querySelector('[aria-label="Link type"]');
+  type.value = "refund"; type.dispatch("change");
+  const search = form.querySelector('[aria-label="Find a transaction to link"]');
+  search.value="Credit"; search.dispatch("input");
+  const choices = form.querySelector(".transaction-link-choices");
+  assert.equal(choices.querySelectorAll(".transaction-row").length,2);
+  assert.ok(choices.querySelector(".transaction-date-year"));
+  choices.querySelector(".transaction-link-action").click();
+  search.value="Credit";search.dispatch("input");
+  assert.equal(choices.querySelector(".transaction-link-action").disabled,true);
+  assert.equal(JSON.parse(app.shared.transactionFromEditor(form,purchase).links).length,1);
+  for (const kind of ["refund","transfer"]) {
+    const linked = {...credits[0],_linkType:kind,_linkRole:"credit",_linkedTo:purchase};
+    app.shared.populateTransactionEditor(form,linked,{}, {transactions:[purchase,...credits]});
+    assert.equal(form.querySelector('[aria-label="Link type"]').value,kind);
+    const selected = form.querySelector(".transaction-linked-selections");
+    assert.equal(selected.querySelectorAll(".transaction-row").length,1);
+    assert.equal(selected.querySelector(".transaction-amount").textContent,"$100.00");
+    selected.querySelector(".transaction-link-action").click();
+    assert.deepEqual(JSON.parse(JSON.stringify(app.shared.transactionFromEditor(form,linked).linkTo)),{transactionId:"",type:kind});
+  }
+  assert.equal(app.writes().length,0);
+});
+
+test("full linked refund is visibly checked but unlinking never creates a legacy zero-cost override", async () => {
+  const credit=tx({id:"credit",_id:2,amount:-100,description:"Returned purchase"});
+  const purchase=tx({id:"purchase",amount:100,_budgetAmount:0,_linkRole:"primary",_linkType:"refund",_isLinkedRefund:true,
+    links:JSON.stringify([{transactionId:"credit",type:"refund"}]),_linkedTransactions:[credit]});
+  const app=await start([purchase,credit]); const form=app.el("transaction-form");
+  app.shared.populateTransactionEditor(form,purchase,{}, {transactions:[purchase,credit]});
+  assert.equal(app.field("refunded").checked,true);
+  assert.equal(app.field("refunded").disabled,true);
+  assert.equal(app.shared.transactionFromEditor(form,purchase).flags,"");
+  form.querySelector('[aria-label="Unlink Returned purchase"]').click();
+  assert.equal(app.field("refunded").checked,false);
+  assert.equal(app.field("refunded").disabled,false);
+  assert.equal(app.shared.transactionFromEditor(form,purchase).flags,"");
+  assert.equal(app.shared.transactionFromEditor(form,purchase).links,"");
+});
+
 async function start(rows, { stored = null, comparisonStored = null, mutationStatus = 200, missingCsv = false, transferReviewRequired = false } = {}) {
   const document = parseDocument(read("transactions.html"));
   const requests = []; let currentRows = rows; let currentRevision = "revision-1";
@@ -207,15 +412,25 @@ async function start(rows, { stored = null, comparisonStored = null, mutationSta
       if (mutationStatus !== 200) return { ok: false, status: mutationStatus, json: async () => ({ error: "The transaction file changed. Refresh before saving." }) };
       const body = JSON.parse(options.body); const id = Number(url.split("/").at(-1));
       currentRows = url === "/api/transactions/bulk-delete" ? currentRows.filter((row) => !body.ids.includes(row._id))
+        : url === "/api/transactions/flags" ? currentRows.map(row => {
+          const update = body.updates.find(item => item.id === row._id);
+          return update ? window.LedgerTransactionBulk.applyChanges(row, { flagged: update.flagged }) : row;
+        })
+        : url === "/api/transactions/bulk" ? currentRows.map(row => body.ids.includes(row._id)
+          ? window.LedgerTransactionBulk.applyChanges(row, body.changes) : row)
         : options.method === "DELETE" ? currentRows.filter((row) => row._id !== id)
         : currentRows.map((row) => row._id === id ? { ...row, ...body.transaction, amount: Number(body.transaction.amount) } : row);
       currentRevision = "revision-2";
     }
-    return { ok: true, status: 200, json: async () => ({ transactions: currentRows, revision: currentRevision,
+    return { ok: true, status: 200, json: async () => ({ transactions: structuredClone(currentRows), revision: currentRevision,
       internalTransferReviewRequired: transferReviewRequired,
       ...(url === "/api/transactions/bulk-delete" ? { deleted: JSON.parse(options.body).ids.length, backup: "synthetic.csv" } : {}) }) };
   };
-  const window = { confirm: () => false };
+  const windowEvents = new Map();
+  const window = { confirm: () => false,
+    addEventListener: (type, handler) => { const handlers = windowEvents.get(type) || []; handlers.push(handler); windowEvents.set(type, handlers); },
+    dispatch: (type, event) => windowEvents.get(type)?.forEach(handler => handler(event)),
+  };
   const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
@@ -468,7 +683,6 @@ test("live tag filters survive closing the popover and Reset updates results imm
   for (const dismiss of [
     () => app.el("alltime-filter-button").click(),
     () => app.document.dispatch("keydown", { key: "Escape" }),
-    () => app.document.dispatch("click"),
   ]) {
     app.el("alltime-filter-button").click();
     textButton(app.el("tag-options"), "bike").click();
@@ -542,7 +756,7 @@ test("category and date filters combine; excluded rows remain visible but cannot
   assert.equal(app.el("result-count").textContent, "1–3 of 3");
   assert.equal(app.el("matching-spent").textContent, "$50.00");
   assert.equal(app.el("matching-income").textContent, "$0.00");
-  assert.match(app.el("matching-scope").textContent, /2 refunded or internal transfer/);
+  assert.match(app.el("matching-scope").textContent, /2 linked credit, refund, or internal transfer/);
   field("showExcluded").checked = false; field("showExcluded").dispatch("change");
   assert.equal(app.el("result-count").textContent, "1–1 of 1");
   assert.equal(app.el("matching-spent").textContent, "$50.00");
@@ -603,6 +817,9 @@ test("the all-time list shows each row's year without changing the shared defaul
   const original = tx({ date: "2022-07-12" });
   const app = await start([original]);
   const date = app.el("alltime-list").querySelector("time");
+  assert.equal(date.classList.contains("transaction-date--with-year"), true);
+  assert.equal(date.querySelector(".transaction-date-month").textContent, "Jul");
+  assert.equal(date.querySelector(".transaction-date-year").textContent, "2022");
   assert.equal(date.querySelector("small").textContent, "2022");
   assert.equal(date.dateTime, "2022-07-12");
   const defaultRow = app.shared.createTransactionRow(original, {
@@ -611,6 +828,7 @@ test("the all-time list shows each row's year without changing the shared defaul
     onEdit: () => {},
   });
   assert.equal(defaultRow.querySelector("time").querySelector("small"), null);
+  assert.equal(defaultRow.querySelector("time").classList.contains("transaction-date--with-year"), false);
 });
 
 const textButton = (root, text) => root.querySelectorAll("button").find((button) => button.textContent === text);
@@ -1174,7 +1392,7 @@ test("every modal keeps Group in Filters and Edit multiple under its close butto
       getTransactions:()=>rows,getRevision:()=>"test",getGroupFilter:()=>group,
       render:()=>bulk.render(rows,rowOptions)});
     bulk.render(rows,rowOptions);
-    const header = list.parentElement.querySelector("header");
+    const header = list.closest(".dialog-shell").querySelector("header");
     const actions = header.querySelector(".transaction-list-header-actions");
     assert.equal(actions.children[0].className,"icon-button",file);
     assert.equal(actions.children[1].textContent,"Edit multiple",file);
@@ -1296,7 +1514,7 @@ async function reviewPageFixture(page, handler) {
       requests.push({ url, ...options });
       const result = await handler(url, options);
       const status = result?._status || 200;
-      return { ok: status < 400, status, json: async () => result || { transactions: [], revision: "r1", imports: [] } };
+      return { ok: status < 400, status, json: async () => structuredClone(result || { transactions: [], revision: "r1", imports: [] }) };
     },
   };
   vm.createContext(context);
@@ -1638,6 +1856,17 @@ test("staged import and classification reviews never expose database deletion", 
   textButton(preview,"Edit multiple").click(); textButton(preview,"Select visible").click();
   assert.equal(preview.querySelector(".bulk-delete-button").hidden,true);
   assert.equal(preview.querySelector(".bulk-delete-button").disabled,true);
+  preview.querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.match(classification.run("pendingClassificationPreview.changes[0].transaction.flags"), /flagged/);
+  const flagFilter=classification.el("classification-preview-flagged-filter");
+  preview.querySelector(".transaction-flag-toggle").click(); await flush();
+  flagFilter.checked=true; flagFilter.dispatch("change");
+  assert.equal(preview.querySelectorAll(".transaction-row").length,0);
+  textButton(preview,"Reset").click();
+  assert.equal(preview.querySelectorAll(".transaction-row").length,1);
+  classification.run("closeClassificationPreview()");
+  assert.equal(classification.run("pendingClassificationPreview"),null);
+  assert.equal(classification.requests.some(request=>request.url.includes("/transactions/bulk") || request.url.endsWith("/apply")),false);
 });
 
 test("import selection revalidates matches, disables confirmation while pending, and ignores late results", async () => {
@@ -1739,6 +1968,372 @@ async function editableImportFixture(rows, response) {
   return app;
 }
 
+async function refundReviewFixture({ duplicate = false, candidateCount = 2 } = {}) {
+  const candidates = [tx({_id:4,description:"Synthetic tool",date:"2026-07-20",amount:25}),
+    tx({_id:9,description:"Synthetic jersey",date:"2026-07-15",amount:25})].slice(0,candidateCount);
+  const rows = [tx({_stagedId:0,description:"AMAZON refund",amount:-25,
+    _isDuplicate:duplicate,_refundAlreadyHandled:duplicate,_classificationMatched:false,
+    _refundCandidates:duplicate ? [] : candidates})];
+  const app = await reviewPageFixture("upload", (url, options) => {
+    if (url.endsWith("staged-preview")) {
+      const body = JSON.parse(options.body);
+      assert.equal(body.importToken, "refund-session");
+      const choices = new Map(body.refundSelections.map(choice => [choice.stagedId, choice.purchaseId]));
+      return {transactions:body.transactions.map(row => ({...row,_refundCandidates:candidates,
+        _refundPurchaseId:choices.get(row._stagedId) ?? null})),new:1,duplicates:0,transferPlan:"refund-plan"};
+    }
+    if (url.endsWith("/commit")) return {import:{committed:0,purchasesRefunded:1,revision:"r2"}};
+  });
+  app.run(`renderResult(${JSON.stringify({parsed:1,new:duplicate?0:1,duplicates:duplicate?1:0,
+    revision:"r1",transferPlan:"p",transactions:rows})}, "creditkarma", "refund-session")`);
+  return app;
+}
+
+test("refund match is an additive shared row control with a purchase choice and no early write", async () => {
+  const app = await refundReviewFixture();
+  const list = app.el("import-review-list");
+  assert.equal(list.children.filter(row=>row.classList.contains("transaction-row")).length,1);
+  assert.equal(list.querySelectorAll(".edit-button").length,1);
+  assert.match(list.textContent,/Possible refund/);
+  assert.match(list.textContent,/2 same-price purchases/);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
+  const panel = list.querySelector(".import-refund-details");
+  assert.equal(panel.parentElement.parentElement, list.children.find(row => row.classList.contains("transaction-row")),
+    "Refund details are a row-level section so mobile can use the full width");
+  const candidateDates = panel.querySelectorAll(".transaction-date--with-year");
+  assert.equal(candidateDates.length, 2);
+  assert.ok(candidateDates.every(date => date.querySelector(".transaction-date-year")), "Every candidate has a styled year");
+  assert.equal(panel.hidden,true,"Refund details start collapsed");
+  textButton(list,"Mark as refunded").click(); await flush();
+  assert.equal(panel.hidden,false,"Ambiguous matches expand instead of choosing silently");
+  assert.equal(app.run("state.refundSelections.size"),0);
+  const picker = list.querySelectorAll('[type="radio"]').find(radio=>radio.value==="9");
+  picker.checked = true; picker.dispatch("change");
+  textButton(list,"Mark as refunded").click(); await flush();
+  assert.equal(app.run("state.refundSelections.get(0)"),9);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),false);
+  assert.match(list.textContent,/Purchase will be marked refunded/);
+  assert.match(list.textContent,/Synthetic jersey/);
+  assert.match(list.textContent,/Nothing is saved yet/);
+  assert.equal(list.querySelector("input").disabled,true);
+  assert.equal(app.el("confirm-import-review").disabled,false,"Refund-only confirmation must be possible");
+  assert.match(app.el("confirm-import-review").textContent,/0 imports · 1 refund$/);
+  assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0);
+  assert(!app.requests.at(-1).body.includes("_refundCandidates"));
+  textButton(list,"Undo match").click(); await flush();
+  assert.equal(app.run("state.refundSelections.size"),0);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
+  assert.equal(app.el("confirm-import-review").textContent,"Import selected (1)");
+});
+
+async function stageFirstRefundMatch(app) {
+  const list = app.el("import-review-list");
+  list.querySelector(".import-refund-expand").click();
+  const candidate = list.querySelector('[type="radio"]');
+  candidate.checked=true; candidate.dispatch("change");
+  textButton(list,"Mark as refunded").click(); await flush();
+}
+
+test("a single refund candidate can be staged from the compact control without expanding details", async () => {
+  const app=await refundReviewFixture({candidateCount:1});
+  const list=app.el("import-review-list");
+  assert.equal(list.querySelectorAll('[type="radio"]').length,0);
+  assert.equal(list.querySelectorAll('.transaction-flag-toggle').length,1,"Nested purchases are read-only");
+  textButton(list,"Mark as refunded").click(); await flush();
+  assert.equal(app.run("state.refundSelections.get(0)"),4);
+  assert.equal(list.querySelector(".import-refund-details").hidden,true);
+  assert.equal(app.requests.some(request=>request.url.endsWith("/commit")),false);
+});
+
+test("confirming a refund-only review submits the explicit choice without the credit", async () => {
+  const app = await refundReviewFixture();
+  await stageFirstRefundMatch(app);
+  app.el("confirm-import-review").click(); await flush();
+  const commit = JSON.parse(app.requests.find(request=>request.url.endsWith("/commit")).body);
+  assert.deepEqual(commit.transactions,[]);
+  assert.deepEqual(commit.refundSelections,[{stagedId:0,purchaseId:4}]);
+  assert.equal(commit.transferPlan,"refund-plan");
+  assert.match(app.el("import-review-subtitle").textContent,/1 purchase marked refunded/);
+  assert.match(app.el("import-review-list").textContent,/Purchase marked refunded/);
+  assert.equal(app.el("review-dashboard-link").hidden,false);
+});
+
+test("editing a matched credit invalidates only its pending decision and restores import inclusion", async () => {
+  const app = await refundReviewFixture();
+  await stageFirstRefundMatch(app);
+  app.el("import-review-list").querySelector(".edit-button").click();
+  const form=app.el("import-edit-form"); form.elements.namedItem("notes").value="Reviewed personally";
+  form.dispatch("submit"); await flush();
+  assert.equal(app.run("state.refundSelections.size"),0);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
+  assert.match(app.el("import-review-list").textContent,/Edited/);
+  assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0);
+});
+
+test("all dismissal paths discard refund decisions; duplicates explain prior handling and stay unchecked", async () => {
+  for (const how of ["cancel","x","escape","backdrop"]) {
+    const app = await refundReviewFixture();
+    await stageFirstRefundMatch(app);
+    app.window.confirm=()=>true;
+    dismissImportReview(app,how); await flush();
+    assert.equal(app.run("state.refundSelections.size"),0,how);
+    assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0,how);
+  }
+  const duplicate=await refundReviewFixture({duplicate:true});
+  assert.equal(duplicate.run("state.importedTransactions[0]._selected"),false);
+  duplicate.run("state.reviewFilters.duplicate=true; renderImportedTransactions()");
+  assert.match(duplicate.el("import-review-list").textContent,/Refund already handled/);
+  assert.match(duplicate.el("import-review-list").textContent,/Duplicate/);
+  assert.doesNotMatch(duplicate.el("import-review-list").textContent,/No rule matched/);
+  assert.equal(duplicate.el("confirm-import-review").disabled,true);
+});
+
+test("refund matching uses the shared preference rather than a Credit Karma-only checkbox", async () => {
+  const app=await reviewPageFixture("upload",()=>({token:"ck",matchRefunds:true}));
+  app.run('setExtensionReady(true,"0.10.2")');
+  assert.equal(app.el("creditkarma-match-refunds"),null);
+  await app.run("startCreditKarmaImport()");
+  const first=app.requests.find(request=>request.url==="/api/creditkarma-import-sessions");
+  assert.equal(JSON.parse(first.body).matchRefunds,true);
+  app.window.LedgerPreferences = {imports: () => ({matchRefunds:false})};
+  await app.run("startCreditKarmaImport()");
+  const last=app.requests.filter(request=>request.url==="/api/creditkarma-import-sessions").at(-1);
+  assert.equal(JSON.parse(last.body).matchRefunds,false);
+});
+
+test("every importer sends the global refund preference and shares default dates without replacing custom dates", async () => {
+  for (const enabled of [false, true]) {
+    const app = await reviewPageFixture("upload", () => ({token:"session",matchRefunds:enabled}));
+    app.window.LedgerPreferences = {imports: () => ({matchRefunds:enabled}), importStartDate: () => new Date(2026, 0, 15)};
+    app.run('setExtensionReady(true,"99.0.0"); initializeDirectImportDates()');
+    const starts = app.document.querySelectorAll('input').filter(field => field.id.endsWith("-start-date"));
+    assert.equal(starts.length, 9);
+    assert(starts.every(field => field.value === "2026-01-15"));
+    app.el("amazon-start-date").value = "2025-02-01";
+    app.window.LedgerPreferences.importStartDate = () => new Date(2026, 1, 15);
+    app.run("initializeDirectImportDates({preserveEdits:true})");
+    assert.equal(app.el("amazon-start-date").value, "2025-02-01");
+    assert.equal(app.el("venmo-start-date").value, "2026-02-15");
+    for (const [source, name] of [["creditkarma","CreditKarma"],["amazon","Amazon"],["aliexpress","AliExpress"],
+      ["venmo","Venmo"],["ebay","Ebay"],["walmart","Walmart"],["capitalone","CapitalOne"],["schwab","Schwab"],["applecard","AppleCard"]]) {
+      await app.run(`start${name}Import()`);
+      const request = app.requests.find(request => request.url === `/api/${source}-import-sessions`);
+      assert.ok(request, source);
+      assert.equal(JSON.parse(request.body).matchRefunds, enabled, source);
+    }
+  }
+});
+
+test("edited import rows keep both badges but lose yellow highlighting", async () => {
+  const app = await editableImportFixture([tx({_stagedId:0,_classificationMatched:false})]);
+  const list = app.el("import-review-list");
+  assert(list.children[0].classList.contains("transaction-row--needs-classification"));
+  list.querySelector(".edit-button").click();
+  const form=app.el("import-edit-form"); form.elements.namedItem("notes").value="Checked this item";
+  form.dispatch("submit"); await flush();
+  assert.match(list.textContent,/No rule matched/);
+  assert.match(list.textContent,/Edited/);
+  assert.equal(list.children[0].classList.contains("transaction-row--needs-classification"),false);
+});
+
+test("import flags are staged independently of inclusion and filter without losing selections", async () => {
+  const app = await editableImportFixture([tx({_stagedId:0,_classificationMatched:false}),tx({_stagedId:1,description:"Other"})]);
+  const list=app.el("import-review-list");
+  const first=list.children[0];
+  const flag=first.querySelector(".transaction-flag-toggle");
+  assert.equal(flag.getAttribute("aria-pressed"),"false");
+  flag.click(); await flush();
+  assert(app.run('state.importedTransactions[0].flags.includes("flagged")'));
+  assert.equal(app.run('state.importedTransactions[0]._selected'),true);
+  assert.equal(list.children[0].classList.contains("transaction-row--flagged"),true);
+  assert.equal(app.requests.some(request=>request.url.includes("/bulk") || request.url.endsWith("/commit")),false);
+  const filter=app.el("import-review-flagged-filter"); filter.checked=true; filter.dispatch("change"); await flush();
+  assert.equal(list.children.length,1);
+  assert.match(app.el("import-review-filter-chips").textContent,/Flag status: Flagged/);
+  assert.equal(app.run('state.importedTransactions.filter(row=>row._selected).length'),2);
+  app.el("reset-import-review-filters").click(); await flush();
+  assert.equal(list.children.length,2);
+  assert.equal(filter.value,"");
+  list.children[0].querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.equal(list.children[0].classList.contains("transaction-row--flagged"),false);
+  app.window.confirm=()=>true; dismissImportReview(app,"cancel"); await flush();
+  assert.equal(app.requests.some(request=>request.url.endsWith("/commit")),false);
+});
+
+test("flagging a refund credit preserves its pending purchase match", async () => {
+  const app = await refundReviewFixture();
+  await stageFirstRefundMatch(app);
+  const list=app.el("import-review-list");
+  list.children[0].querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.equal(app.run("state.refundSelections.get(0)"),4);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),false);
+  assert(app.run('state.importedTransactions[0].flags.includes("flagged")'));
+});
+
+test("rapid flag toggles collapse to their final values without requests or stale buttons", async () => {
+  const app = await start([tx({_id:0,id:"first",date:"2024-05-13"}), tx({_id:1,id:"second",description:"Other",flags:"flagged"})]);
+  const list = app.el("alltime-list");
+  list.children[0].querySelector(".transaction-flag-toggle").click();
+  assert.equal(list.children[0].querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"true");
+  list.children[0].querySelector(".transaction-flag-toggle").click();
+  assert.equal(list.children[0].querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"false");
+  assert.equal(app.writes().length,0);
+  let warned = false;
+  app.window.dispatch("beforeunload", {preventDefault:()=>{warned=true;}});
+  assert.equal(warned,false,"A reverted flag is no longer pending");
+  list.children[0].querySelector(".transaction-flag-toggle").click();
+  list.children[1].querySelector(".transaction-flag-toggle").click();
+  app.window.dispatch("beforeunload", {preventDefault:()=>{warned=true;}});
+  assert.equal(warned,true,"Reload warns rather than silently losing queued changes");
+  textButton(app.document,"Save flags").click(); await flush();
+  assert.equal(app.writes().length,1);
+  assert.deepEqual(JSON.parse(app.writes()[0].body).updates,[{id:0,flagged:true},{id:1,flagged:false}]);
+});
+
+test("pending flags survive an editor save without being written early", async () => {
+  const app = await start([tx({_id:0,id:"first",flags:"custom"})]);
+  app.el("alltime-list").querySelector(".transaction-flag-toggle").click();
+  app.edits()[0].click(); app.field("notes").value="Reviewed notes";
+  app.el("transaction-form").dispatch("submit"); await flush();
+  assert.equal(JSON.parse(app.writes()[0].body).transaction.flags,"custom");
+  assert.equal(app.el("alltime-list").querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"true");
+  textButton(app.document,"Save flags").click(); await flush();
+  assert.equal(app.writes()[1].url,"/api/transactions/flags");
+  assert.equal(JSON.parse(app.writes()[1].body).revision,"revision-2");
+  assert.match(app.el("alltime-list").textContent,/Reviewed notes/);
+});
+
+test("all-time flags update immediately, batch on save, and keep totals and other flags correct", async () => {
+  const app=await start([tx({_id:0,flags:"refunded,custom",amount:50,date:"2024-05-13"}),tx({_id:1,description:"Other",amount:20})]);
+  const list=app.el("alltime-list");
+  list.children[0].querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.equal(app.writes().length, 0);
+  assert.equal(list.children[0].querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"true");
+  assert.match(list.children[0].textContent,/Refunded/);
+  const filter=app.el("alltime-filter-popover").elements.namedItem("flagged");
+  filter.checked=true; filter.dispatch("change"); await flush();
+  assert.equal(list.children.length,1);
+  assert.match(app.el("filter-chips").textContent,/Flag status: Flagged/);
+  app.el("reset-alltime-filters").click(); await flush();
+  assert.equal(list.children.length,2);
+  textButton(app.document,"Save flags").click(); await flush();
+  const write=app.writes().at(-1);
+  assert.deepEqual(JSON.parse(write.body),{updates:[{id:0,flagged:true}],revision:"revision-1",confirm:true});
+});
+
+test("history and unclassified lists share durable flags, live filters and reset behavior", async () => {
+  for (const [page,dialogId,filterId,open] of [
+    ["settings","import-history-dialog","import-history-flagged-filter",'openImportHistoryBatch({createdAt:"2026-01-01T00:00:00Z"})'],
+    ["classifications","unclassified-dialog","unclassified-flagged-filter","openUnclassifiedDialog()"],
+  ]) {
+    let rows=[tx({_id:0,subcategory:""}),tx({_id:1,subcategory:"",description:"Other"})];
+    const app=await reviewPageFixture(page,(url,options)=>{
+      if(url==="/api/transactions/flags") {
+        const body=JSON.parse(options.body);
+        rows=rows.map(row=>body.updates.some(item=>item.id===row._id)? {...row,flags:body.updates.find(item=>item.id===row._id).flagged?"flagged":""}:row);
+        return {transactions:rows,revision:"r2",changed:1};
+      }
+      return {transactions:rows,revision:"r1",imports:[{createdAt:rows[0].createdAt,transactionCount:2}],classifications:[]};
+    });
+    await app.run(open);
+    const dialog=app.el(dialogId);
+    dialog.querySelector(".transaction-flag-toggle").click(); await flush();
+    assert.equal(app.requests.filter(r=>r.url==="/api/transactions/flags").length,0,page);
+    assert.equal(dialog.querySelectorAll(".transaction-row--flagged").length,1,page);
+    const filter=app.el(filterId); filter.checked=true; filter.dispatch("change"); await flush();
+    assert.equal(dialog.querySelectorAll(".transaction-row").length,1,page);
+    textButton(dialog,"Reset").click(); await flush();
+    assert.equal(dialog.querySelectorAll(".transaction-row").length,2,page);
+    await app.run(page === "settings" ? "closeImportHistoryDialog()" : "closeUnclassifiedDialog()");
+    assert.equal(app.requests.filter(r=>r.url==="/api/transactions/flags").length,1,page);
+    assert.equal(dialog.open, false);
+  }
+});
+
+test("failed saved flag writes preserve the row and allow retry", async () => {
+  const app=await start([tx({_id:0})],{mutationStatus:409});
+  app.el("alltime-list").querySelector(".transaction-flag-toggle").click(); await flush();
+  textButton(app.document,"Save flags").click(); await flush();
+  assert.equal(app.el("alltime-list").querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"true");
+  assert.match(app.el("alltime-list").textContent,/transaction file changed/i);
+  assert.equal(app.el("alltime-list").querySelector(".transaction-flag-toggle").disabled,false);
+});
+
+test("all saved-list dismissal paths batch flags and a failed close keeps the dialog open", async () => {
+  for (const how of ["x", "escape", "backdrop"]) {
+    const rows = [tx({_id:0,id:"row"})];
+    let fail = true;
+    const app = await reviewPageFixture("settings", url => url === "/api/transactions/flags"
+      ? fail ? {_status:409,error:"The transaction file changed"} : {transactions:[{...rows[0],flags:"flagged"}],revision:"r2",imports:[]}
+      : {transactions:rows,revision:"r1",imports:[]});
+    await app.run('openImportHistoryBatch({createdAt:"2026-01-01T00:00:00Z"})');
+    const dialog = app.el("import-history-dialog");
+    dialog.querySelector(".transaction-flag-toggle").click();
+    const dismiss = () => how === "x" ? app.el("close-import-history-dialog").click() : dialog.dispatch(how === "escape" ? "cancel" : "click");
+    dismiss(); await flush();
+    assert.equal(dialog.open,true,how);
+    assert.equal(dialog.querySelector(".transaction-flag-toggle").getAttribute("aria-pressed"),"true");
+    fail = false; dismiss(); await flush();
+    assert.equal(dialog.open,false,how);
+    assert.equal(app.requests.filter(request=>request.url === "/api/transactions/flags").length,2);
+  }
+});
+
+test("unclassified queued flags survive classification that removes the row from that list", async () => {
+  let rows = [tx({_id:0,id:"row",subcategory:""})];
+  const app = await reviewPageFixture("classifications", (url, options) => {
+    if (options.method === "PUT") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.transaction.flags,"");
+      rows = [{...rows[0],...body.transaction}];
+      return {transactions:rows,revision:"r2"};
+    }
+    if (url === "/api/transactions/flags") return {transactions:[{...rows[0],flags:"flagged"}],revision:"r3"};
+    return {transactions:rows,revision:"r1",classifications:[]};
+  });
+  await app.run("openUnclassifiedDialog()");
+  app.el("unclassified-list").querySelector(".transaction-flag-toggle").click();
+  app.el("unclassified-list").querySelector(".edit-button").click();
+  app.el("import-history-edit-form").elements.namedItem("subcategory").value = "Bike";
+  app.el("import-history-edit-form").dispatch("submit"); await flush();
+  assert.equal(app.el("unclassified-list").querySelectorAll(".transaction-row").length,0);
+  await app.run("closeUnclassifiedDialog()");
+  const write = app.requests.find(request => request.url === "/api/transactions/flags");
+  assert.deepEqual(JSON.parse(write.body),{updates:[{id:0,flagged:true}],revision:"r2",confirm:true});
+});
+
+test("flagging imports makes no preview request until final confirmation and keeps selection", async () => {
+  const rows = [tx({_stagedId:0,id:"a",_isDuplicate:false}), tx({_stagedId:1,id:"b",description:"Other",_isDuplicate:false})];
+  const app = await editableImportFixture(rows);
+  const count = app.requests.length;
+  app.el("import-review-list").querySelector(".transaction-flag-toggle").click();
+  assert.equal(app.requests.length,count);
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
+  app.el("confirm-import-review").click(); await flush();
+  const preview = app.requests.find(request=>request.url === "/api/transactions/staged-preview");
+  const commit = app.requests.find(request=>request.url.endsWith("/commit"));
+  assert.ok(preview); assert.ok(commit);
+  assert.ok(app.requests.indexOf(preview) < app.requests.indexOf(commit));
+  assert.equal(JSON.parse(commit.body).transactions[0].flags,"flagged");
+  assert.equal(app.requests.some(request=>request.url === "/api/transactions/flags"),false);
+});
+
+test("finishing a flag save after history closes never reopens the dialog or fails", async () => {
+  let finish;
+  const rows=[tx({_id:0})];
+  const app=await reviewPageFixture("settings",url=> url==="/api/transactions/flags"
+    ? new Promise(resolve=>{finish=resolve;})
+    : {transactions:rows,revision:"r1",imports:[]});
+  await app.run('openImportHistoryBatch({createdAt:"2026-01-01T00:00:00Z"})');
+  app.el("import-history-transactions").querySelector(".transaction-flag-toggle").click();
+  app.el("close-import-history-dialog").click();
+  assert.equal(app.el("import-history-dialog").open, true, "Keep the review visible until flags are safely saved");
+  finish({transactions:[{...rows[0],flags:"flagged"}],revision:"r2",imports:[]}); await flush();
+  assert.equal(app.el("import-history-dialog").open,false);
+  assert.equal(app.run("state.importHistoryBatch"),null);
+  assert.equal(app.el("import-history-transactions").querySelector(".transaction-flag-error"),null);
+});
+
 test("successful single edits mark only that occurrence and survive revalidation without becoming saved tags", async () => {
   const rows = [0, 1].map(_stagedId => tx({ _stagedId, _isDuplicate: false, _classificationMatched: false }));
   const app = await editableImportFixture(rows);
@@ -1835,11 +2430,15 @@ test("Settings transfer review reuses shared filters and stages edits until its 
   await app.run("openTransferReview()");
   assert.equal(app.el("import-history-dialog").open, true);
   assert.equal(app.el("import-history-filter-button").textContent.includes("Filters"), true);
+  app.el("import-history-transactions").querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.match(app.run("state.transferReview.overrides[0].flags"), /flagged/);
+  assert.equal(app.requests.some(request=>request.url.includes("/transactions/bulk")),false);
   await app.run('openImportHistoryTransactionEditor(state.importHistoryTransactions[0])');
   app.el("import-history-edit-form").elements.namedItem("notes").value = "Draft only";
   app.el("import-history-edit-form").dispatch("submit"); await flush();
   assert.equal(app.el("import-history-dialog").open, true);
   assert.equal(app.run("state.transferReview.overrides[0].notes"), "Draft only");
+  assert.match(app.run("state.transferReview.overrides[0].flags"), /flagged/);
   app.el("cancel-transfer-review").click();
   assert.equal(app.run("state.transferReview"), null);
   assert.equal(app.requests.some((request) => request.method === "PUT" || request.url.endsWith("/confirm")), false);
@@ -1883,6 +2482,76 @@ test("Settings Edit multiple uses staged bulk editing, not the live transaction 
   assert.equal(app.requests.some((request) => request.url.includes("/transactions/bulk") || request.url.endsWith("/confirm")), false);
 });
 
+async function reconciliationRefundFixture(candidateCount = 2) {
+  const credit = tx({_id:8,id:"refund-credit",description:"Synthetic refund received",amount:-25});
+  const candidates = [tx({_id:4,id:"purchase-a",description:"First matching purchase",amount:25}),
+    tx({_id:5,id:"purchase-b",description:"Second matching purchase",amount:25})].slice(0,candidateCount);
+  const app = await reviewPageFixture("settings", (url, options) => {
+    if (!url.endsWith("/preview")) return {transactions:[credit,...candidates],revision:"r1"};
+    const body = JSON.parse(options.body);
+    const working = {...credit,...body.overrides.find(row=>row._id===credit._id)};
+    const selected = body.refundLinks?.[0];
+    const purchase = candidates.find(row=>row.id===selected?.purchaseId);
+    const changes = working.flags !== credit.flags ? [{_id:8, transaction:working,
+      before:credit,after:working,changedFields:["flags"]}] : [];
+    if (selected) changes.push({_id:purchase._id,transaction:purchase,before:purchase,
+      after:{...purchase,links:JSON.stringify([{transactionId:credit.id,type:"refund"}])},changedFields:["links"]});
+    return {revision:"r1",plan:"p",transferPairs:0,changes,alreadyFlagged:[],refundLinks:body.refundLinks || [],
+      transactions:[...changes.map(change=>change.transaction),...(selected?[{...working,_linkType:"refund",_linkRole:"credit",_linkedTo:purchase}]:[])],
+      refundSuggestions:selected?[]:[{...working,_refundCandidates:candidates}]};
+  });
+  await app.run("openTransferReview()");
+  return app;
+}
+
+test("reconciliation needs an explicit link button after choosing a purchase; flagging preserves the suggestion and choice", async () => {
+  const app = await reconciliationRefundFixture();
+  const list = app.el("import-history-transactions");
+  let detail = list.querySelector(".reconciliation-refund-match");
+  assert.equal(detail.parentElement.className.includes("transaction-row"),true,"Match details span the shared row, not a narrow description cell");
+  detail.open=true;detail.dispatch("toggle");
+  assert.equal(textButton(detail,"Link selected purchase").disabled,true);
+  assert.equal(detail.children.at(-1).className,"reconciliation-refund-actions","Action is below the candidate rows");
+  const radios=detail.querySelectorAll('input');
+  radios[1].checked=true;radios[1].dispatch("change");
+  assert.equal(textButton(detail,"Link selected purchase").disabled,false);
+  assert.equal(app.run("state.transferReview.refundLinks.length"),0,"Choosing is not linking");
+  list.querySelector(".transaction-flag-toggle").click();await flush();
+  detail=list.querySelector(".reconciliation-refund-match");
+  assert.ok(detail,"Flagged override and its refund metadata are merged");
+  assert.equal(detail.open,true);
+  assert.equal(detail.querySelectorAll("input")[1].checked,true);
+  assert.equal(app.run("state.importHistoryTransactions[0]._refundCandidates.length"),2);
+  textButton(detail,"Link selected purchase").click();await flush();
+  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-b");
+  detail=list.querySelector(".reconciliation-refund-match");
+  assert.match(detail.textContent,/Refund link staged/);
+  assert.match(detail.textContent,/Save reviewed changes/);
+  assert.match(detail.textContent,/Second matching purchase/);
+  assert.equal(detail.querySelectorAll("input").length,0);
+  assert.equal(app.requests.some(request=>request.method==="PUT"||request.url.endsWith("/confirm")),false);
+  textButton(detail,"Undo refund link").click();await flush();
+  assert.equal(app.run("state.transferReview.refundLinks.length"),0);
+  assert.equal(list.querySelector(".reconciliation-refund-match").querySelectorAll("input")[1].checked,true);
+  app.el("cancel-transfer-review").click();
+  assert.equal(app.run("state.reconciliationRefundChoices.size"),0);
+  assert.equal(app.requests.some(request=>request.url.endsWith("/confirm")),false);
+});
+
+test("a single reconciliation refund candidate still requires Link and final confirmation", async () => {
+  const app = await reconciliationRefundFixture(1);
+  const detail=app.el("import-history-transactions").querySelector(".reconciliation-refund-match");
+  assert.equal(textButton(detail,"Link selected purchase").disabled,false);
+  assert.equal(app.run("state.transferReview.refundLinks.length"),0);
+  textButton(detail,"Link selected purchase").click();await flush();
+  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-a");
+  const creditRow=app.el("import-history-transactions").children.find(row=>row.dataset.transactionKey==="8");
+  creditRow.querySelector(".transaction-flag-toggle").click();await flush();
+  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-a");
+  assert.ok(app.el("import-history-transactions").querySelector(".reconciliation-refund-match"));
+  assert.equal(app.requests.some(request=>request.url.endsWith("/confirm")),false);
+});
+
 test("transfer type toggles filter saved flags without changing the proposal or import history", async () => {
   const proposed = tx({ _id: 1, description: "New transfer", _isInternalTransfer: true });
   const saved = tx({ _id: 2, description: "Saved transfer", flags: "internal-transfer", _isInternalTransfer: true });
@@ -1895,7 +2564,7 @@ test("transfer type toggles filter saved flags without changing the proposal or 
   const flaggedButton = app.el("transfer-review-flagged-filter");
   const proposedButton = app.el("transfer-review-proposed-filter");
   assert.equal(flaggedButton.getAttribute("aria-pressed"), "false");
-  assert.match(flaggedButton.textContent, /Already flagged \(1\)/);
+  assert.match(flaggedButton.textContent, /Already reconciled \(1\)/);
   assert.match(list.textContent, /New transfer/);
   assert.doesNotMatch(list.textContent, /Saved transfer/);
   const requestCount = app.requests.length;
@@ -1932,7 +2601,7 @@ test("editing an already flagged transfer becomes a staged proposal, not a live 
   });
   await app.run("openTransferReview()");
   const list = app.el("import-history-transactions");
-  assert.match(list.textContent, /Turn on Already flagged/);
+  assert.match(list.textContent, /Turn on Already reconciled/);
   assert.equal(app.el("confirm-transfer-review").textContent, "Finish review");
   app.el("transfer-review-flagged-filter").click();
   textButton(list, "Edit").click();
@@ -1940,8 +2609,8 @@ test("editing an already flagged transfer becomes a staged proposal, not a live 
   app.el("import-history-edit-form").dispatch("submit"); await flush();
   assert.match(list.textContent, /Staged saved-transfer note/);
   assert.equal(app.el("confirm-transfer-review").textContent, "Save reviewed changes (1)");
-  assert.equal(app.el("transfer-review-flagged-filter").textContent, "Already flagged (0)");
-  assert.equal(app.el("transfer-review-proposed-filter").textContent, "Proposed changes (1)");
+  assert.equal(app.el("transfer-review-flagged-filter").textContent, "Already reconciled (0)");
+  assert.equal(app.el("transfer-review-proposed-filter").textContent, "To review (1)");
   app.el("cancel-transfer-review").click();
   assert.equal(app.requests.some((request) => request.method === "PUT" || request.url.endsWith("/confirm")), false);
 });

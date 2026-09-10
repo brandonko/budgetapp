@@ -4,6 +4,7 @@ from collections import defaultdict
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
+import reconciliation
 
 PAIR_PREFIX = "transfer-pair-"
 
@@ -20,7 +21,7 @@ def public_row(row, index):
                 _internalTransferSource="automatic" if automatic else "manual" if excluded else "")
 
 
-def find_pairs(rows, pattern, window=5, incoming_start=None, *, include_unpaired_exclusions=False):
+def find_pairs(rows, pattern, window=5, incoming_start=None, *, include_unpaired_exclusions=False, excluded_ids=(), nonzero_decimal=False):
     """Closest-date, one-to-one pairs; bucket by opposite amount and nearby date.
 
     Already excluded/paired rows and explicit budget overrides cannot be reused.
@@ -30,14 +31,19 @@ def find_pairs(rows, pattern, window=5, incoming_start=None, *, include_unpaired
     """
     buckets = defaultdict(list)
     candidates = []
+    linked = {entry["transactionId"] for row in rows for entry in reconciliation.links(row)}
     for index, row in enumerate(rows):
+        if index in excluded_ids:
+            continue
         saved_flags = flags(row)
+        if reconciliation.links(row) or row.get("id") in linked:
+            continue
         paired = any(flag.startswith(PAIR_PREFIX) for flag in saved_flags)
         if ("include-in-budget" in saved_flags or paired
                 or ("internal-transfer" in saved_flags and not include_unpaired_exclusions)):
             continue
         amount = Decimal(str(row["amount"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if not amount:
+        if not amount or (nonzero_decimal and amount == amount.to_integral_value()):
             continue
         day = date.fromisoformat(row["date"]).toordinal()
         identity = tuple(row.get(field, "").strip().casefold()
@@ -69,4 +75,8 @@ def proposal(rows, pairs, revision):
         for index in (left, right):
             updated[index]["flags"] = ",".join(sorted(flags(rows[index]) | {"internal-transfer", pair}))
             pair_ids[index] = pair
+        parent, child = (left, right) if reconciliation.cents(rows[left]) > 0 else (right, left)
+        if rows[child].get("id"):
+            updated[parent]["links"] = reconciliation.encode_links([
+                {"transactionId": rows[child]["id"], "type": "transfer"}])
     return updated, pair_ids

@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <script src="/theme.js?v=20260909-import-preferences-1"></script>
     <meta name="description" content="Create reusable rules that classify and update Ledger transactions." />
     <title>Classifications — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
-    <script src="/settings.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
+    <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/settings.js?v=20260909-reconcile-flags-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -149,20 +149,24 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-dialog-body">
+          <div class="transaction-dialog-controls">
+
         <div class="transaction-sort-bar">
-          <details class="transaction-filter-menu classification-preview-filters" id="classification-preview-filters">
-            <summary class="transaction-filter-button">Filters <span id="classification-preview-filter-count" hidden></span></summary>
-            <div class="transaction-filter-popover" role="group" aria-label="Classification preview filters">
+          <button class="transaction-filter-button" id="classification-preview-filter-button" type="button" aria-expanded="false" aria-controls="classification-preview-filters">Filters <span id="classification-preview-filter-count" hidden></span></button>
+          <div id="classification-preview-sort"></div>
+        </div>
+        <div class="transaction-filter-panel" id="classification-preview-filters" hidden role="group" aria-label="Classification preview filters">
               <label class="transaction-filter-wide"><span>Group</span><select id="classification-preview-group-filter"><option value="">All groups</option></select></label>
-              <div class="transaction-filter-popover-actions">
+              <label class="transaction-flag-filter"><input id="classification-preview-flagged-filter" name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
+              <div class="transaction-filter-panel-actions">
                 <button class="text-button" id="reset-classification-preview-filters" type="button">Reset</button>
               </div>
             </div>
-          </details>
-          <div id="classification-preview-sort"></div>
-        </div>
         <p class="form-error classification-preview-error" id="classification-preview-error" role="alert" hidden></p>
+          </div>
         <div class="classification-preview-list" id="classification-preview-list"></div>
+        </div>
         <footer class="form-footer">
           <p>A safety backup will be created before these changes are written.</p>
           <div class="form-footer-spacer"></div>
@@ -187,6 +191,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-dialog-body">
+          <div class="transaction-dialog-controls">
+
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
             <span>Search</span>
@@ -195,12 +202,16 @@
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="unclassified-filter-button" type="button"
-              aria-expanded="false" aria-haspopup="true" aria-controls="unclassified-filter-popover">
+              aria-expanded="false" aria-controls="unclassified-filter-popover">
               Filters <span id="unclassified-filter-count" hidden></span>
             </button>
-            <div class="transaction-filter-popover" id="unclassified-filter-popover"
+
+          </div>
+          <div id="unclassified-sort"></div>
+        </div>
+        <div class="transaction-filter-panel" id="unclassified-filter-popover"
               role="group" aria-label="Unclassified transaction filters" hidden>
-              <div class="transaction-filter-popover-heading">
+              <div class="transaction-filter-panel-heading">
                 <strong>Filter transactions</strong>
                 <span>Choose one or more filters.</span>
               </div>
@@ -219,14 +230,13 @@
                   <label><span>Account name</span><select id="unclassified-account-filter"><option value="">All accounts</option></select></label>
                   <label><span>Provider</span><select id="unclassified-provider-filter"><option value="">All providers</option></select></label>
                 </div>
+              <label class="transaction-flag-filter"><input id="unclassified-flagged-filter" name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
               </fieldset>
-              <div class="transaction-filter-popover-actions">
+
+              <div class="transaction-filter-panel-actions">
                 <button class="text-button" id="reset-unclassified-filters" type="button">Reset</button>
               </div>
             </div>
-          </div>
-          <div id="unclassified-sort"></div>
-        </div>
         <div class="transaction-active-filters" id="unclassified-active-filters" hidden>
           <div class="transaction-filter-chips" id="unclassified-filter-chips"></div>
           <button class="text-button" id="clear-unclassified-filters" type="button">Clear all</button>
@@ -238,8 +248,10 @@
             aria-pressed="false">Internal transfer</button>
         </div>
         <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
+          </div>
         <div class="transaction-list" id="unclassified-list"></div>
-      </div>
+        </div>
+        </div>
     </dialog>
     <!-- Shared review editor: keep fields aligned with settings.html and transaction-ui.js. -->
     <dialog class="transaction-form-dialog" id="import-history-edit-dialog">

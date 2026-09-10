@@ -1,5 +1,18 @@
 "use strict";
 
+// Dynamic host permissions cover every port. Verify the exact saved origin
+// with the service worker before announcing readiness or forwarding messages.
+(() => {
+if (globalThis.ledgerBridgeInstalled) {
+  globalThis.ledgerBridgeAnnounce?.();
+  return;
+}
+globalThis.ledgerBridgeInstalled = true;
+async function trusted() {
+  try { return await chrome.runtime.sendMessage({ action: "ledgerCheckOrigin" }) === true; }
+  catch { return false; }
+}
+
 const APP_SOURCE = "ledger-web-app";
 const EXTENSION_SOURCE = "ledger-data-importer";
 
@@ -7,7 +20,7 @@ function sendToPage(action, payload = {}) {
   window.postMessage({ source: EXTENSION_SOURCE, action, payload }, window.location.origin);
 }
 
-window.addEventListener("message", (event) => {
+window.addEventListener("message", async (event) => {
   if (
     event.source !== window ||
     event.origin !== window.location.origin ||
@@ -15,6 +28,7 @@ window.addEventListener("message", (event) => {
   ) {
     return;
   }
+  if (!await trusted()) return;
 
   if (event.data.action === "extensionPing") {
     sendToPage("ready", { version: chrome.runtime.getManifest().version });
@@ -50,6 +64,10 @@ window.addEventListener("message", (event) => {
     message = { action: "ledgerStartCapitalOneImport", data: event.data.payload };
   } else if (event.data.action === "cancelCapitalOneImport") {
     message = { action: "ledgerCancelCapitalOneImport", data: event.data.payload };
+  } else if (event.data.action === "startSchwabImport") {
+    message = { action: "ledgerStartSchwabImport", data: event.data.payload };
+  } else if (event.data.action === "cancelSchwabImport") {
+    message = { action: "ledgerCancelSchwabImport", data: event.data.payload };
   } else if (event.data.action === "startAppleCardImport") {
     message = { action: "ledgerStartAppleCardImport", data: event.data.payload };
   } else if (event.data.action === "cancelAppleCardImport") {
@@ -65,8 +83,9 @@ window.addEventListener("message", (event) => {
     const isEbay = event.data.action.includes("Ebay");
     const isAppleCard = event.data.action.includes("AppleCard");
     const isWalmart = event.data.action.includes("Walmart");
+    const isSchwab = event.data.action.includes("Schwab");
     const isCapitalOne = event.data.action.includes("CapitalOne");
-    const errorAction = isCapitalOne ? "capitalOneError" : isWalmart ? "walmartError" : isCreditKarma ? "creditKarmaError" : isAliExpress ? "aliExpressError" : isVenmo ? "venmoError" : isEbay ? "ebayError" : isAppleCard ? "appleCardError" : "error";
+    const errorAction = isSchwab ? "schwabError" : isCapitalOne ? "capitalOneError" : isWalmart ? "walmartError" : isCreditKarma ? "creditKarmaError" : isAliExpress ? "aliExpressError" : isVenmo ? "venmoError" : isEbay ? "ebayError" : isAppleCard ? "appleCardError" : "error";
     if (chrome.runtime.lastError) {
       sendToPage(errorAction, { message: chrome.runtime.lastError.message });
     } else if (!response?.success) {
@@ -74,7 +93,7 @@ window.addEventListener("message", (event) => {
         message: response?.error || "The extension could not start the import.",
       });
     } else {
-      sendToPage(isCapitalOne ? "capitalOneStarted" : isWalmart ? "walmartStarted" : isCreditKarma ? "creditKarmaStarted" : isAliExpress ? "aliExpressStarted" : isVenmo ? "venmoStarted" : isEbay ? "ebayStarted" : isAppleCard ? "appleCardStarted" : "started");
+      sendToPage(isSchwab ? "schwabStarted" : isCapitalOne ? "capitalOneStarted" : isWalmart ? "walmartStarted" : isCreditKarma ? "creditKarmaStarted" : isAliExpress ? "aliExpressStarted" : isVenmo ? "venmoStarted" : isEbay ? "ebayStarted" : isAppleCard ? "appleCardStarted" : "started");
     }
   });
 });
@@ -116,6 +135,10 @@ chrome.runtime.onMessage.addListener((message) => {
     sendToPage("capitalOneProgress", message.data);
   } else if (message?.action === "ledgerCapitalOneImportError") {
     sendToPage("capitalOneError", message.data);
+  } else if (message?.action === "ledgerSchwabImportProgress") {
+    sendToPage("schwabProgress", message.data);
+  } else if (message?.action === "ledgerSchwabImportError") {
+    sendToPage("schwabError", message.data);
   } else if (message?.action === "ledgerAppleCardImportProgress") {
     sendToPage("appleCardProgress", { ...message.data, status: "scraping" });
   } else if (message?.action === "ledgerAppleCardImportError") {
@@ -123,4 +146,8 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-sendToPage("ready", { version: chrome.runtime.getManifest().version });
+globalThis.ledgerBridgeAnnounce = async () => {
+  if (await trusted()) sendToPage("ready", { version: chrome.runtime.getManifest().version });
+};
+globalThis.ledgerBridgeAnnounce();
+})();

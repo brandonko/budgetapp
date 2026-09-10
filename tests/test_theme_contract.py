@@ -54,7 +54,7 @@ def css_declarations(block: str) -> dict[str, str]:
 
 
 def exact_rule(css: str, selector: str) -> str:
-    match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+    match = re.search(rf"^{re.escape(selector)}\s*\{{([^}}]*)\}}", css, re.MULTILINE)
     if match is None:
         raise AssertionError(f"Missing CSS rule for {selector}")
     return match.group(1)
@@ -102,6 +102,18 @@ class ThemeContractTests(unittest.TestCase):
         self.assertIn("flex-wrap: wrap", exact_rule(css, ".settings-preference-row"))
         self.assertIn("flex: 1 1 240px", exact_rule(css, ".settings-preference-row > div:first-child"))
         self.assertIn("@media (max-width: 560px)", css)
+
+    def test_extension_popup_palettes_have_complete_accessible_text_colors(self) -> None:
+        css = (ROOT / "ledger_data_importer_extension/shared/popup.css").read_text(encoding="utf-8")
+        palettes = [css_declarations(block) for block in re.findall(r":root\s*\{([^}]*)\}", css)]
+        self.assertEqual(len(palettes), 2)
+        self.assertEqual(palettes[0].keys(), palettes[1].keys())
+        for index, palette in enumerate(palettes):
+            for foreground, background in (("text", "canvas"), ("text", "surface"),
+                ("muted", "canvas"), ("accent", "canvas"), ("on-accent", "accent"),
+                ("on-accent", "accent-hover"), ("warning", "canvas")):
+                with self.subTest(palette=index, pair=f"{foreground}/{background}"):
+                    self.assertGreaterEqual(contrast_ratio(palette[foreground], palette[background]), 4.5)
 
     def test_pages_reserve_a_stable_scrollbar_gutter(self) -> None:
         css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
@@ -176,7 +188,36 @@ class ThemeContractTests(unittest.TestCase):
         )
         self.assertIn("root.dataset.theme = normalized", self.theme_javascript)
 
+    def test_shared_transaction_dividers_use_the_active_theme(self) -> None:
+        # These rows appear in imports, dashboard, history, and classification
+        # dialogs. A light-only divider looked like a stray rule between cards.
+        for selector in (".transaction-row", ".classification-preview-row"):
+            with self.subTest(selector=selector):
+                row = exact_rule(self.css, selector)
+                self.assertIn("border-bottom: 1px solid var(--line)", row)
+                self.assertNotRegex(row, r"border[^:;{}]*\s*:[^;{}]*#[0-9a-fA-F]{3,8}")
+        for name, declarations in self.themes().items():
+            with self.subTest(theme=name):
+                self.assertIn("line", declarations)
+                self.assertLess(contrast_ratio(declarations["line"], declarations["surface"]), 3,
+                                "Decorative dividers must not compete with transaction text")
+
     def test_component_callouts_use_theme_tokens_instead_of_light_colors(self) -> None:
+        for selector in (".transaction-linked-details", ".transaction-link-editor"):
+            panel = exact_rule(self.css, selector)
+            self.assertIn("background: var(--surface-subtle)", panel)
+            self.assertIn("border: 1px solid var(--line)", panel)
+            self.assertIn("grid-column: 1 / -1", panel)
+            self.assertNotRegex(panel, r"#[0-9a-fA-F]{3,8}")
+        refund_callout = exact_rule(self.css, ".import-refund-details")
+        self.assertIn("color: var(--ink)", refund_callout)
+        self.assertIn("background: var(--surface-subtle)", refund_callout)
+        self.assertIn("border: 1px solid var(--line)", refund_callout)
+        self.assertNotRegex(refund_callout, r"#[0-9a-fA-F]{3,8}")
+        for name, declarations in self.themes().items():
+            for foreground in ("ink", "muted"):
+                with self.subTest(theme=name, component="refund match", foreground=foreground):
+                    self.assertGreaterEqual(contrast_ratio(declarations[foreground], declarations["surface-subtle"]), 4.5)
         edited_badge = exact_rule(self.css, ".transaction-description .transaction-edited-badge")
         self.assertIn("color: var(--accent)", edited_badge)
         self.assertIn("background: var(--accent-soft)", edited_badge)
@@ -194,6 +235,110 @@ class ThemeContractTests(unittest.TestCase):
         self.assertIn("color: var(--warning-ink)", credit_karma_notice)
         self.assertIn("background: var(--warning-soft)", credit_karma_notice)
         self.assertNotRegex(credit_karma_notice, r"#[0-9a-fA-F]{3,8}")
+
+    def test_nested_purchase_cards_and_year_dates_do_not_inherit_outer_text_styles(self) -> None:
+        nested = exact_rule(self.css, ":is(.import-refund-purchases, .transaction-linked-details) > .transaction-row,\n"
+            "#import-review-list :is(.import-refund-purchases, .transaction-linked-details) > .transaction-row")
+        for declaration in ("grid-template-columns: 48px minmax(0, 1fr) auto", "gap: 12px",
+                            "padding: 12px", "border-width: 1px", "border-style: solid", "border-radius: 9px"):
+            self.assertIn(declaration, nested)
+        colors = exact_rule(self.css, ":where(.import-refund-purchases, .transaction-linked-details) > .transaction-row")
+        self.assertIn("background: var(--surface)", colors)
+        self.assertIn("border-color: var(--line-strong)", colors)
+        date = exact_rule(self.css, ".transaction-date.transaction-date--with-year")
+        self.assertIn("width: 100%", date, "The year date must fit its grid track")
+        self.assertIn("height: 64px", date)
+        self.assertIn("row-gap: 2px", date)
+        self.assertIn("font-size: 9px", exact_rule(self.css, ".transaction-date > .transaction-date-year"))
+        self.assertNotIn(".transaction-description strong", self.css)
+        self.assertNotIn(".transaction-description span", self.css)
+        self.assertIn(".transaction-description > strong", self.css)
+        self.assertIn("grid-column: 3 / -1", exact_rule(self.css, ".import-refund-match"))
+        self.assertIn(".import-refund-match { grid-column: 1 / -1; }", self.css)
+
+    def test_follow_up_highlights_are_theme_aware_and_override_review_colors(self) -> None:
+        selector = 'html[data-theme] #import-review-list .transaction-row.transaction-row--flagged'
+        rule = exact_rule(self.css, selector)
+        self.assertIn('background: var(--danger-soft)', rule)
+        self.assertIn('color: var(--ink)', rule)
+        self.assertGreater(self.css.index(selector), self.css.index(
+            'html[data-theme="dark"] #import-review-list .transaction-row--needs-classification'))
+        self.assertIn("color: var(--danger-ink)", exact_rule(self.css,
+            ".transaction-row--flagged > .transaction-description > .transaction-note"))
+        self.assertIn("color: var(--muted)", exact_rule(self.css,
+            ".transaction-description .transaction-note"))
+        for name, tokens in self.themes().items():
+            for foreground in ("ink", "danger-ink"):
+                with self.subTest(theme=name, foreground=foreground):
+                    self.assertGreaterEqual(contrast_ratio(tokens[foreground], tokens["danger-soft"]), 4.5)
+
+    def test_all_transaction_rows_share_complete_card_geometry(self) -> None:
+        # Plain and edited rows must stay cards too: state toggles only recolor
+        # them, with the same four edges and spacing even on the final row.
+        selectors = (
+            ".transaction-list > .transaction-row",
+            ".classification-preview-list > .transaction-row",
+            ".classification-preview-list > .classification-preview-row",
+            ".bulk-delete-list > .transaction-row",
+        )
+        shared_selector = ",\n".join(selectors)
+        geometry = exact_rule(self.css, shared_selector)
+        for declaration in ("margin: 6px -14px", "padding: 14px",
+                            "border-width: 1px", "border-style: solid", "border-radius: 10px",
+                            "border-color: var(--line)", "background: var(--surface-subtle)"):
+            self.assertIn(declaration, geometry)
+        for theme, tokens in self.themes().items():
+            for foreground in ("ink", "muted"):
+                with self.subTest(theme=theme, card_text=foreground):
+                    self.assertGreaterEqual(contrast_ratio(tokens[foreground], tokens["surface-subtle"]), 4.5)
+        # Every card, including the last nested purchase, keeps matching edges.
+        # A last-child border reset also resets its color to currentColor.
+        self.assertNotIn(".transaction-row:last-child", self.css)
+        self.assertNotIn(".classification-preview-row:last-child", self.css)
+        self.assertNotIn(".bulk-delete-list .transaction-row:last-child",
+            (APP_DIR / "transaction-tools.css").read_text(encoding="utf-8"))
+        for selector in (
+            "#import-review-list .transaction-row--duplicate",
+            "#import-review-list .transaction-row--needs-classification:not(.transaction-row--duplicate)",
+            "html[data-theme] #import-review-list .transaction-row.transaction-row--flagged",
+        ):
+            with self.subTest(selector=selector):
+                self.assertNotRegex(exact_rule(self.css, selector),
+                    r"(?:^|;)\s*(?:margin|padding|border|border-radius|border-width|border-style)\s*:",
+                    "State colors must not override the shared highlight geometry")
+
+    def test_transaction_lists_have_a_definite_viewport_sized_height(self) -> None:
+        # A max-height alone leaves flex rows at their 160px basis: only two
+        # transactions visible even on a tall display. Check the height chain.
+        dialog = exact_rule(self.css, ".transaction-dialog")
+        self.assertRegex(dialog, r"(?m)^\s*height: min\(88dvh, 960px\)")
+        self.assertIn("max-height: calc(100dvh - 28px)", dialog)
+        shell = exact_rule(self.css, ".dialog-shell")
+        self.assertRegex(shell, r"(?:^|;)\s*height: 100%")
+        self.assertIn("max-height: 100%", shell)
+        self.assertNotIn(".transaction-dialog:has(.transaction-filter-panel", self.css,
+            "Opening Filters must not resize the modal")
+        self.assertNotIn("88dvh", exact_rule(self.css, ".transaction-form-dialog"))
+
+    def test_filters_stay_in_their_own_region_while_transaction_lists_scroll(self) -> None:
+        panel = exact_rule(self.css, ".transaction-filter-panel")
+        self.assertIn("width: 100%", panel)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", panel)
+        self.assertNotRegex(panel, r"(?:position|max-height|overflow)[^:;{}]*\s*:")
+        body = exact_rule(self.css, ".transaction-dialog-body")
+        self.assertIn("min-height: 0", body)
+        self.assertIn("display: flex", body)
+        self.assertIn("overflow: hidden", body)
+        controls = exact_rule(self.css, ".transaction-dialog-controls")
+        self.assertIn("overflow-y: auto", controls)
+        self.assertIn("min-height: 0", controls)
+        rows = exact_rule(self.css, ".transaction-dialog-body > .classification-preview-list")
+        self.assertIn("overflow-y: auto", rows)
+        self.assertIn("min-height: min(140px, 18vh)", rows)
+        shared = (APP_DIR / "transaction-ui.js").read_text(encoding="utf-8")
+        self.assertNotIn("fitTransactionFilterPopover", shared)
+        self.assertNotIn(".transaction-amount.is-credit", self.css)
+        self.assertIn("role=\"switch\"", (APP_DIR / "upload.html").read_text(encoding="utf-8"))
 
     def test_every_page_bootstraps_the_same_theme_before_styles(self) -> None:
         theme_sources = set()

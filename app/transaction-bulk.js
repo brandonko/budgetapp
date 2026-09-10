@@ -7,7 +7,7 @@
     ["group", "Group"], ["tags", "Tags"], ["category", "Category"], ["subcategory", "Subcategory"],
     ["description", "Description"], ["date", "Date"], ["amount", "Amount"],
     ["accountName", "Account name"], ["accountType", "Account type"], ["provider", "Provider"],
-    ["notes", "Notes"], ["refunded", "Refunded"], ["internalTransferTreatment", "Budget treatment"],
+    ["notes", "Notes"], ["refunded", "Refunded"], ["flagged", "Flagged"], ["internalTransferTreatment", "Budget treatment"],
   ];
   const key = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
   const tags = (value) => {
@@ -33,11 +33,11 @@
           : value.mode === "remove" ? current.filter((tag) => !removed.has(key(tag)))
             : value.mode === "clear" ? [] : incoming).join(", ");
         if (tags(result.tags).length > 50 || tags(result.tags).some((tag) => tag.length > 100)) throw new Error("Use at most 50 tags of 100 characters each.");
-      } else if (["refunded", "internalTransferTreatment"].includes(field)) {
+      } else if (["refunded", "flagged", "internalTransferTreatment"].includes(field)) {
         const flags = new Set(ui.transactionFlags(result));
-        if (field === "refunded") {
-          if (typeof value !== "boolean") throw new Error("Choose a refund treatment.");
-          if (value) flags.add("refunded"); else flags.delete("refunded");
+        if (field === "refunded" || field === "flagged") {
+          if (typeof value !== "boolean") throw new Error(field === "flagged" ? "Choose a flag status." : "Choose a refund treatment.");
+          if (value) flags.add(field); else flags.delete(field);
         } else {
           if (!["automatic", "internal-transfer", "include-in-budget"].includes(value)) throw new Error("Choose a budget treatment.");
           flags.delete("internal-transfer"); flags.delete("include-in-budget");
@@ -63,8 +63,9 @@
   }
 
   function changedFields(before, after) {
-    return [...new Set(fields.map(([field]) => ["refunded", "internalTransferTreatment"].includes(field) ? "flags" : field))]
-      .filter((field) => String(before[field] ?? "") !== String(after[field] ?? ""));
+    const comparable = value => value && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
+    return [...new Set([...fields.map(([field]) => ["refunded", "flagged", "internalTransferTreatment"].includes(field) ? "flags" : field), "links", "linkTo", "repaymentTo"])]
+      .filter((field) => comparable(before[field]) !== comparable(after[field]));
   }
 
   function node(tag, text, className = "") {
@@ -106,7 +107,7 @@
     const heading = node("div");
     const title = node("h2", `Delete ${rows.length} selected ${rows.length === 1 ? "transaction" : "transactions"}?`);
     title.id = "bulk-delete-title";
-    const warning = node("p", "These transactions will be permanently removed from your master CSV. This cannot be undone in the app. A safety backup will be created first.", "dialog-subtitle");
+    const warning = node("p", "These transactions will be permanently removed from your master CSV. This cannot be undone in the app. A safety backup will be created first. Links to deleted rows are removed; surviving purchases or credits may count toward your budget again.", "dialog-subtitle");
     warning.id = "bulk-delete-warning";
     heading.append(node("p", "CONFIRM DELETION", "eyebrow"), title, warning);
     const body = node("div", undefined, "form-body");
@@ -246,10 +247,11 @@
         mode.addEventListener("change", () => { tagForm.hidden = mode.value === "clear"; });
         read = () => ({ mode: mode.value, value: ui.transactionFromEditor(form).tags });
         item.append(node("small", "Add and Remove preserve the other tags. Replace and Clear affect the entire tag list."));
-      } else if (["refunded", "internalTransferTreatment"].includes(field)) {
-        const control = select(field === "refunded" ? [["true", "Mark refunded"], ["false", "Mark not refunded"]]
+      } else if (["refunded", "flagged", "internalTransferTreatment"].includes(field)) {
+        const control = select(field === "flagged" ? [["true", "Flag for follow-up"], ["false", "Remove flag"]]
+          : field === "refunded" ? [["true", "Mark refunded"], ["false", "Mark not refunded"]]
           : [["automatic", "Eligible for detection"], ["internal-transfer", "Internal transfer — exclude"], ["include-in-budget", "Count normally"]], labelText);
-        item.append(control); read = () => field === "refunded" ? control.value === "true" : control.value;
+        item.append(control); read = () => field !== "internalTransferTreatment" ? control.value === "true" : control.value;
       } else {
         const control = node(field === "notes" ? "textarea" : "input");
         if (field !== "notes") control.type = field === "amount" ? "number" : field === "date" ? "date" : "text";
@@ -319,6 +321,13 @@
     const selected = new Set();
     const id = options.getKey || ((row) => row._id);
     let active = false;
+    let flagBusy = false;
+    let flagError = "";
+    const pendingFlags = new Map();
+    const acceptedPayloads = new WeakSet();
+    const flagKey = (row) => row.id || id(row);
+    let flagRevision = null;
+    let savingFlags = null;
     const isStaged = () => typeof options.staged === "function" ? options.staged() : options.staged === true;
     let revision = null;
     let visible = [];
@@ -347,6 +356,7 @@
           if (staged) await options.onStage(ids, proposed);
           else {
             const payload = await request("/api/transactions/bulk", { ids, changes, revision: baseline, confirm: true });
+            acceptSaved(payload, { ids, changes });
             resetSelection();
             await options.onSaved(payload);
           }
@@ -367,6 +377,7 @@
         apply: async () => {
           if (isStaged() || baseline !== options.getRevision()) throw new Error("This list changed. Cancel and select transactions again.");
           const payload = await request("/api/transactions/bulk-delete", { ids, revision: baseline, confirm: true });
+          acceptSaved(payload);
           resetSelection();
           await options.onSaved(payload);
           options.render();
@@ -375,12 +386,17 @@
       });
     }, "danger-button bulk-delete-button");
     controls.append(count, selectVisible, clear, edit, remove);
-    const header = options.header || container.parentElement.querySelector("header");
+    const header = options.header || (container.closest(".dialog-shell") || container.parentElement).querySelector("header");
     const actions = node("div", undefined, "transaction-list-header-actions");
     const close = header.querySelector(".icon-button");
     if (close) { close.before(actions); actions.append(close); }
     else header.append(actions);
     actions.append(toggle);
+    const flagStatus = node("small", "", "bulk-hint");
+    flagStatus.setAttribute("role", "status"); flagStatus.hidden = true;
+    actions.append(flagStatus);
+    const saveFlagsButton = button("Save flags", () => flushFlags(), "text-button");
+    saveFlagsButton.hidden = true; actions.append(saveFlagsButton);
     toolbar.append(controls);
     const hint = node("p", "Selection is for editing only; it does not change which rows will be imported.", "bulk-import-hint");
     hint.hidden = true; toolbar.append(hint);
@@ -388,6 +404,91 @@
     function filter(rows) {
       return rows.filter((row) => ui.matchesGroupFilter(row, options.getGroupFilter?.() || ""));
     }
+    function toggleFlag(row, value) {
+      if (flagBusy || activeDialog) return;
+      const before = { ...row };
+      const identity = flagKey(row);
+      const original = pendingFlags.get(identity)?.original ?? ui.hasTransactionFlag(row, "flagged");
+      if (!pendingFlags.size) flagRevision = options.getRevision();
+      if (original === value && !isStaged()) pendingFlags.delete(identity);
+      else pendingFlags.set(identity, { original, value });
+      for (const item of new Set([row, ...options.getTransactions(), ...(isStaged() ? [] : options.getAllTransactions?.() || [])])) {
+        if (flagKey(item) === identity) item.flags = applyChanges(item, { flagged: value }).flags;
+      }
+      flagError = "";
+      options.onFlagChange?.(row, before);
+      options.render();
+      const currentRow = [...container.children].find((element) => element.dataset.transactionKey === String(id(row)));
+      (currentRow?.querySelector(".transaction-flag-toggle") || toggle).focus();
+    }
+    // Called only for a successful write made by this editor/list, never to accept
+    // an unrelated refresh. Preserve queued flags across edits and row reindexing.
+    function acceptSaved(payload, { ids = [], changes = {} } = {}) {
+      if (acceptedPayloads.has(payload)) return payload;
+      acceptedPayloads.add(payload);
+      if (Object.hasOwn(changes, "flagged")) {
+        options.getTransactions().filter(row => ids.includes(id(row))).forEach(row => pendingFlags.delete(flagKey(row)));
+      }
+      const present = new Set(payload.transactions.map(flagKey));
+      for (const identity of pendingFlags.keys()) if (!present.has(identity)) pendingFlags.delete(identity);
+      for (const row of payload.transactions) {
+        const pending = pendingFlags.get(flagKey(row));
+        if (!pending) continue;
+        pending.original = ui.hasTransactionFlag(row, "flagged");
+        if (pending.original === pending.value) pendingFlags.delete(flagKey(row));
+        else row.flags = applyChanges(row, { flagged: pending.value }).flags;
+      }
+      flagRevision = payload.revision;
+      return payload;
+    }
+    function prepareSave(transaction, original) {
+      const pending = pendingFlags.get(flagKey(original));
+      if (!pending) return transaction;
+      const value = ui.hasTransactionFlag(transaction, "flagged");
+      pending.value = value;
+      if (pending.original === value) pendingFlags.delete(flagKey(original));
+      return applyChanges(transaction, { flagged: pending.original });
+    }
+    async function savePendingFlags() {
+      if (!pendingFlags.size) return true;
+      flagBusy = true; flagError = ""; options.render();
+      try {
+        if (isStaged()) {
+          const rows = options.getTransactions().filter(row => pendingFlags.has(flagKey(row)));
+          await options.onStage(rows.map(id), rows.map(row => ({ ...row })));
+          pendingFlags.clear();
+        } else {
+          if (flagRevision !== options.getRevision()) throw new Error("This list changed. Your flags have not been saved. Reload and review them again.");
+          const payload = await request("/api/transactions/flags", {
+            updates: [...new Map([...(options.getAllTransactions?.() || []), ...options.getTransactions()].map(row => [flagKey(row), row])).values()]
+              .filter(row => pendingFlags.has(flagKey(row)))
+              .map(row => ({ id: row._id, flagged: pendingFlags.get(flagKey(row)).value })),
+            revision: flagRevision, confirm: true,
+          });
+          pendingFlags.clear(); flagRevision = null;
+          resetSelection(); await options.onSaved(payload);
+        }
+        return true;
+      } catch (error) { flagError = `${error.message || "Could not save flags."} Your pending flags are kept here; try saving again.`; return false; }
+      finally { flagBusy = false; options.render(); }
+    }
+    function flushFlags() {
+      if (!savingFlags) savingFlags = savePendingFlags().finally(() => { savingFlags = null; });
+      return savingFlags;
+    }
+    // Browser reload/close cannot reliably await writes. Warn instead of fire-and-forget.
+    globalObject.addEventListener("beforeunload", event => {
+      if (pendingFlags.size && !isStaged()) { event.preventDefault(); event.returnValue = ""; }
+    });
+    if (options.page) document.addEventListener("click", async event => {
+      const link = event.target.closest?.("a[href]");
+      if (!link || !pendingFlags.size || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+          || event.button > 0 || link.target === "_blank" || link.hasAttribute("download")) return;
+      const destination = new URL(link.href, globalObject.location.href);
+      if (destination.origin !== globalObject.location.origin || destination.href.split("#")[0] === globalObject.location.href.split("#")[0]) return;
+      event.preventDefault();
+      if (await flushFlags()) globalObject.location.assign(destination.href);
+    });
     function render(rows, rowOptions) {
       if (active && revision !== options.getRevision()) resetSelection();
       const eligible = new Set(options.getTransactions().map(id));
@@ -398,16 +499,23 @@
       toolbar.hidden = !active;
       toggle.textContent = active ? "Done editing" : "Edit multiple";
       toggle.setAttribute("aria-pressed", String(active));
-      toggle.disabled = !options.getTransactions().length;
+      toggle.disabled = flagBusy || !options.getTransactions().length;
       selectVisible.disabled = !visible.length; clear.disabled = !selected.size;
       const hidden = selected.size - visible.filter((row) => selected.has(id(row))).length;
       count.textContent = `${selected.size} selected${hidden > 0 ? ` · ${hidden} outside this view` : ""}`;
-      edit.textContent = `Edit selected (${selected.size})`; edit.disabled = !selected.size;
-      remove.textContent = `Delete selected (${selected.size})`; remove.disabled = !selected.size || isStaged();
+      edit.textContent = `Edit selected (${selected.size})`; edit.disabled = flagBusy || !selected.size;
+      remove.textContent = `Delete selected (${selected.size})`; remove.disabled = flagBusy || !selected.size || isStaged();
       remove.hidden = isStaged();
       hint.hidden = !(options.staged && active && options.importSelection);
+      flagStatus.hidden = !pendingFlags.size && !flagError;
+      flagStatus.textContent = flagError || (flagBusy ? "Saving flags…" : isStaged() ? "Flags staged for review"
+        : options.page ? "Flags save when leaving this page" : "Flags save when this list closes");
+      saveFlagsButton.hidden = !pendingFlags.size || (!options.page && !flagError) || isStaged();
+      saveFlagsButton.disabled = flagBusy;
       ui.renderTransactionList(container, visible, (row, index) => {
-        const original = rowOptions(row, index);
+        const supplied = rowOptions(row, index);
+        const original = { ...supplied, disabled: flagBusy || supplied.disabled,
+          onToggleFlag: supplied.onToggleFlag || ((value) => toggleFlag(row, value)) };
         if (!active) return original;
         const selection = node("label", undefined, "bulk-row-selection");
         const checkbox = node("input"); checkbox.type = "checkbox"; checkbox.checked = selected.has(id(row));
@@ -419,13 +527,21 @@
         return { ...original, leadingControl: selection };
       });
       [...container.children].forEach((row, index) => {
+        row.dataset.transactionKey = String(id(visible[index]));
         row.classList.toggle("transaction-row--bulk-selectable", active);
         options.decorateRow?.(row, visible[index]);
       });
       if (!visible.length) container.append(node("p", "No transactions match this view.", "empty-transaction-list"));
+      if (flagError) {
+        const error = node("p", flagError, "transaction-flag-error");
+        error.setAttribute("role", "alert"); container.prepend(error);
+      }
       return visible;
     }
-    return { render, filter, reset() { resetSelection(); toolbar.hidden = true; toggle.textContent = "Edit multiple"; toggle.setAttribute("aria-pressed", "false"); }, isActive: () => active };
+    return { render, filter, flushFlags, acceptSaved, prepareSave,
+      hasPendingFlags: () => pendingFlags.size > 0,
+      discardFlags() { pendingFlags.clear(); flagError = ""; },
+      reset() { resetSelection(); flagError = ""; toolbar.hidden = true; toggle.textContent = "Edit multiple"; toggle.setAttribute("aria-pressed", "false"); }, isActive: () => active };
   }
 
   globalObject.LedgerTransactionBulk = Object.freeze({ create, applyChanges, changedFields });
