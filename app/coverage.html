@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="/theme.js?v=20260905-display-preferences-1"></script>
+  <title>Data coverage — Ledger</title>
+  <meta name="description" content="See when your accounts have recorded activity and when their latest imported rows arrived." />
+  <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+  <link rel="stylesheet" href="/coverage.css" />
+  <script src="/navigation.js" defer></script>
+  <script src="/coverage-model.js" defer></script>
+  <script src="/coverage.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Ledger home"><span class="brand-mark">L</span><span>Ledger</span></a>
+    <details class="site-menu">
+      <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></summary>
+      <nav class="menu-panel" aria-label="Main navigation"><a href="/">Dashboard</a><a href="/transactions">Transactions</a><a href="/import">Import data</a><a href="/classifications">Classifications</a><a href="/settings">Settings</a></nav>
+    </details>
+  </header>
+  <main class="coverage-workspace">
+    <header class="coverage-heading">
+      <div><p class="eyebrow">Know your records</p><h1>Data coverage.</h1><p>A clear picture of the activity you have on file.</p></div>
+      <a class="primary-button" href="/import">Import data</a>
+    </header>
+    <p id="coverage-status" class="settings-status" role="status">Loading your recorded activity…</p>
+    <section id="coverage-setup" class="coverage-empty" hidden><h2>Start with an import.</h2><p>Your accounts and their recorded months will appear here after you import transactions.</p><a href="/import">Go to Import data</a></section>
+    <section id="coverage-content" hidden>
+      <div class="coverage-summary" aria-label="All recorded accounts">
+        <article><span>Accounts on file</span><strong id="coverage-account-total">0</strong><small>Distinct provider, type, and name</small></article>
+        <article><span>Recorded transactions</span><strong id="coverage-row-total">0</strong><small>Includes refunds and transfers</small></article>
+        <article><span id="coverage-older-label">Older activity</span><strong id="coverage-older-total">0</strong><small id="coverage-as-of"></small></article>
+      </div>
+      <section class="coverage-panel" aria-labelledby="coverage-title">
+        <div class="coverage-panel-heading"><div><p class="eyebrow">Activity map</p><h2 id="coverage-title">Your accounts, month by month.</h2></div></div>
+        <div class="coverage-controls">
+          <label><span>Find an account</span><input id="coverage-search" type="search" placeholder="Name, provider, or account type" autocomplete="off" /></label>
+          <label><span>Year</span><select id="coverage-year"></select></label>
+          <label><span>Highlight activity older than</span><select id="coverage-threshold"><option value="14">14 days</option><option value="30" selected>30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></label>
+        </div>
+        <p class="coverage-hint">Numbers count recorded transactions. A dash means no recorded activity; it does not establish whether a bank statement is complete.</p>
+        <p id="coverage-results-count" class="coverage-hint" role="status"></p>
+        <div id="coverage-accounts" class="coverage-accounts"></div>
+      </section>
+      <details class="coverage-explainer"><summary>How to read your coverage</summary><p>Accounts are grouped by provider, account type, and account name. An old activity date can mean an inactive account, or it can be a reason to check your source and import again.</p><p>“Latest recorded import” comes from the newest import timestamp among rows still in your file. It is not a bank sync status. Manual and legacy rows may have no import timestamp. Removed imports cannot be reconstructed from this view.</p><p id="coverage-unknown-imports"></p><p>Every recorded row counts here, including refunded transactions and internal transfers. Coverage never changes transactions or their budget treatment.</p></details>
+    </section>
+    <button id="coverage-refresh" class="secondary-button" type="button">Refresh records</button>
+  </main>
+</body>
+</html>
