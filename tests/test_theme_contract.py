@@ -102,6 +102,8 @@ class ThemeContractTests(unittest.TestCase):
         self.assertIn("flex-wrap: wrap", exact_rule(css, ".settings-preference-row"))
         self.assertIn("flex: 1 1 240px", exact_rule(css, ".settings-preference-row > div:first-child"))
         self.assertIn("@media (max-width: 560px)", css)
+        mobile = css.rsplit("@media (max-width: 560px)", 1)[1]
+        self.assertIn("flex: 0 1 auto", exact_rule(mobile, ".settings-preference-row > div:first-child"))
 
     def test_pages_reserve_a_stable_scrollbar_gutter(self) -> None:
         css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
