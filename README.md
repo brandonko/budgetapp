@@ -1,9 +1,17 @@
 # Ledger
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
-It imports Credit Karma and Venmo transactions plus Amazon, AliExpress, and eBay order history, avoids duplicate
-imports, and provides monthly and annual summaries with editable transaction
-details.
+It imports account transactions from Credit Karma, Venmo, Apple Card, Capital
+One, and Schwab Checking; order history from Amazon, AliExpress, eBay, and
+Walmart; and Ledger-format CSV files. It avoids duplicate imports and provides monthly and annual summaries
+with editable transaction details.
+
+For a task-oriented guide to linked refunds, Reconcile, import preferences,
+follow-up flags, Schwab, and extension connections, see
+[Current workflows](docs/current-workflows.md). It also explains schema
+migration, deployment recovery, and what still needs live verification.
+
+## Features
 
 The dashboard includes:
 
@@ -17,8 +25,12 @@ The dashboard includes:
 - A shared navigation menu for the dashboard, transactions, data imports, classifications, and settings
 - Manual transaction creation, editing, multi-tag labeling, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
-- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, and Capital One through a companion Chrome extension
-- Manual Apple Card CSV fallback with editable account details
+- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, Capital One, and Schwab Checking through a companion Chrome extension
+- Manual Apple Card and Capital One CSV fallbacks with editable account details
+- Linked refunds and repayments that retain original transactions while adjusting spending
+- A Reconcile workspace for reviewing transfer and refund suggestions before saving
+- Follow-up flags, a Flagged only filter, and bulk flag actions across transaction lists
+- Browser-local import lookback and refund-matching preferences
 - Automatic and manually overridable internal-transfer exclusion
 - Ordered, regular-expression classification rules for import categories and subcategories
 - A visual taxonomy editor for maintaining available categories and subcategories
@@ -31,11 +43,30 @@ The dashboard includes:
 
 No third-party Python packages are required.
 
-For contributor regression checks, run `python -m unittest discover -s tests -v`.
-If Node.js is available, also run
-`node --test tests/test_transactions_model.js tests/test_transactions_controller.js`
-for the all-time query calculations and browser-controller interaction tests.
-These tests use synthetic transactions; never run tests against private data.
+## Development and testing
+
+Read `llm_context.md` before changing behavior; it records Ledger's product,
+financial-correctness, privacy, and persistence invariants. Run the complete
+dependency-free regression suite from the repository root with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Tests must use synthetic data and temporary directories. Never copy private
+contents from `data/` or `raw_data_files/` into tests or commits.
+
+If Node.js is available, also run every JavaScript regression file. In PowerShell:
+
+```powershell
+$ledgerJsTests = @(Get-ChildItem -LiteralPath tests -Filter 'test_*.js' | ForEach-Object FullName)
+node --test @ledgerJsTests
+```
+
+In a shell that expands file globs, use `node --test tests/test_*.js`. Node.js is
+a contributor testing tool, not an application runtime dependency. Python tests
+that exercise JavaScript may skip those checks when Node.js is unavailable;
+check the test summary rather than treating skipped checks as coverage.
 
 ## Run Ledger
 
@@ -144,6 +175,10 @@ importer is visible at a time:
   CSV picker remains available as a fallback. Purchases are expenses, refunds
   are negative adjustments, and card payments are transfers. Its editable
   defaults are `Apple Card`, `CREDIT CARD`, and `Goldman Sachs`.
+- **Capital One** imports official account CSV exports over the selected
+  Transaction Date range, through the companion extension or a manual CSV
+  fallback. See the Capital One workflow below for supported layouts and account
+  options.
 - **Schwab Checking** captures a CSV export from your signed-in Schwab tab.
   Start in Ledger, select one checking account in Schwab, set its transaction
   history range, and export CSV. Defaults are `Schwab Checking`, `BANK`, and
@@ -225,7 +260,8 @@ CSV layout references: [Capital One credit parser](https://github.com/mtlynch/be
 and [Capital One checking CSV example](https://github.com/wgwz/capital-one-recurring-expenses).
 
 The Import data page supports selecting a date range and importing from an
-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, or Apple Card session without first saving a file. This
+authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card,
+Capital One, or Schwab Checking session without first saving a file. This
 requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
@@ -253,7 +289,8 @@ toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
 toggles sit immediately below that toolbar.
 
 All file and browser imports use this staged session workflow. The retired
-direct-upload API cannot append transactions without preview and confirmation.
+direct-upload API (`/api/import`) always returns HTTP 410 and writes nothing;
+use a staged import session instead.
 
 Closing an uncommitted review with Cancel, X, Escape, or an outside click asks
 before discarding the imported data. Cancel that prompt to keep reviewing with
@@ -286,7 +323,7 @@ category is retained and the subcategory stays blank.
 CSV imports use this exact header:
 
 ```text
-date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,id,links
 ```
 
 The app assigns a shared `createdAt` timestamp to the selected valid rows only
@@ -565,8 +602,8 @@ Classification page and any draft being edited.
 ## Master CSV schema
 
 If the master CSV does not exist, the dashboard offers a direct link to Import
-data. Confirming at least one staged Credit Karma, Amazon, AliExpress, eBay, Venmo, or
-Apple Card transaction creates the file automatically before appending the selected
+data. Confirming at least one staged transaction from any supported import source
+creates the file automatically before appending the selected
 rows. Cancelling a preview does not create or modify the file. An existing file is
 never replaced by initialization.
 
@@ -636,8 +673,10 @@ credits retain the plus sign along with their muted, struck-through amount.
   receipts or invent a missing source transaction. New matches do not create
   receipt flags. Links and selected imports use one revision-checked, backed-up
   atomic CSV write.
-- Transactions flagged `refunded` remain visible but contribute $0 to category,
-  spending, income, net, and annual-chart totals.
+- On unlinked transactions, the `refunded` flag keeps the row visible while
+  contributing $0 to category, spending, income, net, and annual-chart totals.
+  Linked transactions use their relationship's effective amount instead;
+  unlink before changing budget treatment.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
 - **Today** beside the period controls switches from any dashboard view to the
@@ -752,9 +791,10 @@ available as manual budget overrides for incomplete historical data.
 
 Imports match selected incoming rows against each other and existing unmatched
 transactions. The review shows any existing counterparts that will also be
-flagged. Editing or unchecking an incoming row recalculates the proposal. Only
-confirmation saves the selected rows and existing-side flags together, with a
-safety backup of an existing database. Cancelling saves nothing.
+linked. Editing or unchecking an incoming row recalculates the proposal. Only
+confirmation saves the selected rows, reviewed links, and affected existing-row
+flags together, with a safety backup of an existing database. Cancelling saves
+nothing.
 
 Open **Settings → Reconcile → Find matches** to scan all
 saved transactions. The shared review modal supports search, filters, sorting,
@@ -767,7 +807,9 @@ Already excluded transactions and explicit Count normally overrides are not
 reused as matching candidates.
 
 After upgrading, Ledger asks for this one-time review before showing dashboard
-totals under the saved-only policy. Your existing CSV is not silently rewritten.
+totals under the saved-only policy. Startup may migrate a supported older
+schema and exact saved pairs with a safety backup; new transfer/refund detection
+still requires explicit review.
 Completion is recorded in `data/transactions.transfer-review.json`; transfer
 status itself stays in `transactions.csv`. A new database created by a confirmed
 import needs no extra review. If you later restore older data without saved
@@ -793,7 +835,10 @@ edited or deleted.
 
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
-app/importers.py    Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card parsers
+app/importers.py    Bank/account and merchant-order source parsers
+app/reconciliation.py
+                    Durable transaction IDs, link validation, and effective budget amounts
+app/refunds.py      Refund suggestions and legacy receipt deduplication helpers
 app/index.html      Monthly and annual dashboard
 app/transactions.html
                     All-time search, tag/group exploration, and matching summaries
@@ -805,10 +850,10 @@ app/transactions.css
 app/group-comparison.js / .css
                     Read-only multi-group comparison workspace and visualizations
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed exports, import-history, taxonomy, and display preferences
+app/settings.html  Exports, import history, Reconcile, taxonomy, and preferences
 app/classifications.html
                     Dedicated transaction-classification workspace
-app/settings.js    Exports, import-batch, taxonomy, and general settings
+app/settings.js    Settings and classification-workspace behavior
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
@@ -817,12 +862,17 @@ ledger_data_importer_extension/
                     Credit Karma-specific collector
   aliexpress_extension/
                     AliExpress signed API client
+  ebay_extension/   eBay purchase-history collector
   venmo_extension/  Venmo statement collector
   apple_card_extension/ Apple Card export-form automation
   capitalone_extension/ Capital One CSV capture and export-form assistance
   walmart_extension/ Walmart purchase-history and receipt collector
+  schwab_extension/ Schwab Checking user-guided CSV capture and normalization
   shared/           Ledger toolbar popup, connection settings, icons, bridge, and coordinator
 tests/              Isolated standard-library regression tests
+docs/current-workflows.md
+                    Linked transactions, review workflows, connections, and verification limits
+deploy/             Optional Debian/systemd deployment guide and update helper
 raw_data_files/     Optional private source exports (ignored by Git)
 data/               Master CSV database and backups (ignored by Git)
   transactions.csv

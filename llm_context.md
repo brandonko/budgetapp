@@ -3,6 +3,11 @@
 This document records the product and implementation preferences that should
 guide future work on Ledger. Update it whenever a decision changes.
 
+For a user-facing explanation of the current linked-transaction schema,
+Reconcile workflow, import preferences, and extension connections, see
+[Current workflows](docs/current-workflows.md). Keep that guide and the main
+README synchronized with the implementation and the invariants below.
+
 ## Product direction
 
 Ledger is a local-first personal budgeting application. It should remain simple,
@@ -37,8 +42,7 @@ third-party Python dependency unless a future requirement clearly justifies it.
 
 - `flags` contains normalized, comma-separated identifiers. `refunded`,
   `internal-transfer`, and `include-in-budget` are supported budget-treatment
-  flags. `refunded` is the
-  first supported flag. Internal UI identifiers and derived properties such as
+  flags. `flagged` is a follow-up marker only. Internal UI identifiers and derived properties such as
   `_id` and `_isBillPayment` must not be written as extra CSV columns.
 - `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
   one committed import. It is blank for manual and legacy transactions.
@@ -587,8 +591,9 @@ Do not exclude the entire `Transfer` category. Venmo, Zelle, and other unmatched
 transfers may be legitimate expenses or incoming money.
 
 Internal-transfer treatment is a durable decision, not a read-time calculation.
-Never run reconciliation from `public_state`, transaction GETs, dashboards, or
-other rendering paths. Imports and an explicit Settings scan propose pairs using:
+Never run heuristic match detection from `public_state`, transaction GETs,
+dashboards, or other rendering paths; those paths only validate/project saved
+links. Imports and an explicit Settings scan propose pairs using:
 
 1. At least one row has category `Transfer`, case-insensitively, or a description
    that looks like a transfer or account payment. The other row may retain any
@@ -662,11 +667,11 @@ links. Incomplete linked import selections are rejected clearly, never silently
 converted to unlinked financial records. Occurrence-aware date/amount duplicate
 matching remains independent of durable IDs.
 
-Import proposals must show existing counterpart rows that will be flagged,
+Import proposals must show existing counterpart rows that will be linked,
 not just incoming rows. Recompute proposals after edits, checkbox changes, and
 force-including duplicates. Bind confirmation to both the CSV revision and the
 exact reviewed transfer plan; reject stale/unseen matches. Save selected incoming
-rows and reviewed existing-side flags in one atomic write, with a safety backup
+rows, reviewed links, and affected existing-row flags in one atomic write, with a safety backup
 for an existing database. Keep existing createdAt and all unrelated fields intact.
 All cancel paths write nothing; discard stale asynchronous preview responses.
 
@@ -698,8 +703,10 @@ same staged confirmation/cancel semantics. Type toggles compose with all shared
 search/filter/sort controls, reset on a new review, and stay hidden in import history.
 
 Legacy databases need one explicit full-database review before dashboards show
-totals under the new saved-only policy. Do not silently migrate financial flags
-at startup or on GET. A successful review records version 1 in the CSV-adjacent
+totals under the new saved-only policy. Do not run fresh financial matching at
+startup or on GET. Startup may upgrade exact saved pair metadata through the
+backed-up schema migration; new matches require this explicit review. A
+successful review records version 1 in the CSV-adjacent
 `<stem>.transfer-review.json` marker. Fresh databases created by a confirmed
 staged import are already reviewed. The marker is only upgrade bookkeeping;
 CSV links and legacy flags remain the source of budget treatment. Historical exports or
@@ -707,8 +714,8 @@ restores without saved flags can be scanned again through Settings.
 During the initial upgrade scan only, an already manually excluded row without
 pair metadata can still identify its old automatic counterpart, preserving legacy
 matching. Never reuse a persisted pair or override an explicit Count normally.
-The obsolete `/api/import` upload endpoint rejects proposed transfer matches and
-directs clients to staged import sessions; it must never apply unseen pair changes.
+The retired `/api/import` endpoint always returns HTTP 410 and writes nothing.
+All imports must use staged sessions and explicit confirmation.
 
 Excluded rows do not affect monthly or annual category cards, subcategories,
 charts, breakdown tables, spending, income, or net totals. They must remain
@@ -748,16 +755,18 @@ with a line-through, while continuing to use a $0 budget amount.
   optional freeform text and may safely contain commas or line breaks.
 - Tags are optional user-defined labels stored as a comma-separated list. Edit
   them as compact badges in transaction lists.
-- Users can toggle the `refunded` flag in the transaction editor. A refunded
-  transaction remains visible and retains its original date and amount for
+- Users can toggle the `refunded` flag on unlinked transactions in the editor.
+  Such a row remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
+  Linked transactions instead use their saved relationship's effective amount;
+  unlink before changing budget treatment.
 - Users can set an internal-transfer treatment from every shared transaction
   editor, including import review and import history. Keep automatic detection
   overridable in both directions.
 - `createdAt` is system-managed and must survive edits unchanged.
-- Migrate compatible older CSVs to the thirteen-column schema
-  atomically by adding missing optional fields; never require users to recreate
-  an existing database.
+- Migrate compatible older CSVs to the fifteen-column schema, with validated
+  IDs and links, through a backed-up atomic migration; never require users to
+  recreate an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
   saving, deleting, cancelling, or closing the editor returns to that refreshed
   list modal. Manual Add transaction continues to return to the dashboard.
@@ -900,7 +909,8 @@ ingestion belongs in the **Import data** page at `/import`.
 - The root `_locales/` catalog is Amazon-specific but must remain at the
   manifest root because Chrome requires that location.
 
-- Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card access in the companion
+- Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart,
+  Venmo, Apple Card, Capital One, and Schwab Checking access in the companion
   Chrome extension; the localhost application must never request, store, or
   transmit site passwords, access tokens, or cookies.
 - The Import data page owns date selection, progress, cancellation, results,
@@ -913,7 +923,8 @@ ingestion belongs in the **Import data** page at `/import`.
   changes in another tab may update untouched defaults, never overwrite custom
   dates or change an active import session. Ledger-format and Apple Card CSV
   imports still read the entire file without date filtering.
-  Migrate the former Credit Karma refund opt-out when no global preference exists.
+  Use the former Credit Karma refund opt-out when no valid global `matchRefunds`
+  boolean has been saved.
 - Apple Card direct import opens `card.apple.com`, drives Apple's official
   Export Transactions form with the selected range and CSV format, and captures
   the structured response. Keep manual CSV selection as a fallback because the
@@ -952,7 +963,8 @@ ingestion belongs in the **Import data** page at `/import`.
   transactions** for the user-selected date range. Only transaction data needed
   by Ledger is required; wealth histories can remain empty.
 - Credit Karma imports expose independent **Ignore Amazon transactions**,
-  **Ignore AliExpress transactions**, and **Ignore Venmo transactions** checkboxes.
+  **Ignore AliExpress transactions**, **Ignore Venmo transactions**,
+  **Ignore eBay transactions**, and **Ignore Walmart transactions** checkboxes.
   All default to enabled, and
   the chosen values belong to that source-scoped import session.
 - Preserve identical same-day transactions. During browser extraction, collapse
@@ -1045,7 +1057,8 @@ ingestion belongs in the **Import data** page at `/import`.
   staged session. Preserve the existing shared review, classifications, transfer
   proposals, occurrence-aware deduplication, revision checks, and confirmation.
 - Dates are inclusive original order dates, including the source calendar date
-  from timezone-bearing timestamps. Default to the usual fourteen-day lookback.
+  from timezone-bearing timestamps. Use the shared browser-local import
+  lookback preference (two weeks by default), leaving dates editable.
 - Use Shopping and blank subcategory before rules; editable account defaults
   are Walmart / CREDIT CARD / Walmart. One row per charged receipt line; quantity
   is already included in lineTotal. Prefer the charged categories tree over the

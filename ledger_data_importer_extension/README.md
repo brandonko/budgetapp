@@ -14,8 +14,11 @@ forms can be operated manually, or the downloaded CSV can be selected in Ledger.
 Nothing is saved before the shared transaction review is confirmed. See
 [Capital One details](capitalone_extension/README.md) for limitations and privacy.
 
-This unpacked Chrome extension connects Ledger's local **Import data** page to
-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, and Apple Card sessions.
+This unpacked Chrome extension connects Ledger's **Import data** page to nine
+authenticated website sources: Credit Karma, Amazon, AliExpress, eBay, Walmart,
+Venmo, Apple Card, Capital One, and Schwab Checking. The page may be on loopback
+or an explicitly trusted server with current Chrome site permission. Ledger CSV
+is a separate app import option, not an extension source.
 
 ## Install
 
@@ -124,6 +127,7 @@ ebay_extension/         eBay authenticated purchase-history collector
 walmart_extension/      Walmart receipt reader, passive list observer, and coordinator
 apple_card_extension/   Apple Card official CSV export automation
 capitalone_extension/   Capital One CSV capture and export-form assistance
+schwab_extension/       Schwab Checking user-guided CSV capture and normalization
 shared/                  Ledger popup, connection settings, icons, bridge, and coordinator
 _locales/                Amazon popup catalogs (Chrome requires this root path)
 manifest.json            Permissions and module registration
@@ -133,7 +137,7 @@ The Amazon scraper and retained upstream popup, localization, and icon assets co
 [Order History Exporter for Amazon](https://github.com/xenolphthalein/order-history-exporter-for-amazon)
 version 1.3.0. That project is dedicated to the public domain under the
 [Unlicense](LICENSE). Ledger replaces the release's background worker and adds
-the localhost bridge; it deliberately leaves the upstream scraper bundle intact
+the Ledger page bridge; it deliberately leaves the upstream scraper bundle intact
 so fixes can be compared and updated more easily.
 The toolbar uses the Ledger-owned `shared/popup.html`, not the retained Amazon
 popup. Keep cross-source UI here rather than inside a source integration.
