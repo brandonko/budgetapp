@@ -22,13 +22,15 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+import transfers
 
 from importers import (
     ALIEXPRESS_DEFAULT_ACCOUNT,
     AMAZON_DEFAULT_ACCOUNT,
     APPLE_CARD_DEFAULT_ACCOUNT,
     EBAY_DEFAULT_ACCOUNT,
+    WALMART_DEFAULT_ACCOUNT,
     ImportDataError,
     VENMO_DEFAULT_ACCOUNT,
     parse_aliexpress,
@@ -36,6 +38,9 @@ from importers import (
     parse_apple_card,
     parse_credit_karma,
     parse_ebay,
+    parse_walmart,
+    parse_capital_one,
+    CAPITAL_ONE_DEFAULT_ACCOUNT,
     parse_venmo,
 )
 
@@ -53,10 +58,13 @@ COLUMNS = (
     "provider",
     "notes",
     "tags",
+    "group",
     "flags",
     "createdAt",
 )
-PRE_TAG_COLUMNS = tuple(column for column in COLUMNS if column != "tags")
+LEDGER_IMPORT_COLUMNS = tuple(column for column in COLUMNS if column != "createdAt")
+PRE_GROUP_COLUMNS = tuple(column for column in COLUMNS if column != "group")
+PRE_TAG_COLUMNS = tuple(column for column in PRE_GROUP_COLUMNS if column != "tags")
 DEFAULT_CSV = DATA_DIR / "transactions.csv"
 LEGACY_COLUMNS = (
     "date", "description", "amount", "category", "accountName", "accountType", "provider"
@@ -71,6 +79,7 @@ CREATED_AT_COLUMNS = NOTES_COLUMNS + ("createdAt",)
 PRE_SUBCATEGORY_COLUMNS = NOTES_COLUMNS + ("flags", "createdAt")
 COMPATIBLE_COLUMNS = (
     COLUMNS,
+    PRE_GROUP_COLUMNS,
     PRE_TAG_COLUMNS,
     PRE_SUBCATEGORY_COLUMNS,
     SUBCATEGORY_NOTES_COLUMNS,
@@ -79,11 +88,8 @@ COMPATIBLE_COLUMNS = (
     NOTES_COLUMNS,
     LEGACY_COLUMNS,
 )
-REQUIRED_TEXT_COLUMNS = tuple(
-    column
-    for column in COLUMNS
-    if column not in {"date", "amount", "subcategory", "notes", "tags", "flags", "createdAt"}
-)
+REQUIRED_TEXT_COLUMNS = ("description",)
+OPTIONAL_TEXT_COLUMNS = ("category", "accountName", "accountType", "provider")
 IMPORT_TEXT_COLUMNS = (
     "description", "category", "subcategory", "accountName", "accountType", "provider"
 )
@@ -142,6 +148,24 @@ EBAY_IMPORT_SESSION_PATH = re.compile(
 EBAY_IMPORT_ACTION_PATH = re.compile(
     r"^/api/ebay-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
 )
+CSV_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/csv-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+WALMART_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/walmart-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+CAPITAL_ONE_IMPORT_SESSION_PATH = re.compile(
+    r"^/api/capitalone-import-sessions/([A-Za-z0-9_-]{32,})$"
+)
+CAPITAL_ONE_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/capitalone-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
+)
+WALMART_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/walmart-import-sessions/([A-Za-z0-9_-]{32,})/(progress|complete|commit|cancel)$"
+)
+CSV_IMPORT_ACTION_PATH = re.compile(
+    r"^/api/csv-import-sessions/([A-Za-z0-9_-]{32,})/(commit|cancel)$"
+)
 AMAZON_IMPORT_SESSION_TTL_SECONDS = 60 * 60
 TERMINAL_IMPORT_STATUSES = {"complete", "error", "cancelled"}
 MISSING_CSV_REVISION = "missing"
@@ -152,6 +176,9 @@ IMPORT_SOURCE_LABELS = {
     "venmo": "Venmo",
     "applecard": "Apple Card",
     "ebay": "eBay",
+    "walmart": "Walmart",
+    "capitalone": "Capital One",
+    "csv": "CSV",
 }
 IMPORT_ACCOUNT_DEFAULTS = {
     "amazon": AMAZON_DEFAULT_ACCOUNT,
@@ -159,14 +186,26 @@ IMPORT_ACCOUNT_DEFAULTS = {
     "venmo": VENMO_DEFAULT_ACCOUNT,
     "applecard": APPLE_CARD_DEFAULT_ACCOUNT,
     "ebay": EBAY_DEFAULT_ACCOUNT,
+    "walmart": WALMART_DEFAULT_ACCOUNT,
+    "capitalone": CAPITAL_ONE_DEFAULT_ACCOUNT,
 }
 STATIC_FILES = {
     "/": APP_DIR / "index.html",
     "/index.html": APP_DIR / "index.html",
     "/styles.css": APP_DIR / "styles.css",
+    "/theme.js": APP_DIR / "theme.js",
     "/app.js": APP_DIR / "app.js",
     "/navigation.js": APP_DIR / "navigation.js",
     "/transaction-ui.js": APP_DIR / "transaction-ui.js",
+    "/transaction-bulk.js": APP_DIR / "transaction-bulk.js",
+    "/group-comparison.js": APP_DIR / "group-comparison.js",
+    "/group-comparison.css": APP_DIR / "group-comparison.css",
+    "/transaction-tools.css": APP_DIR / "transaction-tools.css",
+    "/transactions": APP_DIR / "transactions.html",
+    "/transactions.html": APP_DIR / "transactions.html",
+    "/transactions.js": APP_DIR / "transactions.js",
+    "/transactions-model.js": APP_DIR / "transactions-model.js",
+    "/transactions.css": APP_DIR / "transactions.css",
     "/import": APP_DIR / "upload.html",
     "/import.html": APP_DIR / "upload.html",
     "/upload.js": APP_DIR / "upload.js",
@@ -230,7 +269,10 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
         raise CsvDataError(f"{location}.amount must be numeric") from exc
     if not amount.is_finite():
         raise CsvDataError(f"{location}.amount must be finite")
-    amount = amount.quantize(CENT, rounding=ROUND_HALF_UP)
+    try:
+        amount = amount.quantize(CENT, rounding=ROUND_HALF_UP)
+    except InvalidOperation as exc:
+        raise CsvDataError(f"{location}.amount is too large") from exc
 
     transaction: dict[str, Any] = {
         "date": normalized_date,
@@ -240,6 +282,11 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
         value = raw.get(column)
         if not isinstance(value, str) or not value.strip():
             raise CsvDataError(f"{location}.{column} cannot be blank")
+        transaction[column] = value.strip()
+    for column in OPTIONAL_TEXT_COLUMNS:
+        value = raw.get(column, "")
+        if not isinstance(value, str):
+            raise CsvDataError(f"{location}.{column} must be text")
         transaction[column] = value.strip()
     subcategory = raw.get("subcategory", "")
     if not isinstance(subcategory, str):
@@ -268,6 +315,7 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
     if len(tags) > 50:
         raise CsvDataError(f"{location}.tags cannot contain more than 50 entries")
     transaction["tags"] = ", ".join(tags)
+    transaction["group"] = normalize_group(raw.get("group", ""), f"{location}.group")
     raw_flags = raw.get("flags", "")
     if not isinstance(raw_flags, str):
         raise CsvDataError(f"{location}.flags must be comma-separated text")
@@ -291,6 +339,129 @@ def normalize_transaction(raw: Any, location: str) -> dict[str, Any]:
 
 def collapse_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def normalize_group(value: Any, location: str = "group") -> str:
+    if not isinstance(value, str):
+        raise CsvDataError(f"{location} must be text (one group per transaction)")
+    name = collapse_whitespace(value)
+    if len(name) > 100:
+        raise CsvDataError(f"{location} cannot exceed 100 characters")
+    return name
+
+
+def canonicalize_new_groups(
+    transactions: Sequence[dict[str, Any]], existing: Sequence[Mapping[str, Any]]
+) -> None:
+    """Reuse existing spelling without changing unrelated rows or converting tags."""
+    names: dict[str, str] = {}
+    for row in existing:
+        name = normalize_group(row.get("group", ""))
+        if name:
+            names.setdefault(name.casefold(), name)
+    for row in transactions:
+        name = normalize_group(row.get("group", ""))
+        if name:
+            name = names.setdefault(name.casefold(), name)
+        row["group"] = name
+
+
+BULK_TEXT_FIELDS = {
+    "date", "description", "amount", "category", "subcategory", "accountName",
+    "accountType", "provider", "notes", "group",
+}
+BULK_FIELDS = BULK_TEXT_FIELDS | {"tags", "refunded", "internalTransferTreatment"}
+
+
+def validate_bulk_changes(changes: Any) -> dict[str, Any]:
+    if not isinstance(changes, dict) or not changes:
+        raise CsvDataError("Choose at least one field to change.")
+    if set(changes) - BULK_FIELDS:
+        raise CsvDataError("Bulk edits can only change supported user-editable fields.")
+    if "tags" in changes:
+        action = changes["tags"]
+        if (not isinstance(action, dict) or set(action) != {"mode", "value"}
+                or not isinstance(action["mode"], str)
+                or action["mode"] not in {"add", "remove", "replace", "clear"}
+                or not isinstance(action["value"], str)):
+            raise CsvDataError("Tags need an add, remove, replace, or clear action and a text value.")
+    if "refunded" in changes and not isinstance(changes["refunded"], bool):
+        raise CsvDataError("Refunded must be true or false.")
+    if "internalTransferTreatment" in changes and changes["internalTransferTreatment"] not in (
+        "automatic", "internal-transfer", "include-in-budget",
+    ):
+        raise CsvDataError("Unknown internal-transfer treatment.")
+    return changes
+
+
+def apply_bulk_changes(transaction: Mapping[str, Any], changes: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply explicit fields only. Validate each entire result before any write."""
+    raw = dict(transaction)
+    for field in BULK_TEXT_FIELDS & changes.keys():
+        raw[field] = changes[field]
+    if "tags" in changes:
+        action = changes["tags"]
+        incoming = [collapse_whitespace(tag) for tag in action["value"].split(",") if tag.strip()]
+        current = [tag.strip() for tag in str(raw.get("tags", "")).split(",") if tag.strip()]
+        if action["mode"] == "add":
+            raw["tags"] = ", ".join(current + incoming)
+        elif action["mode"] == "remove":
+            removed = {tag.casefold() for tag in incoming}
+            raw["tags"] = ", ".join(tag for tag in current if tag.casefold() not in removed)
+        else:
+            raw["tags"] = "" if action["mode"] == "clear" else ", ".join(incoming)
+    flags = [flag for flag in str(raw.get("flags", "")).split(",") if flag]
+    if "refunded" in changes:
+        flags = [flag for flag in flags if flag != "refunded"]
+        if changes["refunded"]:
+            flags.append("refunded")
+    if "internalTransferTreatment" in changes:
+        flags = [flag for flag in flags if flag not in {"internal-transfer", "include-in-budget"}]
+        treatment = changes["internalTransferTreatment"]
+        if treatment != "internal-transfer":
+            flags = [flag for flag in flags if not flag.startswith(transfers.PAIR_PREFIX)]
+        if treatment != "automatic":
+            flags.append(treatment)
+    raw["flags"] = ",".join(flags)
+    normalized = normalize_transaction(raw, "transaction")
+    # Never re-normalize or drop untouched fields (especially notes/timestamps).
+    result = dict(transaction)
+    for field in changes:
+        target = "flags" if field in {"refunded", "internalTransferTreatment"} else field
+        result[target] = normalized[target]
+    return result
+
+
+def validate_transaction_ids(transactions: Sequence[Mapping[str, Any]], ids: Any) -> list[int]:
+    """Validate the entire revision-local selection before any batch mutation."""
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 50_000:
+        raise CsvDataError("Select between 1 and 50000 transactions.")
+    if any(isinstance(item, bool) or not isinstance(item, int) or not 0 <= item < len(transactions) for item in ids):
+        raise CsvDataError("A selected transaction no longer exists.")
+    if len(set(ids)) != len(ids):
+        raise CsvDataError("Selected transaction IDs must be unique.")
+    return ids
+
+
+def bulk_edit_result(
+    transactions: list[dict[str, Any]], ids: Any, changes: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    changes = dict(validate_bulk_changes(changes))
+    if "group" in changes:
+        group_value = {"group": changes["group"]}
+        canonicalize_new_groups([group_value], transactions)
+        changes["group"] = group_value["group"]
+    ids = validate_transaction_ids(transactions, ids)
+    updated = list(transactions)
+    edits = []
+    for transaction_id in ids:
+        before = transactions[transaction_id]
+        after = apply_bulk_changes(before, changes)
+        changed_fields = [column for column in COLUMNS if before.get(column, "") != after.get(column, "")]
+        if changed_fields:
+            edits.append({"_id": transaction_id, "before": before, "after": after, "changedFields": changed_fields})
+        updated[transaction_id] = after
+    return updated, edits
 
 
 def normalize_imported_transaction(raw: Any, location: str) -> dict[str, Any]:
@@ -338,6 +509,38 @@ def validate_csv_columns(
     )
 
 
+def parse_ledger_import_csv(
+    content: str,
+) -> tuple[list[dict[str, Any]], int, list[dict[str, Any]]]:
+    """Parse Ledger-shaped CSV rows independently so invalid rows do not hide valid ones."""
+    if not isinstance(content, str) or not content.strip():
+        raise CsvDataError("The selected CSV is empty.")
+    reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff"), newline=""))
+    actual_columns = tuple(reader.fieldnames or ())
+    legacy_import_columns = tuple(column for column in PRE_GROUP_COLUMNS if column != "createdAt")
+    if actual_columns not in (LEDGER_IMPORT_COLUMNS, legacy_import_columns):
+        raise CsvDataError(
+            "CSV columns must exactly match: " + ",".join(LEDGER_IMPORT_COLUMNS)
+        )
+
+    valid: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    row_count = 0
+    for line_number, row in enumerate(reader, start=2):
+        if not any(value is not None and value != "" for value in row.values()):
+            continue
+        row_count += 1
+        try:
+            if None in row:
+                raise CsvDataError("row has more values than the CSV header")
+            raw = {column: row.get(column, "") for column in LEDGER_IMPORT_COLUMNS}
+            raw["createdAt"] = ""
+            valid.append(normalize_imported_transaction(raw, f"line {line_number}"))
+        except CsvDataError as exc:
+            invalid.append({"line": line_number, "error": str(exc)})
+    return valid, row_count, invalid
+
+
 def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
     """Read and validate a single, revisioned snapshot of the master CSV."""
     try:
@@ -349,7 +552,11 @@ def read_transaction_state(csv_path: Path) -> tuple[list[dict[str, Any]], str]:
         raise CsvDataError(f"could not read {csv_path}: {exc}") from exc
 
     reader = csv.DictReader(io.StringIO(text, newline=""))
-    validate_csv_columns(reader.fieldnames or (), (COLUMNS,), "transaction CSV")
+    # Accept the immediately previous schema without rewriting on read. Startup
+    # migration (with a safety snapshot) upgrades it, and old exports remain usable.
+    validate_csv_columns(
+        reader.fieldnames or (), (COLUMNS, PRE_GROUP_COLUMNS), "transaction CSV"
+    )
 
     transactions = [
         normalize_transaction(row, f"line {line_number}")
@@ -395,6 +602,38 @@ def write_transactions_atomic(csv_path: Path, transactions: list[dict[str, Any]]
         raise
 
 
+def transaction_export_csv(
+    transactions: Sequence[Mapping[str, Any]], start_date: str, end_date: str
+) -> tuple[bytes, int]:
+    """Build a re-importable Ledger CSV for an inclusive ISO date range."""
+    for value, label in ((start_date, "startDate"), (end_date, "endDate")):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value or ""):
+            raise CsvDataError(f"{label} must use YYYY-MM-DD")
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise CsvDataError(f"{label} must be a valid date") from exc
+    if start_date > end_date:
+        raise CsvDataError("startDate must be on or before endDate")
+
+    selected = [
+        transaction
+        for transaction in transactions
+        if start_date <= str(transaction.get("date", "")) <= end_date
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=LEDGER_IMPORT_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for transaction in selected:
+        row = dict(transaction)
+        row["amount"] = format(
+            Decimal(str(row["amount"])).quantize(CENT, rounding=ROUND_HALF_UP),
+            ".2f",
+        )
+        writer.writerow(row)
+    return ("\ufeff" + output.getvalue()).encode("utf-8"), len(selected)
+
+
 def initialize_csv_if_missing(csv_path: Path) -> None:
     """Create a header-only database without replacing an existing file."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -414,6 +653,166 @@ def backup_directory(csv_path: Path) -> Path:
 
 def classifications_path(csv_path: Path) -> Path:
     return csv_path.parent / "classifications.json"
+
+
+def taxonomy_path(csv_path: Path) -> Path:
+    return csv_path.parent / "taxonomy.json"
+
+
+def normalize_taxonomy(raw: Any) -> dict[str, Any]:
+    """Validate and alphabetize the user-managed category vocabulary."""
+    if not isinstance(raw, Mapping):
+        raise CsvDataError("taxonomy must be a JSON object")
+    raw_categories = raw.get("categories")
+    if not isinstance(raw_categories, list):
+        raise CsvDataError("taxonomy.categories must be a list")
+    if len(raw_categories) > 500:
+        raise CsvDataError("taxonomy cannot contain more than 500 categories")
+
+    categories: dict[str, dict[str, Any]] = {}
+    for category_index, raw_category in enumerate(raw_categories):
+        location = f"taxonomy.categories[{category_index}]"
+        if not isinstance(raw_category, Mapping):
+            raise CsvDataError(f"{location} must be an object")
+        name = raw_category.get("name")
+        if not isinstance(name, str) or not collapse_whitespace(name):
+            raise CsvDataError(f"{location}.name cannot be blank")
+        name = collapse_whitespace(name)
+        if len(name) > 500:
+            raise CsvDataError(f"{location}.name is too long")
+        category_key = name.casefold()
+        category = categories.setdefault(category_key, {"name": name, "subcategories": {}})
+
+        raw_subcategories = raw_category.get("subcategories", [])
+        if not isinstance(raw_subcategories, list):
+            raise CsvDataError(f"{location}.subcategories must be a list")
+        if len(raw_subcategories) > 500:
+            raise CsvDataError(f"{location}.subcategories cannot contain more than 500 entries")
+        for subcategory_index, raw_subcategory in enumerate(raw_subcategories):
+            subcategory_location = f"{location}.subcategories[{subcategory_index}]"
+            if isinstance(raw_subcategory, Mapping):
+                subcategory_name = raw_subcategory.get("name")
+            else:
+                subcategory_name = raw_subcategory
+            if not isinstance(subcategory_name, str) or not collapse_whitespace(subcategory_name):
+                raise CsvDataError(f"{subcategory_location} cannot be blank")
+            subcategory_name = collapse_whitespace(subcategory_name)
+            if len(subcategory_name) > 500:
+                raise CsvDataError(f"{subcategory_location} is too long")
+            category["subcategories"].setdefault(
+                subcategory_name.casefold(), subcategory_name
+            )
+
+    return {
+        "version": 1,
+        "categories": [
+            {
+                "name": category["name"],
+                "subcategories": sorted(
+                    category["subcategories"].values(), key=str.casefold
+                ),
+            }
+            for category in sorted(categories.values(), key=lambda item: item["name"].casefold())
+        ],
+    }
+
+
+def load_taxonomy(csv_path: Path) -> dict[str, Any]:
+    path = taxonomy_path(csv_path)
+    try:
+        content = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {"version": 1, "categories": []}
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CsvDataError(f"could not read {path}: {exc}") from exc
+    try:
+        return normalize_taxonomy(json.loads(content))
+    except json.JSONDecodeError as exc:
+        raise CsvDataError(f"taxonomy file contains invalid JSON: {exc}") from exc
+
+
+def taxonomy_revision(csv_path: Path) -> str:
+    try:
+        return hashlib.sha256(taxonomy_path(csv_path).read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return MISSING_CSV_REVISION
+
+
+def write_taxonomy_atomic(csv_path: Path, document: Mapping[str, Any]) -> None:
+    normalized = normalize_taxonomy(document)
+    destination = taxonomy_path(csv_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=destination.parent,
+            prefix=".taxonomy.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            json.dump(normalized, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    except BaseException:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+        raise
+
+
+def taxonomy_summary(
+    transactions: Sequence[Mapping[str, Any]], document: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Merge saved vocabulary with category pairs observed in transactions."""
+    categories: dict[str, dict[str, Any]] = {}
+    for saved_category in document.get("categories", []):
+        category = {
+            "name": saved_category["name"],
+            "transactionCount": 0,
+            "subcategories": {},
+        }
+        for subcategory in saved_category["subcategories"]:
+            category["subcategories"][subcategory.casefold()] = {
+                "name": subcategory,
+                "transactionCount": 0,
+            }
+        categories[category["name"].casefold()] = category
+
+    for transaction in transactions:
+        category_name = collapse_whitespace(str(transaction.get("category", "")))
+        if not category_name:
+            continue
+        category = categories.setdefault(
+            category_name.casefold(),
+            {"name": category_name, "transactionCount": 0, "subcategories": {}},
+        )
+        category["transactionCount"] += 1
+        subcategory_name = collapse_whitespace(str(transaction.get("subcategory", "")))
+        if not subcategory_name:
+            continue
+        subcategory = category["subcategories"].setdefault(
+            subcategory_name.casefold(),
+            {"name": subcategory_name, "transactionCount": 0},
+        )
+        subcategory["transactionCount"] += 1
+
+    return {
+        "version": 1,
+        "categories": [
+            {
+                "name": category["name"],
+                "transactionCount": category["transactionCount"],
+                "subcategories": sorted(
+                    category["subcategories"].values(),
+                    key=lambda item: item["name"].casefold(),
+                ),
+            }
+            for category in sorted(categories.values(), key=lambda item: item["name"].casefold())
+        ],
+    }
 
 
 CLASSIFICATION_MATCHER_FIELDS = (
@@ -663,6 +1062,7 @@ def classify_transactions(
                             }
                             flags.discard("internal-transfer")
                             flags.discard("include-in-budget")
+                            flags = {flag for flag in flags if not flag.startswith(transfers.PAIR_PREFIX)}
                             flags.add("internal-transfer" if value else "include-in-budget")
                             result["flags"] = ",".join(sorted(flags))
                         else:
@@ -916,6 +1316,7 @@ def merge_imported_transactions(
             else:
                 additions.append(normalized)
                 added_by_source[source] += 1
+    canonicalize_new_groups(additions, existing)
     return additions, added_by_source, skipped_by_source
 
 
@@ -924,6 +1325,7 @@ def preview_imported_transactions(
     parsed_transactions: list[dict[str, Any]],
     source: str,
     classification_matches: Sequence[bool] | None = None,
+    selected_ids: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Classify every parsed occurrence without changing the master CSV."""
     if classification_matches is not None and len(classification_matches) != len(parsed_transactions):
@@ -953,14 +1355,18 @@ def preview_imported_transactions(
                 ),
             )
         )
+    canonicalize_new_groups(preview, existing)
     candidate_transactions = list(existing)
     candidate_indexes: dict[int, int] = {}
     for transaction in preview:
-        if transaction["_isDuplicate"]:
+        if (transaction["_stagedId"] not in selected_ids if selected_ids is not None
+                else transaction["_isDuplicate"] or transaction["amount"] == 0):
             continue
         candidate_indexes[transaction["_stagedId"]] = len(candidate_transactions)
         candidate_transactions.append(transaction)
-    automatic_transfer_ids = find_internal_transfer_ids(candidate_transactions)
+    pairs = transfers.find_pairs(candidate_transactions, INTERNAL_TRANSFER_DESCRIPTION_PATTERN,
+                                 BILL_PAYMENT_WINDOW_DAYS, incoming_start=len(existing))
+    automatic_transfer_ids = {index for pair in pairs for index in pair}
     for transaction in preview:
         flags = {
             flag.strip().casefold()
@@ -989,87 +1395,88 @@ def preview_imported_transactions(
 
 
 def find_internal_transfer_ids(transactions: list[dict[str, Any]]) -> set[int]:
-    """Reconcile one-to-one movements between distinct owned accounts."""
-    entries: list[tuple[int, date, Decimal, bool, tuple[str, str, str]]] = []
-    for index, transaction in enumerate(transactions):
-        flags = {
-            flag.strip().casefold()
-            for flag in str(transaction.get("flags", "")).split(",")
-            if flag.strip()
-        }
-        if "include-in-budget" in flags:
-            continue
-        category = str(transaction["category"]).strip().casefold()
-        description = collapse_whitespace(str(transaction["description"]))
-        looks_like_transfer = (
-            category == "transfer"
-            or INTERNAL_TRANSFER_DESCRIPTION_PATTERN.search(description) is not None
-        )
-        amount = Decimal(str(transaction["amount"])).quantize(CENT, rounding=ROUND_HALF_UP)
-        transaction_date = date.fromisoformat(str(transaction["date"]))
-        account_identity = (
-            str(transaction["accountName"]).strip().casefold(),
-            str(transaction["accountType"]).strip().casefold(),
-            str(transaction["provider"]).strip().casefold(),
-        )
-        entries.append((index, transaction_date, amount, looks_like_transfer, account_identity))
-
-    candidates: list[tuple[int, int, int]] = []
-    for left_position, left in enumerate(entries):
-        left_id, left_date, left_amount, left_looks_like_transfer, left_account = left
-        for right in entries[left_position + 1:]:
-            right_id, right_date, right_amount, right_looks_like_transfer, right_account = right
-            day_distance = abs((left_date - right_date).days)
-            if (
-                left_account != right_account
-                and (left_looks_like_transfer or right_looks_like_transfer)
-                and left_amount != 0
-                and left_amount == -right_amount
-                and day_distance <= BILL_PAYMENT_WINDOW_DAYS
-            ):
-                candidates.append((day_distance, left_id, right_id))
-
-    matched_ids: set[int] = set()
-    for _day_distance, left_id, right_id in sorted(candidates):
-        if left_id in matched_ids or right_id in matched_ids:
-            continue
-        matched_ids.update({left_id, right_id})
-    return matched_ids
+    """Explicit detection only; saved-transaction reads must never call this."""
+    return {index for pair in transfers.find_pairs(
+        transactions, INTERNAL_TRANSFER_DESCRIPTION_PATTERN, BILL_PAYMENT_WINDOW_DAYS
+    ) for index in pair}
 
 
 def find_bill_payment_ids(transactions: list[dict[str, Any]]) -> set[int]:
-    """Backward-compatible name for internal-transfer reconciliation."""
+    """Backward-compatible name for explicit internal-transfer detection."""
     return find_internal_transfer_ids(transactions)
 
 
 def public_state(transactions: list[dict[str, Any]], revision: str) -> dict[str, Any]:
-    bill_payment_ids = find_internal_transfer_ids(transactions)
-    public_transactions = []
-    for index, transaction in enumerate(transactions):
-        flags = {
-            flag.strip().casefold()
-            for flag in str(transaction.get("flags", "")).split(",")
-            if flag.strip()
-        }
-        manually_excluded = "internal-transfer" in flags
-        forced_included = "include-in-budget" in flags
-        automatically_excluded = index in bill_payment_ids and not forced_included
-        is_internal_transfer = manually_excluded or automatically_excluded
-        public_transactions.append(
-            dict(
-                transaction,
-                _id=index,
-                _isBillPayment=automatically_excluded,
-                _isInternalTransfer=is_internal_transfer,
-                _internalTransferSource=(
-                    "manual" if manually_excluded else "automatic" if automatically_excluded else ""
-                ),
-            )
-        )
-    return {
-        "revision": revision,
-        "transactions": public_transactions,
-    }
+    return {"revision": revision, "transactions": [
+        transfers.public_row(transaction, index) for index, transaction in enumerate(transactions)
+    ]}
+
+
+def transfer_review_path(csv_path: Path) -> Path:
+    return csv_path.with_name(csv_path.stem + ".transfer-review.json")
+
+
+def transfer_review_required(csv_path: Path) -> bool:
+    # Read-only compatibility gate. Only an explicit full-database review clears it.
+    if not csv_path.exists():
+        return False
+    try:
+        marker = transfer_review_path(csv_path)
+        if marker.stat().st_size > 1024:
+            return True
+        return json.loads(marker.read_text(encoding="utf-8")) != {"version": 1}
+    except (OSError, ValueError):
+        return True
+
+
+def acknowledge_transfer_review(csv_path: Path) -> None:
+    destination = transfer_review_path(csv_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
+                                         prefix=".transfer-review-", delete=False) as handle:
+            temporary_name = handle.name
+            json.dump({"version": 1}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    finally:
+        if temporary_name and os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def transfer_plan(rows: list[dict[str, Any]], revision: str, incoming_start: int | None = None,
+                  *, initial_review: bool = False):
+    pairs = transfers.find_pairs(rows, INTERNAL_TRANSFER_DESCRIPTION_PATTERN,
+                                 BILL_PAYMENT_WINDOW_DAYS, incoming_start=incoming_start,
+                                 include_unpaired_exclusions=initial_review)
+    updated, pair_ids = transfers.proposal(rows, pairs, revision)
+    digest = hashlib.sha256(json.dumps(
+        {"revision": revision, "rows": updated, "pairs": pairs},
+        sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+    return updated, pair_ids, digest
+
+
+def import_transfer_review(existing, preview, revision):
+    selected = sorted((row for row in preview if row.get(
+        "_selected", not row["_isDuplicate"] and row["amount"] != 0
+    )), key=lambda row: row["_stagedId"])
+    additions = [normalize_imported_transaction(row, "review") for row in selected]
+    updated, pair_ids, digest = transfer_plan(existing + additions, revision, len(existing))
+    updates = []
+    for index in pair_ids:
+        if index < len(existing):
+            row = transfers.public_row(updated[index], index)
+            row["_existingTransferUpdate"] = True
+            updates.append(row)
+    for offset, row in enumerate(selected, start=len(existing)):
+        # Keep proposed automatic flags out of editable CSV fields until confirmation.
+        row.update({key: value for key, value in transfers.public_row(updated[offset], offset).items()
+                    if key.startswith("_") and key != "_id"})
+    return {"transferPlan": digest, "existingTransferUpdates": updates,
+            "transferPairs": len(pair_ids) // 2}
 
 
 def imported_transaction_state(
@@ -1095,7 +1502,7 @@ def imported_transaction_state(
 
     remaining = Counter(content_identity(transaction) for transaction in additions)
     public_transactions = [
-        dict(transaction, _id=index)
+        transfers.public_row(transaction, index)
         for index, transaction in enumerate(saved_transactions)
     ]
     selected: list[dict[str, Any]] = []
@@ -1148,7 +1555,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 del self.amazon_import_sessions[token]
 
     def do_GET(self) -> None:  # noqa: N802 - required by BaseHTTPRequestHandler
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
         if path in {"/upload", "/upload.html"}:
             self.send_response(HTTPStatus.PERMANENT_REDIRECT)
             self.send_header("Location", "/import")
@@ -1156,11 +1564,16 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/api/transactions/export":
+            self.get_transactions_export(parse_qs(parsed_url.query))
+            return
         if path == "/api/transactions":
             try:
                 with self.data_lock:
                     transactions, revision = read_transaction_state(self.csv_path)
-                self.send_json(HTTPStatus.OK, public_state(transactions, revision))
+                result = public_state(transactions, revision)
+                result["internalTransferReviewRequired"] = transfer_review_required(self.csv_path)
+                self.send_json(HTTPStatus.OK, result)
             except CsvFileMissingError:
                 self.send_json(
                     HTTPStatus.NOT_FOUND,
@@ -1187,6 +1600,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/classifications/export":
             self.get_classifications(export=True)
+            return
+        if path == "/api/taxonomy":
+            self.get_taxonomy()
             return
         session_match = AMAZON_IMPORT_SESSION_PATH.fullmatch(path)
         if session_match is not None:
@@ -1218,6 +1634,18 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         if ebay_session_match is not None:
             self.get_amazon_import_session(ebay_session_match.group(1), source="ebay")
             return
+        csv_session_match = CSV_IMPORT_SESSION_PATH.fullmatch(path)
+        capital_one_session_match = CAPITAL_ONE_IMPORT_SESSION_PATH.fullmatch(path)
+        if capital_one_session_match is not None:
+            self.get_amazon_import_session(capital_one_session_match.group(1), source="capitalone")
+            return
+        walmart_session_match = WALMART_IMPORT_SESSION_PATH.fullmatch(path)
+        if walmart_session_match is not None:
+            self.get_amazon_import_session(walmart_session_match.group(1), source="walmart")
+            return
+        if csv_session_match is not None:
+            self.get_amazon_import_session(csv_session_match.group(1), source="csv")
+            return
         if path in STATIC_FILES:
             self.send_static_file(STATIC_FILES[path])
             return
@@ -1227,6 +1655,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/transactions/initialize":
             self.initialize_transaction_file()
+        elif path in {"/api/transactions/bulk-preview", "/api/transactions/bulk"}:
+            self.bulk_edit_transactions(preview=path.endswith("-preview"))
+        elif path == "/api/transactions/bulk-delete":
+            self.bulk_delete_transactions()
+        elif path == "/api/transactions/staged-preview":
+            self.refresh_staged_preview()
+        elif path in {"/api/internal-transfers/preview", "/api/internal-transfers/confirm"}:
+            self.review_internal_transfers(commit=path.endswith("/confirm"))
         elif path == "/api/classifications/preview":
             self.preview_existing_transaction_classifications()
         elif path == "/api/classifications/apply":
@@ -1249,6 +1685,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.create_amazon_import_session(source="applecard")
         elif path == "/api/ebay-import-sessions":
             self.create_amazon_import_session(source="ebay")
+        elif path == "/api/walmart-import-sessions":
+            self.create_amazon_import_session(source="walmart")
+        elif path == "/api/capitalone-import-sessions":
+            self.create_amazon_import_session(source="capitalone")
+        elif path == "/api/csv-import-sessions":
+            self.create_csv_import_session()
         else:
             backup_rename_match = BACKUP_RENAME_PATH.fullmatch(path)
             if backup_rename_match is not None:
@@ -1300,6 +1742,24 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     ebay_action_match.group(1), ebay_action_match.group(2), source="ebay"
                 )
                 return
+            csv_action_match = CSV_IMPORT_ACTION_PATH.fullmatch(path)
+            capital_one_action_match = CAPITAL_ONE_IMPORT_ACTION_PATH.fullmatch(path)
+            if capital_one_action_match is not None:
+                self.update_amazon_import_session(
+                    capital_one_action_match.group(1), capital_one_action_match.group(2), source="capitalone"
+                )
+                return
+            walmart_action_match = WALMART_IMPORT_ACTION_PATH.fullmatch(path)
+            if walmart_action_match is not None:
+                self.update_amazon_import_session(
+                    walmart_action_match.group(1), walmart_action_match.group(2), source="walmart"
+                )
+                return
+            if csv_action_match is not None:
+                self.update_amazon_import_session(
+                    csv_action_match.group(1), csv_action_match.group(2), source="csv"
+                )
+                return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def initialize_transaction_file(self) -> None:
@@ -1322,6 +1782,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/classifications":
             self.put_classifications()
+            return
+        if path == "/api/taxonomy":
+            self.put_taxonomy()
             return
         match = TRANSACTION_PATH.fullmatch(path)
         if match is None:
@@ -1380,6 +1843,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             response["ignoreAliExpress"] = session.get("ignoreAliExpress", True)
             response["ignoreVenmo"] = session.get("ignoreVenmo", True)
             response["ignoreEbay"] = session.get("ignoreEbay", True)
+            response["ignoreWalmart"] = session.get("ignoreWalmart", True)
         if session.get("source") in IMPORT_ACCOUNT_DEFAULTS:
             response["accountName"] = session["accountName"]
             response["accountType"] = session["accountType"]
@@ -1405,11 +1869,13 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             ignore_aliexpress = payload.get("ignoreAliExpress", True)
             ignore_venmo = payload.get("ignoreVenmo", True)
             ignore_ebay = payload.get("ignoreEbay", True)
+            ignore_walmart = payload.get("ignoreWalmart", True)
             if source == "creditkarma" and (
                 not isinstance(ignore_amazon, bool)
                 or not isinstance(ignore_aliexpress, bool)
                 or not isinstance(ignore_venmo, bool)
                 or not isinstance(ignore_ebay, bool)
+                or not isinstance(ignore_walmart, bool)
             ):
                 raise CsvDataError("Credit Karma ignore options must be true or false")
             filter_date_range = payload.get("filterDateRange", True)
@@ -1462,6 +1928,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     ignoreAliExpress=ignore_aliexpress,
                     ignoreVenmo=ignore_venmo,
                     ignoreEbay=ignore_ebay,
+                    ignoreWalmart=ignore_walmart,
                 )
             elif account_identity is not None:
                 session.update(
@@ -1479,6 +1946,82 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         except CsvDataError as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
+    def create_csv_import_session(self) -> None:
+        try:
+            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
+            content = payload.get("content")
+            if not isinstance(content, str):
+                raise CsvDataError("CSV content is required")
+            apply_saved_classifications = payload.get("applyClassifications", True)
+            if not isinstance(apply_saved_classifications, bool):
+                raise CsvDataError("applyClassifications must be a boolean")
+            parsed_transactions, row_count, invalid_rows = parse_ledger_import_csv(content)
+
+            with self.data_lock:
+                if apply_saved_classifications:
+                    parsed_transactions, classification_matches = classify_transactions(
+                        parsed_transactions, load_classifications(self.csv_path)
+                    )
+                else:
+                    classification_matches = [True] * len(parsed_transactions)
+                if self.csv_path.exists():
+                    existing, baseline_revision = read_transaction_state(self.csv_path)
+                else:
+                    existing, baseline_revision = [], MISSING_CSV_REVISION
+                preview, new_count, duplicate_count = preview_imported_transactions(
+                    existing, parsed_transactions, "csv", classification_matches
+                )
+
+            result = {
+                "rowCount": row_count,
+                **import_transfer_review(existing, preview, baseline_revision),
+                "parsed": len(preview),
+                "invalid": len(invalid_rows),
+                "invalidRows": invalid_rows[:100],
+                "new": new_count,
+                "duplicates": duplicate_count,
+                "classificationsApplied": apply_saved_classifications,
+                "transactions": preview,
+                "sources": {
+                    "csv": {
+                        "rowCount": row_count,
+                        "parsed": len(preview),
+                        "invalid": len(invalid_rows),
+                        "new": new_count,
+                        "duplicates": duplicate_count,
+                    }
+                },
+                "revision": baseline_revision,
+            }
+            self.prune_amazon_import_sessions()
+            token = secrets.token_urlsafe(32)
+            now = time.time()
+            session: dict[str, Any] = {
+                "source": "csv",
+                "status": "review",
+                "progress": 98,
+                "message": f"Review {len(preview)} valid CSV transactions.",
+                "startDate": "",
+                "endDate": "",
+                "createdAt": now,
+                "updatedAt": now,
+                "baselineRevision": baseline_revision,
+                "stagedIds": {transaction["_stagedId"] for transaction in preview},
+                "import": result,
+            }
+            with self.amazon_import_lock:
+                self.amazon_import_sessions[token] = session
+            response = self.public_amazon_import_session(session)
+            response["token"] = token
+            self.send_json(HTTPStatus.CREATED, response)
+        except (CsvDataError, OSError) as exc:
+            status = (
+                HTTPStatus.INTERNAL_SERVER_ERROR
+                if isinstance(exc, OSError)
+                else HTTPStatus.BAD_REQUEST
+            )
+            self.send_json(status, {"error": str(exc)})
+
     def get_backups(self) -> None:
         try:
             with self.data_lock:
@@ -1488,6 +2031,39 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not list backups: {exc}"},
+            )
+
+    def get_transactions_export(self, query: Mapping[str, list[str]]) -> None:
+        start_date = query.get("startDate", [""])[0]
+        end_date = query.get("endDate", [""])[0]
+        try:
+            with self.data_lock:
+                transactions, _revision = read_transaction_state(self.csv_path)
+                body, transaction_count = transaction_export_csv(
+                    transactions, start_date, end_date
+                )
+            filename = f"ledger-transactions_{start_date}_to_{end_date}.csv"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{filename}"'
+            )
+            self.send_header("X-Ledger-Transaction-Count", str(transaction_count))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except CsvFileMissingError as exc:
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {"code": "transaction_file_missing", "error": str(exc)},
+            )
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not export transactions: {exc}"},
             )
 
     def get_import_history(self) -> None:
@@ -1616,6 +2192,55 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 {"error": f"could not load classifications: {exc}"},
             )
 
+    def get_taxonomy(self) -> None:
+        try:
+            with self.data_lock:
+                document = load_taxonomy(self.csv_path)
+                revision = taxonomy_revision(self.csv_path)
+                try:
+                    transactions, _transaction_revision = read_transaction_state(self.csv_path)
+                except CsvFileMissingError:
+                    transactions = []
+                response = taxonomy_summary(transactions, document)
+                response["revision"] = revision
+            self.send_json(HTTPStatus.OK, response)
+        except (CsvDataError, OSError) as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not load taxonomy: {exc}"},
+            )
+
+    def put_taxonomy(self) -> None:
+        try:
+            payload = self.read_json_body()
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("taxonomy revision is required")
+            normalized = normalize_taxonomy(payload)
+            with self.data_lock:
+                if taxonomy_revision(self.csv_path) != expected_revision:
+                    raise RevisionConflict(
+                        "The taxonomy changed after it loaded. Refresh and try again."
+                    )
+                write_taxonomy_atomic(self.csv_path, normalized)
+                revision = taxonomy_revision(self.csv_path)
+                try:
+                    transactions, _transaction_revision = read_transaction_state(self.csv_path)
+                except CsvFileMissingError:
+                    transactions = []
+                response = taxonomy_summary(transactions, normalized)
+                response["revision"] = revision
+            self.send_json(HTTPStatus.OK, response)
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"could not save taxonomy: {exc}"},
+            )
+
     def put_classifications(self) -> None:
         try:
             payload = self.read_json_body()
@@ -1633,7 +2258,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
     def apply_classifications_to_existing_transactions(self) -> None:
         try:
-            payload = self.read_json_body()
+            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
             if payload.get("confirm") is not True:
                 raise CsvDataError("classification confirmation is required")
             expected_revision = payload.get("revision")
@@ -1647,10 +2272,32 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "The transaction file changed after this preview was created. Review the changes again."
                     )
                 classified = apply_classifications(transactions, document)
+                allowed_override_ids = {
+                    index for index, (before, after) in enumerate(zip(transactions, classified))
+                    if classification_changed_fields(before, after)
+                }
+                overrides = payload.get("overrides", [])
+                if not isinstance(overrides, list):
+                    raise CsvDataError("classification overrides must be a list")
+                seen_override_ids = set()
+                override_rows = []
+                for override in overrides:
+                    if not isinstance(override, dict):
+                        raise CsvDataError("classification override must be an object")
+                    transaction_id = override.get("_id")
+                    if (isinstance(transaction_id, bool) or not isinstance(transaction_id, int)
+                            or transaction_id not in allowed_override_ids or transaction_id in seen_override_ids):
+                        raise CsvDataError("classification override has an invalid transaction ID")
+                    seen_override_ids.add(transaction_id)
+                    updated = normalize_transaction(override.get("transaction"), "classification override")
+                    updated["createdAt"] = transactions[transaction_id]["createdAt"]
+                    override_rows.append(updated)
+                    classified[transaction_id] = updated
+                canonicalize_new_groups(override_rows, transactions)
                 changed = sum(
                     1
                     for before, after in zip(transactions, classified)
-                    if classification_changed_fields(before, after)
+                    if any(before.get(column, "") != after.get(column, "") for column in COLUMNS)
                 )
                 backup = None
                 if changed:
@@ -1700,6 +2347,8 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     continue
                 changes.append(
                     {
+                        "beforeTransaction": dict(before, _id=index),
+                        "transaction": dict(after, _id=index),
                         "_id": index,
                         "date": before["date"],
                         "description": before["description"],
@@ -1959,6 +2608,10 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         "opening_apple_card",
                         "waiting_for_ebay",
                         "opening_ebay",
+                        "waiting_for_walmart",
+                        "opening_walmart",
+                        "opening_capitalone",
+                        "waiting_for_capitalone",
                         "scraping",
                         "importing",
                         "error",
@@ -1996,6 +2649,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     session.get("accountType", ""),
                     session.get("provider", ""),
                 )
+            warnings: list[str] = []
             if source == "creditkarma":
                 with self.amazon_import_lock:
                     session = self.amazon_import_sessions.get(token, {})
@@ -2003,12 +2657,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     ignore_aliexpress = session.get("ignoreAliExpress", True)
                     ignore_venmo = session.get("ignoreVenmo", True)
                     ignore_ebay = session.get("ignoreEbay", True)
+                    ignore_walmart = session.get("ignoreWalmart", True)
                 credit_karma = parse_credit_karma(
                     content,
                     ignore_amazon=ignore_amazon,
                     ignore_aliexpress=ignore_aliexpress,
                     ignore_venmo=ignore_venmo,
                     ignore_ebay=ignore_ebay,
+                    ignore_walmart=ignore_walmart,
                 )
                 parsed_transactions = credit_karma.transactions
             elif source == "aliexpress":
@@ -2040,6 +2696,18 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         for transaction in parsed_transactions
                         if start_date <= transaction["date"] <= end_date
                     ]
+            elif source == "walmart":
+                credit_karma = None
+                parsed_transactions, warnings = parse_walmart(
+                    content, account_identity,
+                    start_date=session["startDate"], end_date=session["endDate"],
+                )
+            elif source == "capitalone":
+                credit_karma = None
+                parsed_transactions = [
+                    transaction for transaction in parse_capital_one(content, account_identity)
+                    if session["startDate"] <= transaction["date"] <= session["endDate"]
+                ]
             elif source == "ebay":
                 credit_karma = None
                 parsed_transactions = parse_ebay(content, account_identity)
@@ -2073,6 +2741,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
 
             result = {
                 "parsed": len(preview),
+                **import_transfer_review(existing, preview, baseline_revision),
                 "new": new_count,
                 "duplicates": duplicate_count,
                 "transactions": preview,
@@ -2086,6 +2755,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 "revision": baseline_revision,
             }
             if credit_karma is not None:
+                result["sources"][source]["walmartTransactionsIgnored"] = (
+                    credit_karma.ignored_walmart_count
+                )
                 result["sources"][source]["amazonTransactionsIgnored"] = (
                     credit_karma.ignored_amazon_count
                 )
@@ -2098,9 +2770,17 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 result["sources"][source]["ebayTransactionsIgnored"] = (
                     credit_karma.ignored_ebay_count
                 )
+            if warnings:
+                result["skippedOrders"] = len(warnings)
+                result["warnings"] = warnings[:100]
             source_label = IMPORT_SOURCE_LABELS.get(source, source)
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions[token]
+                # Cancellation can arrive while the source parser is running.
+                # Never reopen that review or replace another terminal result.
+                if session["status"] in TERMINAL_IMPORT_STATUSES:
+                    self.send_json(HTTPStatus.OK, self.public_amazon_import_session(session))
+                    return
                 session.update(
                     status="review",
                     progress=98,
@@ -2115,7 +2795,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
         except (CsvDataError, ImportDataError, OSError) as exc:
             with self.amazon_import_lock:
                 session = self.amazon_import_sessions.get(token)
-                if session is not None:
+                if session is not None and session["status"] not in TERMINAL_IMPORT_STATUSES:
                     session.update(
                         status="error",
                         progress=session["progress"],
@@ -2164,7 +2844,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     )
                 )
 
-            with self.data_lock:
+            additions = [row for _, row in sorted(zip(
+                [row["_stagedId"] for row in selected], additions
+            ))]
+
+            with self.data_lock, self.amazon_import_lock:
+                session = self.amazon_import_sessions.get(token)
+                if session is None or session.get("status") != "review":
+                    raise CsvDataError("Import session is no longer awaiting review.")
                 if self.csv_path.exists():
                     existing, revision = read_transaction_state(self.csv_path)
                     if revision != baseline_revision:
@@ -2178,12 +2865,30 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         )
                     existing = []
 
+                updated, pair_ids, transfer_digest = transfer_plan(
+                    existing + additions, baseline_revision, len(existing)
+                )
+                # A transfer proposal can affect existing rows. Never accept an unseen
+                # proposal (including one changed by deselection, editing or duplicates).
+                if pair_ids and payload.get("transferPlan") != transfer_digest:
+                    raise RevisionConflict("Transfer matches changed. Review the selected transactions again before importing.")
+                if payload.get("transferPlan") is not None and payload["transferPlan"] != transfer_digest:
+                    raise RevisionConflict("The import review changed. Review it again before importing.")
+                existing_update_count = sum(index < len(existing) for index in pair_ids)
+                fresh_database = not self.csv_path.exists()
                 if additions:
+                    if not fresh_database:
+                        create_backup_copy(self.csv_path)
+                    additions = updated[len(existing):]
+                    existing = updated[:len(existing)]
+                    canonicalize_new_groups(additions, existing)
                     stamp_imported_transactions(additions)
                     existing.extend(additions)
                     existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
                     self.csv_path.parent.mkdir(parents=True, exist_ok=True)
                     write_transactions_atomic(self.csv_path, existing)
+                    if fresh_database:
+                        acknowledge_transfer_review(self.csv_path)
 
                 if self.csv_path.exists():
                     saved_transactions, saved_revision = read_transaction_state(self.csv_path)
@@ -2191,9 +2896,14 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 else:
                     saved_revision = MISSING_CSV_REVISION
                     committed = []
+                session.update(status="complete", progress=100, **{"import": {
+                    "committed": len(additions), "transactions": committed,
+                    "revision": saved_revision, "existingTransfersUpdated": existing_update_count,
+                }})
 
             result = {
                 "committed": len(additions),
+                "existingTransfersUpdated": existing_update_count,
                 "transactions": committed,
                 "revision": saved_revision,
             }
@@ -2277,7 +2987,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     existing, parsed_by_source
                 )
 
+                if transfers.find_pairs(existing + additions, INTERNAL_TRANSFER_DESCRIPTION_PATTERN,
+                                        BILL_PAYMENT_WINDOW_DAYS, incoming_start=len(existing)):
+                    raise CsvDataError("Transfer matches require staged review. Use the Import data page instead of the legacy upload endpoint.")
+
                 if additions:
+                    create_backup_copy(self.csv_path)
                     stamp_imported_transactions(additions)
                     existing.extend(additions)
                     existing.sort(key=lambda row: (row["date"], row["description"].casefold()))
@@ -2328,6 +3043,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 if action == "create":
                     created = normalize_transaction(payload.get("transaction"), "transaction")
                     created["createdAt"] = ""
+                    canonicalize_new_groups([created], transactions)
                     transactions.append(created)
                     response_status = HTTPStatus.CREATED
                 else:
@@ -2338,6 +3054,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                             payload.get("transaction"), "transaction"
                         )
                         updated["createdAt"] = transactions[transaction_id]["createdAt"]
+                        if "group" not in payload.get("transaction", {}):
+                            updated["group"] = transactions[transaction_id].get("group", "")
+                        canonicalize_new_groups([updated], transactions)
                         transactions[transaction_id] = updated
                     elif action == "delete":
                         del transactions[transaction_id]
@@ -2358,6 +3077,174 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"error": f"could not update {self.csv_path}: {exc}"},
             )
+
+    def refresh_staged_preview(self) -> None:
+        """Recheck edited import rows without changing the file or import selection."""
+        try:
+            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
+            rows = payload.get("transactions")
+            if not isinstance(rows, list) or len(rows) > 50_000:
+                raise CsvDataError("transactions must be a list of at most 50000 rows")
+            ids = [row.get("_stagedId") if isinstance(row, Mapping) else None for row in rows]
+            if any(isinstance(item, bool) or not isinstance(item, int) for item in ids) or len(set(ids)) != len(ids):
+                raise CsvDataError("Staged IDs must be unique integers")
+            if any("_selected" in row and not isinstance(row["_selected"], bool) for row in rows):
+                raise CsvDataError("Import selection must be true or false")
+            with self.data_lock:
+                if self.csv_path.exists():
+                    existing, revision = read_transaction_state(self.csv_path)
+                else:
+                    existing, revision = [], MISSING_CSV_REVISION
+                if payload.get("revision") != revision:
+                    raise RevisionConflict("The transaction file changed during review. Start the import again.")
+                selected = {index for index, row in enumerate(rows) if row.get("_selected", True)}
+                result, new, duplicates = preview_imported_transactions(
+                    existing, rows, "review", [row.get("_classificationMatched") is not False for row in rows],
+                    selected_ids=selected,
+                )
+                for row in result:
+                    row["_selected"] = row["_stagedId"] in selected
+                    row["_stagedId"] = ids[row["_stagedId"]]
+                review = import_transfer_review(existing, result, revision)
+            self.send_json(HTTPStatus.OK, {"transactions": result, "new": new, "duplicates": duplicates, **review})
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def review_internal_transfers(self, *, commit: bool) -> None:
+        """Explicit all-dates scan and revision-bound review; no writes on preview."""
+        try:
+            payload = self.read_json_body(MAX_IMPORT_REQUEST_BYTES)
+            if commit and payload.get("confirm") is not True:
+                raise CsvDataError("Explicit transfer-review confirmation is required.")
+            overrides = payload.get("overrides", [])
+            if not isinstance(overrides, list) or len(overrides) > 50_000:
+                raise CsvDataError("overrides must be a list of at most 50000 transactions")
+            with self.data_lock:
+                if self.csv_path.exists():
+                    existing, revision = read_transaction_state(self.csv_path)
+                else:
+                    existing, revision = [], MISSING_CSV_REVISION
+                if (commit or overrides or "revision" in payload) and payload.get("revision") != revision:
+                    raise RevisionConflict("The transaction file changed. Close this review and scan again.")
+                working = [dict(row) for row in existing]
+                seen = set()
+                for raw in overrides:
+                    index = raw.get("_id") if isinstance(raw, Mapping) else None
+                    if (isinstance(index, bool) or not isinstance(index, int)
+                            or index in seen or not 0 <= index < len(working)):
+                        raise CsvDataError("Invalid transaction ID in transfer review")
+                    seen.add(index)
+                    working[index] = normalize_transaction(raw, "transaction")
+                    working[index]["createdAt"] = existing[index]["createdAt"]
+                canonicalize_new_groups([working[index] for index in seen], existing)
+                updated, pair_ids, digest = transfer_plan(
+                    working, revision, initial_review=transfer_review_required(self.csv_path)
+                )
+                changes = []
+                for index, (before, after) in enumerate(zip(existing, updated)):
+                    fields = [field for field in COLUMNS if before.get(field, "") != after.get(field, "")]
+                    if fields:
+                        proposed = transfers.public_row(working[index], index)
+                        if index in pair_ids:
+                            proposed.update(_isInternalTransfer=True, _isBillPayment=True,
+                                            _internalTransferSource="automatic", _transferPair=pair_ids[index])
+                        changes.append({"_id": index, "transaction": proposed,
+                                        "before": before, "after": after, "changedFields": fields})
+                if commit:
+                    if payload.get("plan") != digest:
+                        raise RevisionConflict("The proposed transfer changes changed. Review them again before saving.")
+                    if changes:
+                        create_backup_copy(self.csv_path)
+                        write_transactions_atomic(self.csv_path, updated)
+                        updated, revision = read_transaction_state(self.csv_path)
+                    acknowledge_transfer_review(self.csv_path)
+                    result = public_state(updated, revision)
+                    result.update(changed=len(changes), transferPairs=len(pair_ids) // 2)
+                else:
+                    changed_ids = {entry["_id"] for entry in changes}
+                    result = {"revision": revision, "plan": digest, "changes": changes,
+                              "transactions": [entry["transaction"] for entry in changes],
+                              "alreadyFlagged": [transfers.public_row(row, index)
+                                                 for index, row in enumerate(existing)
+                                                 if index not in changed_ids
+                                                 and "internal-transfer" in transfers.flags(row)],
+                              "transferPairs": len(pair_ids) // 2,
+                              "initialReview": transfer_review_required(self.csv_path)}
+            self.send_json(HTTPStatus.OK, result)
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+    def bulk_delete_transactions(self) -> None:
+        try:
+            payload = self.read_json_body()
+            if payload.get("confirm") is not True:
+                raise CsvDataError("Explicit bulk-delete confirmation is required.")
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("revision is required")
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                if revision != expected_revision:
+                    raise RevisionConflict("The transaction file changed. Cancel and reload the page before selecting transactions again.")
+                ids = set(validate_transaction_ids(transactions, payload.get("ids")))
+                # IDs refer to row occurrences, never date/amount or description matches.
+                # Keep every unselected row and its persisted flags/timestamp unchanged.
+                remaining = [row for index, row in enumerate(transactions) if index not in ids]
+                backup = create_backup_copy(self.csv_path)
+                write_transactions_atomic(self.csv_path, remaining)
+                remaining, revision = read_transaction_state(self.csv_path)
+                result = public_state(remaining, revision)
+                result.update(deleted=len(ids), backup=backup, imports=import_history(remaining))
+            self.send_json(HTTPStatus.OK, result)
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvFileMissingError as exc:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Could not delete selected transactions: {exc}"})
+
+    def bulk_edit_transactions(self, *, preview: bool) -> None:
+        try:
+            payload = self.read_json_body()
+            if not preview and payload.get("confirm") is not True:
+                raise CsvDataError("Explicit bulk-edit confirmation is required.")
+            expected_revision = payload.get("revision")
+            if not isinstance(expected_revision, str) or not expected_revision:
+                raise CsvDataError("revision is required")
+            with self.data_lock:
+                transactions, revision = read_transaction_state(self.csv_path)
+                if revision != expected_revision:
+                    raise RevisionConflict("The transaction file changed. Close this review and refresh before selecting transactions again.")
+                updated, edits = bulk_edit_result(transactions, payload.get("ids"), payload.get("changes"))
+                if preview:
+                    result = {"revision": revision, "changed": len(edits), "changes": edits}
+                else:
+                    backup = None
+                    if edits:
+                        backup = create_backup_copy(self.csv_path)
+                        write_transactions_atomic(self.csv_path, updated)
+                        updated, revision = read_transaction_state(self.csv_path)
+                    result = public_state(updated, revision)
+                    result.update(changed=len(edits), backup=backup)
+            self.send_json(HTTPStatus.OK, result)
+        except RevisionConflict as exc:
+            self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+        except CsvFileMissingError as exc:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
+        except CsvDataError as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+        except OSError as exc:
+            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Could not save bulk changes: {exc}"})
 
     def send_json(self, status: HTTPStatus, payload: Mapping[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -2385,7 +3272,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, message_format: str, *args: object) -> None:
         message = message_format % args
         message = re.sub(
-            r"(/api/(?:amazon|creditkarma|aliexpress|venmo|applecard|ebay)-import-sessions/)[A-Za-z0-9_-]{32,}",
+            r"(/api/(?:amazon|creditkarma|aliexpress|venmo|applecard|ebay|walmart|capitalone|csv)-import-sessions/)[A-Za-z0-9_-]{32,}",
             r"\1[redacted]",
             message,
         )

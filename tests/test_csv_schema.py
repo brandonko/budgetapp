@@ -12,6 +12,8 @@ sys.path.insert(0, str(APP_DIR))
 
 from server import (  # noqa: E402
     COLUMNS,
+    COMPATIBLE_COLUMNS,
+    PRE_GROUP_COLUMNS,
     CsvDataError,
     migrate_transaction_schema,
     read_backup_transactions,
@@ -20,6 +22,42 @@ from server import (  # noqa: E402
 
 
 class CsvSchemaTests(unittest.TestCase):
+    def test_current_and_pre_group_reads_preserve_bytes_and_group_values(self):
+        for columns in (COLUMNS, PRE_GROUP_COLUMNS):
+            with self.subTest(columns=columns):
+                path = self.root / ("current.csv" if columns == COLUMNS else "pre-group.csv")
+                row = dict.fromkeys(columns, "")
+                row.update(date="2026-09-01", description="Synthetic purchase", amount="12.34",
+                           category="Shopping", accountName="Demo", accountType="BANK", provider="Demo")
+                if "group" in row:
+                    row["group"] = "Demo project"
+                with path.open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=columns)
+                    writer.writeheader()
+                    writer.writerow(row)
+                original = path.read_bytes()
+                transactions, revision = read_transaction_state(path)
+                self.assertEqual(transactions[0]["group"], row.get("group", ""))
+                self.assertEqual(read_backup_transactions(path)[0]["group"], row.get("group", ""))
+                self.assertEqual(path.read_bytes(), original)
+                self.assertTrue(revision)
+                self.assertEqual(migrate_transaction_schema(path), columns != COLUMNS)
+                migrated, _ = read_transaction_state(path)
+                self.assertEqual(migrated, transactions)
+                if columns != COLUMNS:
+                    backups = list((self.root / "backups").glob("*.csv"))
+                    self.assertEqual(len(backups), 1)
+                    self.assertEqual(backups[0].read_bytes(), original)
+
+    def test_every_supported_legacy_header_remains_accepted_for_restore_and_migration(self):
+        for index, columns in enumerate(COMPATIBLE_COLUMNS):
+            with self.subTest(columns=columns):
+                path = self.root / f"legacy-{index}.csv"
+                self.write_header(path, columns)
+                self.assertEqual(read_backup_transactions(path), [])
+                self.assertEqual(migrate_transaction_schema(path), columns != COLUMNS)
+                self.assertEqual(read_transaction_state(path)[0], [])
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)

@@ -29,10 +29,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The twelve persisted columns, in order, are:
+- The thirteen persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,flags,createdAt
+  date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt
   ```
 
 - Require the exact ordered current header before reading or writing the master
@@ -51,33 +51,47 @@ third-party Python dependency unless a future requirement clearly justifies it.
   label, discard blanks, and deduplicate case-insensitively while preserving the
   first spelling and order. A comma is therefore the tag delimiter and is not
   part of an individual tag.
+- Never expose that comma-separated storage format as the primary transaction-editor
+  interaction. Use the shared tag picker in every transaction editor: show all tags
+  currently present in the master CSV as stable alphabetized toggle buttons, include
+  tags from the current staged import, and highlight selected tags. End the list with
+  a visually distinct dashed control containing a new-tag text input and `+` action.
+  Creating a tag selects it immediately, case-insensitive matches select the existing
+  spelling, commas are rejected, and Enter behaves like the `+` action without
+  submitting the transaction form. A new tag is not durable until its enclosing
+  transaction edit or import is confirmed; all cancel paths discard it.
 
-## Backups
+## Exports and safety backups
 
-- Settings is organized as accessible tabs; **Backup** is the first tab.
+- Settings is organized as accessible tabs; **Exports** is the first tab.
+- The Exports tab lets the user choose an inclusive start and end date, shows
+  the matching transaction count, and downloads a CSV using the exact Ledger
+  import schema without `createdAt`. Default a newly loaded form to the earliest
+  and latest dates in the current database. Disable export for invalid or empty
+  ranges. Prefer the browser save-file picker when available and use a normal
+  CSV download fallback.
+- **Settings → Preferences** owns browser-local display preferences. Dark mode is
+  an explicit, persistent toggle shared by every page. Apply the saved theme
+  before the stylesheet loads to avoid a light-theme flash, keep native controls
+  in the matching `color-scheme`, and preserve WCAG AA text contrast in both palettes.
+- Let the user choose the first magnitude abbreviated in dashboard summary totals:
+  None, K, M, B, or T. Default to M. Once enabled, use the natural suffix for each
+  larger magnitude through T, then scientific notation above trillions. None keeps
+  exact currency formatting at every magnitude. Preserve the exact value in the
+  summary's accessible text and tooltip regardless of visual formatting.
 - Store app-managed snapshots in `data/backups/` with timestamped
   `transactions_<timestamp>.csv` filenames.
-- List every regular CSV placed directly in `data/backups/`, regardless of its
-  filename. Order backups newest first by last-modified date and show their
-  validated transaction count. Accept the current schema and compatible older
-  seven- through eleven-column Ledger schemas without modifying the backup file. Never follow symlinks or
-  allow nested paths.
-- Restoring a backup completely replaces the canonical CSV only after explicit
-  user confirmation. Create a safety backup of the current file immediately
-  before every restore, and perform the replacement atomically.
-- Allow permanent deletion of an individual backup only after explicit user
-  confirmation. Never let backup deletion affect the active CSV, other backups,
-  symlinks, or nested paths.
-- Allow backups to be renamed to any safe local CSV filename. Never overwrite
-  another backup during a rename, and keep renamed files discoverable by their
-  last-modified date.
+- Keep automatic safety snapshots for destructive or bulk transaction mutations,
+  but do not present the backups directory as the primary user-facing workflow.
 - Keep backups private and ignored by Git together with the rest of `data/`.
 
 ## Import history
 
 - Settings includes an **Import history** tab that groups persisted imported
   rows by `createdAt`, newest first, and displays each batch's remaining row
-  count.
+  count. Paginate this list at exactly five import batches per page with
+  accessible Previous and Next controls. Clamp the current page after refresh
+  or deletion so an empty trailing page is never shown.
 - Every import commit path stamps all newly added rows with one shared
   `createdAt` value. Previewing or cancelling an import never assigns one.
 - Removing an import batch requires confirmation and the current CSV revision,
@@ -90,15 +104,36 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Keep exactly two category levels for now: required `category` and optional
   `subcategory`. Do not introduce arbitrary-depth category trees without a new
   product decision.
-- Dashboard cards, annual charts, and the annual breakdown table can group by
-  top-level category or by user-defined tag. Opening a category surfaces
+- Keep a visual taxonomy manager under **Settings → Taxonomy**. Merge category and
+  subcategory values derived from current transactions with manually created values
+  stored atomically in `data/taxonomy.json`. New saved values must remain available
+  even when no transaction uses them yet, and should feed transaction-editor
+  suggestions. Display top-level categories as parent cards with nested subcategory
+  chips and transaction counts, support search across both levels, alphabetize the
+  hierarchy, and reject case-insensitive duplicates. Taxonomy creation does not
+  reclassify existing transactions; classifications remain the mechanism for bulk
+  transaction changes. Provide an on-by-default toggle that hides categories with
+  no subcategories, and combine it with taxonomy text search when both are active.
+- Create taxonomy values inline rather than in dialogs. End every category's chip
+  list with a dashed subcategory name-and-plus control, and end the category grid
+  with a dashed category card using the same interaction. Both controls submit by
+  clicking plus or pressing Enter and reject case-insensitive duplicates in place.
+- Let users delete categories and subcategories only when their transaction count
+  is zero. Require explicit confirmation, remove only the saved taxonomy value,
+  and never mutate transactions as a side effect. Keep in-use delete controls
+  disabled with an explanation that those transactions must be reclassified first.
+- Dashboard cards, annual charts, and the annual breakdown table can use
+  top-level categories or a user-defined tag query. Opening a category surfaces
   subcategory dollar totals and permits filtering; blank subcategories are
-  labeled **Unclassified** in the UI. Tag grouping is flat, labels blank-tag
-  rows **Untagged**, and ignores category entirely.
-- A transaction with multiple tags contributes its full budget amount to every
-  applicable tag. Tag totals can overlap and must not be presented as additive
-  parts of a grand total. Classification rules do not set tags for now; tags are
-  explicitly user-managed transaction metadata.
+  labeled **Unclassified** in the UI.
+- Tag queries accept multiple tags with **Match any** (logical OR) or **Match
+  all** (logical AND). Deduplicate the result by transaction before calculating
+  its count or total. Individual tag overview totals may overlap and must be
+  explicitly described as non-additive. Classification rules do not set tags
+  for now; tags are explicitly user-managed transaction metadata.
+- Label blank-tag rows **Untagged**. Allow Untagged in an OR query, but disable
+  Match all when Untagged is selected with any real tag because no transaction
+  can satisfy that expression.
 - Store alphabetically ordered import classifications in `data/classifications.json`, beside
   the canonical CSV. Keep the file private through the existing `data/` ignore
   rule and expose an explicit JSON export action on the dedicated Classifications page.
@@ -166,8 +201,10 @@ third-party Python dependency unless a future requirement clearly justifies it.
   with a blank subcategory. Use the shared transaction row and compact
   search/filter/sort toolbar. Show **Internal transfer** on excluded rows and
   **No rule matched** on the remaining rows, while preserving refund and custom
-  tag badges. Keep the user on Classifications and preserve any draft when the
-  modal closes.
+  tag badges. Hide internal transfers by default and provide an
+  **Internal transfer** visibility toggle, consistent with the import-review
+  transaction-type toggles, so the user can reveal them when needed. Keep the
+  user on Classifications and preserve any draft when the modal closes.
 
 ## Privacy
 
@@ -202,23 +239,40 @@ on it. Translate it for people in the interface:
 
 ## Dashboard periods
 
-- The home page supports `Monthly` and `Annual` views.
+- The home page supports `Monthly`, `Annual`, and `Year over year` views.
 - Default to the latest month containing a budget-visible transaction.
 - Monthly view has independent month and year selectors. Annual view has a year
-  selector and summarizes the full selected year.
+  selector and summarizes the full selected year. Year-over-year view has a
+  start year and end year, plus individual year toggles for choosing which lines
+  remain visible inside that range.
 - Changing the period updates summaries, category cards, charts, and dialogs
   together.
-- Persist the selected view mode, year, month, breakdown dimension, and annual category/subcategory
-  filter in the browser so dashboard context survives navigation to any primary page.
+- Persist the selected view mode, year, month, year-comparison start year,
+  selected comparison years, comparison metric/chart mode, breakdown
+  dimension, and annual category/subcategory filter in the browser so dashboard
+  context survives navigation to any primary page.
   Validate restored values against the current transaction data and fall back
   safely when a saved selection is no longer available.
 - Let users switch the monthly and annual spending breakdown between **By
-  category** and **By tag**. Keep the selected dimension synchronized between
-  views and persist it across navigation.
+  category** and **By tag**. Keep the selected dimension, selected tags, and
+  Any/All match mode synchronized between views and persist them across navigation.
+- In Monthly and Annual **By tag**, the three headline spending/income/net cards
+  use the same selected-tag query within that period, including tagged income.
+  Count each matching occurrence once even when tags overlap; preserve negative
+  expense credits and zero-value refund/internal-transfer treatment. No selected
+  tags or no matches means zero totals, never an unfiltered fallback. Switching
+  to By category restores full-period totals. Keep the odometer animations and
+  accessible exact values in sync with these filtered amounts. Tag-picker search
+  only narrows the available buttons, not the current query or summary.
+- Keep the shared Tag Explorer inside the active breakdown section so switching
+  dimensions does not insert or remove a card between major dashboard sections.
+  In monthly view it sits directly below the breakdown heading; in annual view
+  it sits directly below **A year at a glance**.
 - In category mode, render one card for every visible category, including
-  unmatched `Transfer` transactions. In tag mode, render a card for each tag
-  plus **Untagged** when needed.
-- A category or tag card shows its transaction count and net total.
+  unmatched `Transfer` transactions. In monthly tag mode, the Tag Explorer is
+  the complete breakdown: do not render category cards or add a secondary
+  category drill-down beneath it. Tag-selection buttons replace tag cards.
+- A category card shows its transaction count and net total.
 - Opening a category shows dollar totals for its subcategories. Transactions
   without a subcategory are presented as **Unclassified**.
 - Clicking a category opens its transactions in a modal.
@@ -226,21 +280,55 @@ on it. Translate it for people in the interface:
   shows annual dollar totals. Selecting a category redraws the same monthly
   chart as subcategory stacks; selecting a subcategory isolates it. Use a
   breadcrumb and **Back to categories** action for upward navigation.
-- In tag mode, the annual spending chart is stacked by tag, its legend filters
-  to one tag, and the annual table has flat tag rows without subcategory
-  expansion. Keep the monthly net chart unchanged.
+- In tag mode, never stack tags because a transaction can belong to several of
+  them. Require a tag selection, render one combined monthly bar from the unique
+  query result, and show a monthly table with matching counts and unique spending
+  plus an annual total. Keep the monthly net chart unchanged.
+- Do not render the monthly category-card section at the bottom of annual view;
+  the annual charts and exact-value table are the complete annual breakdown.
 - Include an expandable exact-dollar annual table below the spending chart.
   Category rows show January through December plus annual totals; expanding a
   row reveals its subcategories, including **Unclassified**. Keep the first
   column sticky and allow horizontal scrolling on narrow screens.
 - Annual view includes a zero-centered monthly net chart. Months with positive
-  net totals are green; months with negative net totals are red.
+  net totals are green; months with negative net totals are red. Preserve each
+  month's current visual bar height before annual chart rerenders, then animate
+  spending stacks and net bars to their new normalized heights. Category,
+  subcategory, tag, and year changes must not snap the bars to their new values.
+- Year-over-year view uses a line chart with January through December on the X
+  axis and dollars on the Y axis. Let users switch between cumulative totals and
+  independent monthly values, as well as Spending, Income, and Net total. Morph
+  existing lines and points between modes with a short eased animation. This
+  small, user-triggered morph intentionally runs even when the browser reports
+  `prefers-reduced-motion`; persist the selected chart mode. Default to the newest
+  three years inside the selected
+  range when no saved selection remains valid; never allow every year to be
+  deselected.
+- Year-over-year comparisons always let each line continue through its own
+  latest imported month. Never project future values or turn unavailable months
+  into zero activity.
+- Show exact cumulative or independent monthly values (matching the chart mode),
+  period totals, changes from the prior selected year, and the newest year's
+  monthly average. A spending or income
+  point opens that month's matching transaction type in the shared dashboard
+  dialog; a net point opens all budget-visible transactions for that month.
+- Exclude refunded and internal-transfer values from all comparison math using
+  the same zero-value rules as Monthly and Annual views. Keep excluded internal
+  transfers available through the dedicated review action for the full range.
 - Provide a **View all transactions** action for the selected period.
+- A **Today** button in the dashboard header switches any view to Monthly with
+  the device's current local month/year, computed on click (not at page load).
+  Permit the current year even without imported rows and persist that selection.
+  Keep the initial default as the latest budget-visible transaction month. Do
+  not reset tag/category display preferences. Disable Today during data loading
+  or error/setup states so it cannot bypass the required transfer review.
+  Match its height and type size to the adjacent period dropdowns through shared
+  responsive sizing; keep their edges aligned without a hover lift.
 - All transaction-list dialogs default to date, latest first. Provide the shared
   sort control everywhere transactions are reviewed: Date, Description, or Cost,
   each ascending or descending. Cost sorting uses the absolute stored amount so
   expenses, credits, and income compare by dollar magnitude.
-- Keep the dashboard transaction toolbar compact: description search and a
+- Keep the dashboard transaction toolbar compact: description/notes search and a
   plain-language combined sort menu remain visible; category/subcategory and
   tag and account/provider live in a Filters popover. Keep category and subcategory
   adjacent, limit subcategory choices to the selected category, show an active
@@ -249,19 +337,182 @@ on it. Translate it for people in the interface:
   match tag names case-insensitively. On narrow screens,
   stack each related pair and keep the popover within the modal.
 - The interface must remain responsive and usable on desktop and mobile.
+- Reserve a stable document scrollbar gutter so navigating between short and
+  long pages does not shift centered layouts horizontally.
+- Animate the Monthly and Annual **Total spent**, **Total income**, and **Net
+  total** values as mechanical odometer reels whenever the dashboard period is
+  rerendered. Keep currency punctuation stationary, roll each digit vertically,
+  and preserve an exact nonanimated currency value for assistive technology.
+- Use the browser's color-scheme preference only when no Ledger preference has
+  been saved. After the user chooses Light or Dark, that explicit selection must
+  control the complete palette; never leave an OS-level media query active that
+  can mix light and dark design tokens.
+- Define visualization colors as ordered theme tokens (`--viz-1` through
+  `--viz-12`). Use the shared identity-based `createSeriesColorSlots` allocator,
+  not a display-order index or label hash. Keep active groups, years, categories
+  and subcategories in their existing slots when items are added, removed or
+  reordered. New selections get the first available palette color; released
+  slots may be reused, but never compact or recolor surviving selections.
+  Start with the most distinguishable colors before secondary shades. Retain
+  assignments across navigation in browser-local preferences, storing slots
+  rather than literal colors so theme changes use the appropriate palette.
+  Sync the full active set, not a search-filtered or individually drawn subset.
+  Tag Explorer remains one combined series with its existing color; do not split
+  overlapping tags into additive stacks. Each theme
+  must provide the complete palette with at least 3:1 contrast against its
+  surface; keep the palette uniqueness and primary-distance regression checks.
+
+### All-time Transactions dashboard
+
+- Keep **Transactions** as a primary destination at `/transactions`, separate
+  from the period-based dashboard. Default to the entire transaction history
+  with no date limits, and allow optional inclusive start/end dates.
+- Support description/notes search, category/subcategory, account/provider, and
+  multiple tags with Any/All matching. Combined tag results count each
+  transaction exactly once, including when tags overlap.
+- On Transactions, the tag picker and Any/All mode belong inside the existing
+  Filters popover, not a separate toolbar or nested popover. Tags use the same
+  immediate-update behavior as the other filters; closing the popover keeps
+  selections. Include tags in the active-filter count and removable
+  chips, and display the AND/OR mode beside chips when multiple tags are active.
+  Let tag buttons wrap to their full height; only the outer Filters popover
+  scrolls. Do not add a capped-height or independently scrolling tag list.
+- Do not show Refresh or Apply filters buttons on Transactions. Filter selections,
+  tag modes, and Reset update results/totals locally and persist immediately,
+  without refetching transactions on each change. Keep the last valid date range
+  during incomplete/reversed date entry and show an inline validation message.
+- Groups are a separate optional `group` CSV field: at most one group per
+  transaction, independent of multiple tags. Tags describe reusable topics;
+  groups describe trips or projects which may receive later transactions.
+  Do not automatically convert or remove legacy `(group)` tags.
+- Use the shared searchable group picker in every transaction editor. Offer
+  existing names, No group to clear membership, and inline creation. Collapse
+  whitespace, enforce a 100-character limit, and reuse existing names
+  case-insensitively on both client and server. Creating a group stays staged until
+  the enclosing transaction/review is saved; there is no independent group database.
+- Render a distinct group badge with a squared, left-accented style, separate
+  from tag pills. Provide a shared group filter including All groups and No group.
+  On the all-time page it filters summaries/category breakdowns as well as rows.
+- Show spending, income, and net totals plus the category spending breakdown
+  for the complete filtered result, using existing refund/internal-transfer
+  treatment. Paginate the result list at 50 rows; pagination never changes totals.
+- Reuse shared transaction rows, the compact Filters/sort toolbar, and the
+  transaction editor. Keep filters and context when editing returns to the page.
+
+### Group comparison on Transactions
+
+- Keep **Transactions** and **Compare groups** as two modes of the same page.
+  Comparison is a read-only local view with its own group/date scope, independent
+  of the browse description, tags, category and account filters. Persist the
+  comparison separately in `ledger.group-comparison.v1`; never mutate the CSV
+  while selecting groups, dates, a reference group, or a category drilldown.
+- Allow two to four searchable, case-insensitively unique groups. One selected
+  group may show its details while prompting for another. Do not infer group
+  membership from legacy tags. Retain removed selected names as empty groups
+  rather than silently comparing a different group.
+- Use cent-based aggregation from `transactions-model.js`. Show spending less
+  credits, excluding refunded/internal-transfer rows, and show income separately.
+  Preserve occurrence counts. Distinguish missing activity (dash) from genuine
+  zero totals. Show inclusive date scope, actual recorded activity spans, and
+  dollar-only differences against a user-selectable reference; no percentages.
+- Reuse the first four distinct theme visualization tokens consistently for
+  chips, cards, common-scale horizontal spending bars, and category-table cells.
+  Persist each selected group's slot in the comparison preferences. Removing
+  an earlier group or adding an alphabetically earlier one must not recolor
+  the other groups; the new group receives the first free slot. Each
+  category uses a common scale across its group cells; support negative credits,
+  blank categories, many categories, long group names, light/dark and narrow views.
+- Drilldown delegates to the existing full-page transaction list and shared
+  editor/bulk tools, not another independently implemented modal. Temporarily
+  scope it to the chosen group, comparison dates and optional category. Back to
+  comparison restores the previous browse query; successful edits/deletes
+  recompute comparison totals. Keep the internal-transfer setup gate intact.
 
 ### Shared transaction-modal contract
 
 - Treat every modal that presents a transaction collection as a variant of one
   shared transaction-list experience. This includes dashboard transaction
   lists, post-import review, import history, classification previews, and
-  **Review unclassified**.
+  **Review unclassified**. The full-page Transactions list follows the same core
+  contract while adding its all-time query, summaries, and pagination.
 - Keep the core structure and behavior synchronized across those variants:
-  shared transaction rows and badges, description search, the Filters popover,
+  shared transaction rows and badges, description/notes search, the Filters popover,
   category/subcategory pairing, tag/account/provider filters, active-filter
   chips, and the combined sort control. Reuse helpers from
   `app/transaction-ui.js` instead of independently recreating row or sort
   behavior.
+- All transaction search bars use the same literal, case-insensitive matcher
+  from `transactions-model.js`, exposed by `transaction-ui.js`. A row matches
+  when either its description or notes contains the query; count it once if
+  both match. Collapse whitespace for matching (including multiline notes),
+  but never rewrite stored notes. Blank queries include all rows and missing
+  notes are empty. Retain the legacy `description` filter-state key for saved
+  views; label the UI Search with a descriptions-and-notes placeholder. This
+  does not change classification regex matchers or their rule-note semantics.
+- Group belongs inside each list's **Filters** popover, with All groups and No
+  group choices, live filtering/Reset behavior, and an active-filter indicator. Keep its
+  state with the page's other filters so Clear all and returning from edits work.
+  Do not introduce a separate group-filter toolbar. Reuse the group helpers in
+  `app/transaction-ui.js` for consistent names and matching.
+- All shared transaction filter popovers apply each selection and Reset immediately,
+  without an Apply filter button or closing after a selection. Use the shared
+  `bindLiveTransactionFilters` helper after dependency/reset handlers are wired.
+  Closing does not revert valid filters. This is read-only view state, entirely
+  separate from explicit import/classification/bulk-edit confirmation.
+- Put **Edit multiple** in the modal header directly beneath its close button;
+  on the full Transactions page, put it in the results header. Show selection
+  controls only after entering edit mode, and use **Done editing** to leave it.
+- Keep each row's **Edit** button available alongside bulk selection, including
+  Review unclassified. Both Save and every cancel path return to the originating
+  list with its filters/sort and classification drafts intact. A saved revision
+  change resets bulk selection; cancellation preserves it. When an edited row
+  gains a subcategory, remove it from the unclassified results. Settings history,
+  transfer reviews and unclassified rows share one single-editor controller in
+  `settings.js` and the field/picker/flag helpers in `transaction-ui.js`; keep the
+  matching editor fields in `settings.html` and `classifications.html` in sync.
+  Explicitly read-only proposal rows remain read-only, and import/transfer edits
+  stay staged until the source review is confirmed.
+- Use `app/transaction-bulk.js` for selection, explicit bulk
+  actions, and the shared bulk-edit dialog. Each list integrates it with small
+  data/revision/save adapters; never fork its editor for an individual page.
+- Bulk selection is opt-in through Edit multiple. Select visible means only the
+  currently shown rows (current page on Transactions). Preserve selection through
+  filters/sorting and report hidden selected counts; reset when the underlying
+  revision changes or a different collection opens. Import inclusion selection
+  is independent: temporarily swap row checkboxes during bulk selection and disable
+  final import confirmation until bulk selection ends.
+- Shared transaction checkboxes support Shift-click ranges for both bulk-action
+  selection and staged import inclusion, using separate anchors and occurrence
+  IDs. Apply the clicked checkbox's new state to the inclusive visible range
+  from the last clicked checkbox, in displayed sort order. Never include hidden
+  rows or other pages. Reset the anchor on a changed visible order, collection,
+  revision, selection mode, Select visible, or Clear selection. Re-rendering the
+  same rows retains it. Apply the entire range in one UI update (one import
+  revalidation), without committing edits, imports, or deletions.
+- Bulk actions explicitly set only chosen user-editable fields. Offer tag Add,
+  Remove, Replace, and Clear; preserve other tags for Add/Remove, unknown flags,
+  untouched fields, and immutable createdAt. Dates and amounts may be set here
+  (unlike automatic classifications), with explicit sign/same-value guidance.
+- Require a before/after review and explicit confirmation. Existing-row edits
+  validate the entire batch against one revision, create a safety snapshot,
+  and atomically write once; invalid/stale batches and no-ops write nothing.
+  Import and classification-preview bulk edits update only staged data. Their
+  final source confirmation remains the sole durable-write action. Every cancel,
+  close, Escape, and backdrop path discards the bulk draft.
+- Offer **Delete selected** beside Edit selected for saved transactions in the
+  dashboard, all-time list, import history, and Review unclassified. Disable it
+  for an empty selection. The shared confirmation lists every selected row,
+  explicitly counts selections hidden by filters/pagination, and focuses Cancel.
+  Cancel, X, Escape and backdrop dismissal preserve the rows and selection.
+  Confirm deletes exact row occurrences in one revision-checked, locked atomic
+  write after a safety backup; never loop over single-row delete requests or
+  delete by date/amount. Preserve unselected rows, timestamps and transfer flags.
+  Refresh summaries, pagination and import-history counts from the resulting
+  state. Stale/invalid batches and failed backups must write nothing.
+- Do not expose durable deletion from staged import, classification-application,
+  or transfer reviews. Import rows are omitted by unchecking inclusion; keep
+  them visible for review rather than removing them. Saved rows can be deleted
+  from their normal transaction lists after closing a staged proposal.
 - Page-specific behavior is additive and must not fork or replace the shared
   experience. For example, import review adds selection checkboxes, duplicate
   detection, New/No rule matched/Duplicate visibility toggles, and commit/cancel
@@ -278,10 +529,10 @@ on it. Translate it for people in the interface:
 - The Ledger brand links to the dashboard home page.
 - On the dashboard, center the view/year/month reporting controls in the header.
 - Keep page-level destinations in the top-right hamburger menu: Dashboard,
-  Import data, and Settings.
+  Transactions, Import data, Classifications, and Settings.
 - Use the same menu across pages, clearly mark the current page, close it on an
   outside click or Escape, and return focus to the menu button after Escape.
-- Organize Settings as accessible tabs, beginning with Backup. Add future user
+- Organize Settings as accessible tabs, beginning with Exports. Add future user
   preferences there instead of adding unrelated controls to the dashboard or
   import page.
 
@@ -290,8 +541,9 @@ on it. Translate it for people in the interface:
 Do not exclude the entire `Transfer` category. Venmo, Zelle, and other unmatched
 transfers may be legitimate expenses or incoming money.
 
-Under the default Automatic treatment, exclude only reconciled credit-card
-bill-payment pairs. The current rule is:
+Internal-transfer treatment is a durable decision, not a read-time calculation.
+Never run reconciliation from `public_state`, transaction GETs, dashboards, or
+other rendering paths. Imports and an explicit Settings scan propose pairs using:
 
 1. At least one row has category `Transfer`, case-insensitively, or a description
    that looks like a transfer or account payment. The other row may retain any
@@ -303,13 +555,56 @@ bill-payment pairs. The current rule is:
    covers both bill payments and credit-balance refunds back to a bank account.
 4. Their posting dates are no more than five calendar days apart.
 5. Matching is one-to-one, choosing the closest-date candidates first.
-6. Reconciliation runs against the complete database, not only the selected
-   month, so pairs can cross month boundaries.
+6. Settings scans the complete database. Imports match only selected incoming
+   occurrences against each other and existing eligible rows, across month/year
+   boundaries. Never rematch already flagged rows or consume one side twice.
 
 An `internal-transfer` flag always excludes a row. An `include-in-budget` flag
-prevents automatic reconciliation and forces the row to count normally. With
-neither flag, the automatic rule applies. The shared transaction editor exposes
-these states as Automatic, Internal transfer, and Count normally.
+prevents detection and forces the row to count normally. With neither flag, the
+row counts normally and is eligible for future detection. The shared editor
+exposes Eligible for detection, Internal transfer, and Count normally.
+
+Confirmed automatic pairs also share a reserved `transfer-pair-<digest>` flag
+inside the existing flags column; no new CSV columns are required. This preserves
+automatic provenance and pairing identity across sorting and edits. Manual and
+classification overrides win. Returning a row to an eligible/forced-included
+state removes its pair metadata; its previously paired counterpart remains
+excluded until explicitly corrected. Editing descriptions or deleting a
+counterpart must not silently change an already saved exclusion.
+
+Import proposals must show existing counterpart rows that will be flagged,
+not just incoming rows. Recompute proposals after edits, checkbox changes, and
+force-including duplicates. Bind confirmation to both the CSV revision and the
+exact reviewed transfer plan; reject stale/unseen matches. Save selected incoming
+rows and reviewed existing-side flags in one atomic write, with a safety backup
+for an existing database. Keep existing createdAt and all unrelated fields intact.
+All cancel paths write nothing; discard stale asynchronous preview responses.
+
+Settings → Internal transfers provides Find internal transfers and a staged
+review using the same transaction modal, filters, sort and bulk/single editor as
+import history. It displays before/after changes, requires explicit confirmation,
+and makes a safety backup before writing. A no-op scan must not rewrite the CSV.
+Keep the Settings card compact: explain matching, confirmation, and legacy-data
+reviews in the shared expandable info-panel style used by Import and Classifications.
+The review's type toggles reuse the import filter buttons: Proposed changes on,
+Already flagged off by default. Show unchanged persisted exclusions only when
+Already flagged is enabled; never add them to the write plan just for viewing.
+Editing one moves it into proposed changes with a before/after preview and the
+same staged confirmation/cancel semantics. Type toggles compose with all shared
+search/filter/sort controls, reset on a new review, and stay hidden in import history.
+
+Legacy databases need one explicit full-database review before dashboards show
+totals under the new saved-only policy. Do not silently migrate financial flags
+at startup or on GET. A successful review records version 1 in the CSV-adjacent
+`<stem>.transfer-review.json` marker. Fresh databases created by a confirmed
+staged import are already reviewed. The marker is only upgrade bookkeeping;
+the CSV flags remain the sole source of budget treatment. Historical exports or
+restores without saved flags can be scanned again through Settings.
+During the initial upgrade scan only, an already manually excluded row without
+pair metadata can still identify its old automatic counterpart, preserving legacy
+matching. Never reuse a persisted pair or override an explicit Count normally.
+The obsolete `/api/import` upload endpoint rejects proposed transfer matches and
+directs clients to staged import sessions; it must never apply unseen pair changes.
 
 Excluded rows do not affect monthly or annual category cards, subcategories,
 charts, breakdown tables, spending, income, or net totals. They must remain
@@ -319,15 +614,35 @@ with a line-through, while continuing to use a $0 budget amount.
 
 ## Transaction editing
 
+- Category, subcategory, account name, account type, and provider use the shared
+  searchable value picker from `transaction-ui.js` in every single and bulk
+  transaction editor. Opening shows existing values, an explicit blank choice,
+  and an inline Add new action; typing filters values or offers creation.
+  Normalize new names' whitespace and reuse case-insensitive existing names.
+  Preserve untouched legacy values exactly; never change CSV schema for a new
+  dropdown value. Option sources include the full database, staged review rows,
+  and saved taxonomy. Subcategories follow the selected category while retaining
+  the current value; do not implicitly clear it or change other account fields.
+  With Category blank, search subcategories across all transactions and saved
+  taxonomy. Choosing a known subcategory fills its parent category; for multiple
+  parents use the first category in the dropdown's alphabetical order. Do not
+  replace a nonblank category or infer a parent for a brand-new subcategory.
+  Infer only on explicit selection, never on editor open, typing or Cancel.
+  Bulk editors visibly add/fill the Category action when none is selected; both
+  fields remain staged until the normal before/after confirmation.
+  Keep Arrow keys/Enter, Escape, focus/blur and light/dark styling consistent.
+  New choices are editor-local drafts until the enclosing save/confirmation;
+  Cancel must not add taxonomy entries or leak draft choices to another row.
+
 - A missing master CSV is an uninitialized state, not a generic load failure.
   Tell the user to get started by importing data and link directly to `/import`.
   Every supported importer must create a missing CSV before merging its
   parsed rows and must never replace an existing database.
 
 - User-editable CSV fields are date, description, amount, category,
-  subcategory, accountName, accountType, provider, notes, tags, and supported flags. Notes are
+  subcategory, accountName, accountType, provider, notes, tags, group, and supported flags. Notes are
   optional freeform text and may safely contain commas or line breaks.
-- Tags are optional user-defined labels edited as a comma-separated list. Show
+- Tags are optional user-defined labels stored as a comma-separated list. Edit
   them as compact badges in transaction lists.
 - Users can toggle the `refunded` flag in the transaction editor. A refunded
   transaction remains visible and retains its original date and amount for
@@ -336,7 +651,7 @@ with a line-through, while continuing to use a $0 budget amount.
   editor, including import review and import history. Keep automatic detection
   overridable in both directions.
 - `createdAt` is system-managed and must survive edits unchanged.
-- Migrate compatible older CSVs to the twelve-column schema
+- Migrate compatible older CSVs to the thirteen-column schema
   atomically by adding missing optional fields; never require users to recreate
   an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
@@ -356,13 +671,24 @@ The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Import data** page at `/import`.
 
 - Show one import card per supported source: `Credit Karma`, `Amazon`, `AliExpress`,
-  `Venmo`, and `Apple Card`.
+  `Venmo`, `eBay`, `Walmart`, `Apple Card`, `Capital One`, and generic `CSV`.
 - Present importer cards as accessible tabs with only one card visible at a time.
   Keep Credit Karma selected initially, support arrow/Home/End keyboard navigation,
   and preserve every importer's form and progress state while switching tabs.
 - Do not show manual JSON file pickers or a shared exported-files section.
-  Apple Card is the deliberate exception: its source tab accepts the official
-  date-range CSV exported from `card.apple.com`.
+  Apple Card and Capital One have deliberate source-specific CSV fallbacks.
+  Apple Card's manual CSV ignores date selectors; Capital One's manual CSV
+  deliberately uses the same inclusive Transaction Date range as its direct import.
+- The generic CSV tab accepts exactly the Ledger schema without `createdAt`:
+  `date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags`.
+  Also accept the previous header without group, defaulting it to blank.
+  Require a valid date, nonblank description, and finite numeric amount on each
+  row; allow every other value to be blank. Validate rows independently, stage
+  every valid row, and report the total invalid-row count in the shared review
+  modal. Never accept a caller-supplied `createdAt`; stamp selected rows only at
+  commit time. Show an **Apply classification rules** checkbox that defaults on.
+  When it is off, bypass classification entirely and preserve supplied CSV values;
+  intentionally bypassed rows must not be presented as **No rule matched**.
 - Keep source parsing and validation on the server boundary.
 - Amazon, AliExpress, eBay, Venmo, and Apple Card import tabs must expose editable `accountName`,
   `accountType`, and `provider` fields. Store their trimmed values in the
@@ -392,14 +718,24 @@ ingestion belongs in the **Import data** page at `/import`.
   matched** so users can identify manual work or missing rules. Duplicate red
   styling takes visual precedence when both states apply.
 - Transaction-list modal subtitles show counts only and never an aggregate amount.
-  Provide case-insensitive description search plus category, subcategory,
+  Provide case-insensitive description/notes search plus category, subcategory,
   account-name, and provider filters while retaining latest-first ordering and
   preserving active filters when returning from the transaction editor.
 - Allow every field to be edited locally before confirmation. A user may select
-  a duplicate to force its inclusion or remove any staged row from the preview.
-- Write only checked rows after explicit confirmation. Cancel, the top-right
-  close control, Escape, and backdrop dismissal must discard the staged import
-  without modifying or creating the master CSV.
+  a duplicate to force its inclusion or uncheck a staged row to omit it; do not
+  remove rows from the preview or delete existing matches through import review.
+- Show an **Edited** badge after a successful single or bulk edit changes an
+  imported row. Track this only for the current review by occurrence ID, never
+  in user tags, flags, or the CSV. Preserve it through filtering, inclusion
+  changes, and revalidation; reset for a new/discarded review. Cancelled, failed,
+  no-op, and automatic changes must not mark a row as edited. Keep existing
+  rule-match and duplicate badges, counts, and visibility filters unchanged.
+- Write only checked rows after explicit confirmation. For an uncommitted review
+  with rows, Cancel, the top-right close control, Escape, and backdrop dismissal
+  must ask before discarding it. Declining keeps all rows, edits, selections,
+  filters, and the session intact. Confirmed discard never modifies or creates
+  the master CSV. Empty or already committed reviews close without this warning;
+  prevent dismissal during commit. Temporarily opening an editor is not discard.
 - Bind previews to the CSV revision used for duplicate classification and reject
   confirmation if the database changed during review.
 - If the database is new and empty, the first valid import populates it.
@@ -410,6 +746,12 @@ ingestion belongs in the **Import data** page at `/import`.
   `ledger_data_importer_extension/<source>_extension/`.
 - Keep only cross-source orchestration and the localhost page bridge under
   `ledger_data_importer_extension/shared/`.
+- Never register the same JavaScript path in both MAIN and ISOLATED worlds.
+  Chrome's static injection deduplicates paths across worlds, leaving the second
+  context without its helper. Keep page observers self-contained and parsers in
+  ISOLATED, with bounded, untrusted data messages between them. Test actual
+  manifest loading in separate globals with path deduplication; preloading
+  helpers into each test context alone does not exercise extension startup.
 - The root `_locales/` catalog is Amazon-specific but must remain at the
   manifest root because Chrome requires that location.
 
@@ -487,6 +829,38 @@ ingestion belongs in the **Import data** page at `/import`.
 - When Credit Karma and Amazon files are uploaded together, infer the Amazon
   payment account from the most common ignored Amazon card transaction.
 
+### Walmart ingestion
+
+- Walmart is part of the existing companion extension (minimum 0.9.1), isolated
+  under `walmart_extension/`. Limit its host permission to `https://www.walmart.com/*`.
+  Drive the site's actual history pagination and passively observe only its
+  PurchaseHistoryV3 responses. Never replay signing headers, bypass challenges,
+  or expose cookies, addresses, or payment data to Ledger.
+- Export minimal versioned receipt JSON directly into a source-scoped, expiring
+  staged session. Preserve the existing shared review, classifications, transfer
+  proposals, occurrence-aware deduplication, revision checks, and confirmation.
+- Dates are inclusive original order dates, including the source calendar date
+  from timezone-bearing timestamps. Default to the usual fourteen-day lookback.
+- Use Shopping and blank subcategory before rules; editable account defaults
+  are Walmart / CREDIT CARD / Walmart. One row per charged receipt line; quantity
+  is already included in lineTotal. Prefer the charged categories tree over the
+  duplicate flat ordered-items view. Preserve legitimate identical item lines.
+- Allocate the final USD receipt total including tax, fees, tips, and discounts
+  using integer-cent largest remainders. Never apply Amazon's estimated tax rate,
+  infer missing prices, or silently invent refund dates. Cancelled, pending, and
+  returned/refunded orders are reported as skipped inside review, with instructions
+  to retain/import their bank entries. Membership fees are not order receipts.
+- Walmart Credit Karma exclusion defaults ON, like the other merchant filters;
+  users can turn it off for an individual import. It matches case-insensitive walmart / wal-mart / wal mart /
+  wm supercenter substrings after whitespace collapse. Keep the exact strings
+  visible, warn about uncovered charges, validate the boolean server-side, and
+  preserve the choice in the source session. Other merchant filters are unchanged.
+- Fail clearly on unfamiliar receipt/pagination formats, repeated pages, timeouts,
+  and page/payload limits. No partially collected export should look successful.
+  Synthetic regression tests cover receipt parsing, cents/quantities, privacy,
+  pagination, session ownership, cancellation, and staged confirmation. A fixture
+  pass is not evidence that the user's current signed-in Walmart site works.
+
 ### Amazon parser
 
 - Accept a root order array, an `{ "orders": [...] }` wrapper, or a single order
@@ -529,6 +903,32 @@ Known consequences of the chosen identity rule:
 
 Solving these cases later would require persistent source identifiers or a
 separate import ledger; do not silently change the CSV schema to address them.
+
+### Capital One ingestion
+
+- Keep it isolated in `capitalone_extension/`, minimum companion 0.9.1. Use only
+  verified.capitalone.com and myaccounts.capitalone.com; no wildcard banking
+  permissions, password/MFA automation, cookie extraction, or guessed private API.
+- The user signs in and selects one account. Attempt only recognizable export
+  controls with explicit dates and confirmed CSV selection. Unknown forms need
+  manual interaction; keep passive CSV capture active and offer a file fallback.
+  Never claim synthetic tests prove a current signed-in bank UI works.
+- Source capture is armed only for the owned tab and active nonce; normalize CSV
+  to allowed transaction fields before relaying it. Discard account/card numbers,
+  balances and posting dates. No raw exports or credentials in extension storage;
+  short-lived job metadata lives in session storage. Resume document navigation,
+  reject stale document nonces, wrong tabs/frames/origins and late cancellation.
+- Parse credit Debit/Credit columns or bank Transaction Amount/Transaction Type
+  columns. Explicit Debit means expense-positive, Credit means negative. Preserve
+  every identical occurrence. Reject malformed/ambiguous rows as a whole; no
+  guessed signs or silent partial imports. USD only; no currency conversion.
+- Range-filter on inclusive Transaction Date, including manual CSV. Source
+  categories survive or default to Uncategorized; subcategory starts empty.
+  Saved classifications, transfer proposals and occurrence-aware dedup all use
+  the shared staged pipeline; the extension never calls commit.
+- Editable defaults: Capital One / CREDIT CARD / Capital One. Users choose BANK
+  for checking/savings. Reuse the shared transaction review unchanged. Cancel,
+  X, Escape, backdrop and late asynchronous responses must never write/reopen it.
 
 ## Known parser decisions still needing future policy
 
