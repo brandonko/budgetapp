@@ -192,7 +192,7 @@ function tx(overrides = {}) {
 
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 
-async function start(rows, { stored = null, comparisonStored = null, mutationStatus = 200, missingCsv = false, transferReviewRequired = false } = {}) {
+async function start(rows, { stored = null, comparisonStored = null, mutationStatus = 200, missingCsv = false, transferReviewRequired = false, query = "" } = {}) {
   const document = parseDocument(read("transactions.html"));
   const requests = []; let currentRows = rows; let currentRevision = "revision-1";
   const storage = new Map(stored ? [["ledger.transactions-view.v1", JSON.stringify(stored)]] : []);
@@ -215,11 +215,11 @@ async function start(rows, { stored = null, comparisonStored = null, mutationSta
       internalTransferReviewRequired: transferReviewRequired,
       ...(url === "/api/transactions/bulk-delete" ? { deleted: JSON.parse(options.body).ids.length, backup: "synthetic.csv" } : {}) }) };
   };
-  const window = { confirm: () => false };
-  const context = { window, document, localStorage, fetch, HTMLInputElement: Input, HTMLSelectElement: Select,
+  const window = { confirm: () => false, location: { search: query } };
+  const context = { window, document, localStorage, fetch, URLSearchParams, HTMLInputElement: Input, HTMLSelectElement: Select,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; } };
   vm.createContext(context);
-  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "group-comparison.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
+  for (const file of ["transaction-ui.js", "transaction-bulk.js", "transactions-model.js", "group-comparison.js", "period-comparison-model.js", "transactions.js"]) vm.runInContext(read(file), context, { filename: file });
   await flush();
   const el = (id) => document.getElementById(id);
   const field = (name) => el("transaction-form").elements.namedItem(name);
@@ -227,6 +227,32 @@ async function start(rows, { stored = null, comparisonStored = null, mutationSta
   const edits = () => el("alltime-list").querySelectorAll("button");
   return { document, el, field, writes, edits, requests, window, storage, shared: window.LedgerTransactionUI };
 }
+
+test("period-report links replace stale browse filters and show only the linked spending scope", async () => {
+  const app = await start([tx({ category: "Food", amount: 12 }), tx({ category: "Food", date: "2023-05-12", amount: 99 }),
+    tx({ category: "Food", amount: 100, flags: "refunded" }), tx({ category: "Income", amount: -500 })], {
+    stored: { mode: "compare", filters: { description: "old search", provider: "Other bank", tags: ["missing"] } },
+    query: "?report=period-comparison&startDate=2024-05-01&endDate=2024-05-31&category=Food&type=spending",
+  });
+  assert.equal(app.el("matching-spent").textContent, "$12.00");
+  assert.equal(app.el("matching-income").textContent, "$0.00");
+  assert.equal(app.el("alltime-search").value, "");
+  assert.equal(app.el("browse-transactions-panel").hidden, false);
+  assert.equal(app.el("group-comparison-panel").hidden, true);
+  assert.equal(app.el("browse-transactions-tab").getAttribute("aria-selected"), "true");
+  assert.equal(app.edits().length, 1); assert.equal(app.writes().length, 0);
+});
+
+test("period drilldown preserves long accepted categories instead of falling back to unrelated remembered filters", async () => {
+  const category = "Household & home / ".repeat(40);
+  const app = await start([tx({ category, amount: 12 }), tx({ _id: 2, category: "Other", amount: 99 })], {
+    stored: { filters: { category: "Other" } },
+    query: "?report=period-comparison&startDate=2024-05-01&endDate=2024-05-31&type=spending&category=" + encodeURIComponent(category),
+  });
+  assert.equal(app.el("matching-spent").textContent, "$12.00");
+  assert.equal(app.edits().length, 1);
+  assert.equal(app.writes().length, 0);
+});
 
 test("comparison selection is searchable, live, limited to four and stored separately from browsing", async () => {
   const app = await start(["Bike A", "Bike B", "Trip C", "Trip D", "Build E"].map((group, i) => tx({ _id: i, group, amount: i * 10 })));

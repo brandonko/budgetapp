@@ -500,6 +500,10 @@ and a spending deficit is red.
 
 ### Dashboard periods and totals
 
+Experimental: **Compare periods** (`/compare-periods`) compares any two inclusive
+date ranges with exact totals, daily averages, and category changes. See
+[the feature guide](docs/features/period-comparison.md).
+
 - **Total spent** is the net sum of visible, non-income transactions. It uses a
   neutral card background.
 - **Total income** uses transactions in the `Income` category and is displayed

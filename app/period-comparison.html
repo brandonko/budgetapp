@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="/theme.js?v=20260905-display-preferences-1"></script>
+  <title>Compare periods — Ledger</title>
+  <meta name="description" content="Compare two date ranges to understand how your spending, income, and net total changed." />
+  <link rel="stylesheet" href="/styles.css?v=20260905-taxonomy-delete-1" />
+  <link rel="stylesheet" href="/period-comparison.css" />
+  <script src="/navigation.js" defer></script>
+  <script src="/transactions-model.js?v=20260905-1" defer></script>
+  <script src="/period-comparison-model.js" defer></script>
+  <script src="/period-comparison.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Ledger home"><span class="brand-mark">L</span><span>Ledger</span></a>
+    <details class="site-menu">
+      <summary class="menu-button" aria-label="Open navigation menu" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></summary>
+      <nav class="menu-panel" aria-label="Main navigation"><a href="/">Dashboard</a><a href="/transactions">Transactions</a><a href="/import">Import data</a><a href="/classifications">Classifications</a><a href="/settings">Settings</a></nav>
+    </details>
+  </header>
+  <main class="period-workspace">
+    <header class="period-heading"><div><p class="eyebrow">A different perspective</p><h1>What changed?</h1><p>Compare any two periods and see where the difference comes from.</p></div><button id="period-refresh" class="secondary-button" type="button">Refresh records</button></header>
+    <p id="period-status" class="settings-status" role="status">Loading your transactions…</p>
+    <section id="period-setup" class="period-empty" hidden><h2>Start with your history.</h2><p>Import transactions to compare your spending across time.</p><a href="/import">Go to Import data</a></section>
+    <section id="period-review" class="period-empty" hidden><h2>Review internal transfers first.</h2><p>Complete the existing transfer review so comparisons use your confirmed budget treatment.</p><a href="/settings#internal-transfers">Review internal transfers in Settings</a></section>
+    <section id="period-content" hidden>
+      <div class="period-ranges">
+        <fieldset class="period-range period-range--focus"><legend>Focus period</legend><div class="period-date-pair"><label><span>From</span><input id="period-focus-start" type="date" min="0001-01-01" max="9999-12-31" /></label><label><span>Through</span><input id="period-focus-end" type="date" min="0001-01-01" max="9999-12-31" /></label></div><p id="period-focus-caption"></p></fieldset>
+        <fieldset class="period-range period-range--baseline"><legend>Compare with</legend><div class="period-date-pair"><label><span>From</span><input id="period-baseline-start" type="date" min="0001-01-01" max="9999-12-31" /></label><label><span>Through</span><input id="period-baseline-end" type="date" min="0001-01-01" max="9999-12-31" /></label></div><p id="period-baseline-caption"></p></fieldset>
+      </div>
+      <div class="period-presets"><span>Set comparison to</span><button id="period-previous" class="secondary-button" type="button">Previous period</button><button id="period-previous-year" class="secondary-button" type="button">Previous year</button><button id="period-swap" class="text-button" type="button">Swap periods</button></div>
+      <p id="period-validation" class="settings-status settings-status--error" role="status" hidden></p>
+      <div id="period-results" hidden>
+        <p id="period-scope" class="period-hint" role="status"></p>
+        <div id="period-metrics" class="period-metrics" aria-label="Period totals"></div>
+        <section class="period-category-panel" aria-labelledby="period-category-title">
+          <header><div><p class="eyebrow">Follow the difference</p><h2 id="period-category-title">Spending by category.</h2></div><p>Largest dollar changes first</p></header>
+          <div class="period-table-scroll" tabindex="0" role="region" aria-label="Category comparison table"><table class="period-table"><thead><tr><th scope="col">Category</th><th scope="col">Focus period</th><th scope="col">Comparison</th><th scope="col">Change</th><th scope="col">Change %</th></tr></thead><tbody id="period-category-rows"></tbody></table></div>
+          <p id="period-category-empty" class="period-hint" hidden>No budget-counted spending in either period.</p>
+        </section>
+        <div class="period-links"><a id="period-focus-link" href="/transactions">View focus-period transactions</a><a id="period-baseline-link" href="/transactions">View comparison transactions</a></div>
+        <details class="period-explainer"><summary>How this comparison works</summary><p>Both date ranges include their first and last day. Change means focus period minus comparison. Daily averages divide by every calendar day in each range, including days with no recorded transactions.</p><p>Totals follow your dashboard: income is positive; expense credits reduce spending; refunded transactions and excluded internal transfers contribute zero. Unmatched transfers still count normally.</p><p>A dash in the category table means no counted transactions in that period. A $0 total can still include activity. Percentages are omitted when the comparison amount is zero or negative. Empty activity is not evidence of a complete bank statement.</p><p>Category amounts open the existing Transactions page with this period, category, and spending filters. Period selections stay in this browser so you can return with Back.</p></details>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
