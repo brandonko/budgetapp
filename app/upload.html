@@ -3,12 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Import Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card data into Ledger." />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <meta name="description" content="Import CSV, Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, and Apple Card data into Ledger." />
     <title>Import data — Ledger</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/upload.js" defer></script>
+    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+    <script src="/upload.js?v=20260907-notes-search-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -24,6 +28,7 @@
         </summary>
         <nav class="menu-panel" id="main-navigation" aria-label="Main navigation">
           <a href="/">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import" aria-current="page">Import data</a>
           <a href="/classifications">Classifications</a>
           <a href="/settings">Settings</a>
@@ -60,15 +65,22 @@
               from the same day are still preserved when they represent separate occurrences.
             </p>
             <p>
+              The CSV tab accepts Ledger-shaped transaction files without a <code>createdAt</code>
+              column. Date, description, and amount are required per row; other fields may be blank.
+              Valid rows continue to review even when other rows are invalid.
+            </p>
+            <p>
               Transactions that match no saved classification rule are highlighted with a
               <strong>No rule matched</strong> badge. Review them manually or use them to identify
               a classification rule you may want to add.
             </p>
             <p>
-              Credit Karma and Apple Card retain their source categories. Amazon, AliExpress, and
-              eBay start as Shopping, while Venmo starts as Venmo. Saved classification rules can
+              Credit Karma, Apple Card, and Capital One retain their source categories (or use
+              Uncategorized when unavailable). Amazon, AliExpress, eBay, and Walmart start as Shopping,
+              while Venmo starts as Venmo. Saved classification rules can
               then assign a matching category and subcategory; otherwise, the initial category is
-              kept and the subcategory remains blank.
+              kept and the subcategory remains blank. Generic CSV imports retain the values supplied
+              in each row, including intentionally blank optional fields, before rules are applied.
             </p>
           </section>
           <section>
@@ -76,7 +88,8 @@
             <p>
               Start and end dates are inclusive and limit the transaction or order dates requested
               by automatic imports. Apple Card CSV uploads review every row in the selected file, so
-              the date fields do not filter a manually uploaded CSV.
+              the date fields do not filter a manually uploaded Apple Card CSV. Capital One’s
+              date range applies to both its website import and its downloaded-CSV fallback.
             </p>
             <p>
               Account name, account type, and provider are labels saved on each imported row—not
@@ -98,7 +111,7 @@
           <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
           <div>
             <strong id="extension-status">Checking for the companion extension…</strong>
-            <span>Required for Credit Karma, Amazon, AliExpress, eBay, Venmo, and automatic Apple Card imports</span>
+            <span>Required for website imports; not needed for uploaded CSV files</span>
           </div>
         </div>
         <details class="extension-help" id="extension-help">
@@ -132,9 +145,19 @@
           aria-selected="false" aria-controls="ebay-import-panel" tabindex="-1">
           eBay
         </button>
+        <button id="walmart-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="walmart-import-panel" tabindex="-1">
+          Walmart
+        </button>
         <button id="applecard-import-tab" role="tab" type="button"
           aria-selected="false" aria-controls="applecard-import-panel" tabindex="-1">
           Apple Card
+        </button>
+        <button id="capitalone-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="capitalone-import-panel" tabindex="-1">Capital One</button>
+        <button id="csv-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="csv-import-panel" tabindex="-1">
+          CSV
         </button>
       </div>
 
@@ -145,7 +168,7 @@
             <h2 id="creditkarma-direct-title">Credit Karma</h2>
             <p>
               Imports account transactions and applies expense-oriented signs. Optional filters
-              prevent Amazon, AliExpress, Venmo, and eBay entries from duplicating richer source data.
+              prevent Amazon, AliExpress, Venmo, eBay, and Walmart entries from duplicating richer source data.
             </p>
             <p class="creditkarma-account-warning">
               <strong>Check your connections first.</strong> Disconnected accounts will have missing
@@ -184,6 +207,11 @@
                 <input id="creditkarma-ignore-ebay" type="checkbox" checked />
                 <span>Ignore eBay transactions <small>(description contains “ebay”)</small></span>
               </label>
+              <label>
+                <input id="creditkarma-ignore-walmart" type="checkbox" checked />
+                <span>Ignore Walmart transactions <small>(description contains “walmart”, “wal-mart”, “wal mart”, or “wm supercenter”)</small></span>
+              </label>
+              <p class="apple-card-file-help">Turn off Walmart exclusion to include account charges such as membership fees, refunds, or purchases not covered by itemized imports.</p>
             </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="creditkarma-import-button" type="button" disabled>
@@ -426,6 +454,81 @@
           </div>
         </section>
 
+        <section class="amazon-direct" id="capitalone-import-panel" role="tabpanel"
+          aria-labelledby="capitalone-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Capital One</h2>
+            <p class="import-source-description">Import account transactions from Capital One’s website. Source categories are kept when available; saved classification rules can update them. Purchases count as spending, and credits count as money received.</p>
+            <details class="extension-help">
+              <summary>How this import works</summary>
+              <p>Sign in to Capital One and open the account you want to import. The extension attempts its Download transactions / Export form using CSV. Complete any sign-in or verification yourself; Ledger never receives credentials or cookies.</p>
+              <p>If the form cannot be filled automatically, select the dates and CSV in Capital One yourself. The extension stays ready to capture the export. If capture is unavailable, use the CSV option below. Website automation still needs verification against your account’s export form.</p>
+              <p>Dates include both endpoints and filter by Transaction Date, not Posted Date. Include the full requested period in your export. Import one account at a time; set its account name and use BANK for checking/savings. Account and card numbers are not stored.</p>
+              <p>Credit-card Debit/Credit exports and bank Transaction Amount/Transaction Type exports are supported. An unfamiliar or malformed format stops the import instead of guessing amounts. Overlapping Credit Karma imports still use the normal duplicate review.</p>
+            </details>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label><span>Start date</span><input id="capitalone-start-date" type="date" required /></label>
+              <label><span>End date</span><input id="capitalone-end-date" type="date" required /></label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label><span>Account name</span><input id="capitalone-account-name" type="text" value="Capital One" maxlength="200" required /></label>
+              <label><span>Account type</span><input id="capitalone-account-type" type="text" value="CREDIT CARD" maxlength="200" required /></label>
+              <label><span>Provider</span><input id="capitalone-provider" type="text" value="Capital One" maxlength="200" required /></label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="capitalone-import-button" type="button" disabled>Import Capital One transactions <span aria-hidden="true">→</span></button>
+              <button class="secondary-button" id="capitalone-cancel-button" type="button" hidden>Cancel import</button>
+            </div>
+            <details class="extension-help apple-card-fallback">
+              <summary>Use a downloaded Capital One CSV</summary>
+              <label class="apple-card-file-field"><span>Capital One CSV</span><input id="capitalone-file" type="file" accept=".csv,text/csv" /></label>
+              <p class="apple-card-file-help">Uses the date range and account fields above. Nothing is saved until you confirm the transaction review.</p>
+              <button class="secondary-button" id="capitalone-file-import-button" type="button" disabled>Review selected CSV</button>
+            </details>
+            <div class="amazon-progress" id="capitalone-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track"><span id="capitalone-progress-bar"></span></div>
+              <p id="capitalone-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="capitalone-error" role="alert" hidden></p>
+          </div>
+        </section>
+
+        <section class="amazon-direct" id="walmart-import-panel" role="tabpanel"
+          aria-labelledby="walmart-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Walmart purchases</h2>
+            <p class="import-source-description">Import completed Walmart.com and Walmart+ purchases from your signed-in purchase history. Creates one row per charged item line and shares the receipt total across items, including tax, fees, tips, and discounts.</p>
+            <details class="extension-help">
+              <summary>What is included?</summary>
+              <p>USD receipts available in Walmart purchase history, including linked in-store receipts when available. Dates refer to the original order date, not delivery or bank posting dates.</p>
+              <p>Cancelled, pending, and returned/refunded orders are reported as skipped in review. Import their charges and refunds from your account instead. Walmart+ membership fees are not an order-history export.</p>
+              <p>Keep the Walmart tab open while collecting. Sign in or complete any Walmart security check if asked, then retry. Nothing reaches your transaction file until you confirm the review.</p>
+            </details>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label><span>Start date</span><input id="walmart-start-date" type="date" required /></label>
+              <label><span>End date</span><input id="walmart-end-date" type="date" required /></label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label><span>Account name</span><input id="walmart-account-name" type="text" value="Walmart" maxlength="200" required /></label>
+              <label><span>Account type</span><input id="walmart-account-type" type="text" value="CREDIT CARD" maxlength="200" required /></label>
+              <label><span>Provider</span><input id="walmart-provider" type="text" value="Walmart" maxlength="200" required /></label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="walmart-import-button" type="button" disabled>Import Walmart purchases <span aria-hidden="true">→</span></button>
+              <button class="secondary-button" id="walmart-cancel-button" type="button" hidden>Cancel import</button>
+            </div>
+            <div class="amazon-progress" id="walmart-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track" aria-hidden="true"><span id="walmart-progress-bar"></span></div>
+              <p id="walmart-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="walmart-error" role="alert" hidden></p>
+          </div>
+        </section>
+
         <section class="amazon-direct" id="ebay-import-panel" role="tabpanel"
           aria-labelledby="ebay-import-tab" tabindex="0" hidden>
           <div class="amazon-direct-copy">
@@ -477,6 +580,42 @@
             <p class="upload-error amazon-direct-error" id="ebay-error" role="alert" hidden></p>
           </div>
         </section>
+
+        <section class="amazon-direct" id="csv-import-panel" role="tabpanel"
+          aria-labelledby="csv-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Ledger CSV</h2>
+            <p>
+              Imports transactions from Ledger's CSV format. Every valid row is staged for review,
+              and invalid rows are counted without preventing other rows from being imported.
+            </p>
+            <p class="csv-import-schema">
+              Use this header, without <code>createdAt</code>:<br />
+              <code>date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags</code>
+            </p>
+            <p>Older Ledger CSV exports without the group column are also supported.</p>
+            <p>Every row requires a date, description, and amount. All other values may be blank.</p>
+          </div>
+          <div class="amazon-direct-controls">
+            <label class="apple-card-file-field">
+              <span>Transaction CSV</span>
+              <input id="csv-import-file" type="file" accept=".csv,text/csv" required />
+            </label>
+            <label class="csv-classification-option">
+              <input id="csv-apply-classifications" type="checkbox" checked />
+              <span>
+                <strong>Apply classification rules</strong>
+                <small>Turn this off to keep category, subcategory, and other supplied CSV values unchanged.</small>
+              </span>
+            </label>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="csv-import-button" type="button" disabled>
+                Import selected CSV <span aria-hidden="true">&rarr;</span>
+              </button>
+            </div>
+            <p class="upload-error amazon-direct-error" id="csv-import-error" role="alert" hidden></p>
+          </div>
+        </section>
       </div>
     </main>
 
@@ -496,9 +635,9 @@
         </header>
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
-            <span>Description</span>
+            <span>Search</span>
             <input id="import-review-search" type="search" autocomplete="off"
-              placeholder="Search descriptions" />
+              placeholder="Search descriptions and notes" />
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="import-review-filter-button" type="button"
@@ -518,6 +657,7 @@
                   <label><span>Subcategory</span><select id="import-review-subcategory-filter"><option value="">All subcategories</option></select></label>
                 </div>
                 <label class="transaction-filter-wide"><span>Tag</span><select id="import-review-tag-filter"><option value="">All tags</option></select></label>
+                <label class="transaction-filter-wide"><span>Group</span><select id="import-review-group-filter"><option value="">All groups</option></select></label>
               </fieldset>
               <fieldset>
                 <legend>Account</legend>
@@ -528,7 +668,6 @@
               </fieldset>
               <div class="transaction-filter-popover-actions">
                 <button class="text-button" id="reset-import-review-filters" type="button">Reset</button>
-                <button class="primary-button" id="apply-import-review-filters" type="button">Apply</button>
               </div>
             </div>
           </div>
@@ -547,6 +686,7 @@
           <button class="import-review-filter" type="button" data-review-filter="new"
             aria-pressed="true">New</button>
         </div>
+        <aside class="import-invalid-note" id="import-review-invalid-note" hidden></aside>
         <p class="upload-error import-review-error" id="import-review-error" hidden></p>
         <div class="transaction-list" id="import-review-list"></div>
         <footer class="import-review-actions">
@@ -594,7 +734,7 @@
             </label>
             <label class="form-field">
               <span>Category</span>
-              <input name="category" type="text" autocomplete="off" required />
+              <input name="category" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Subcategory</span>
@@ -602,21 +742,34 @@
             </label>
             <label class="form-field">
               <span>Account name</span>
-              <input name="accountName" type="text" autocomplete="off" required />
+              <input name="accountName" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Account type</span>
-              <input name="accountType" type="text" autocomplete="off" required />
+              <input name="accountType" type="text" autocomplete="off" />
             </label>
             <label class="form-field">
               <span>Provider</span>
-              <input name="provider" type="text" autocomplete="off" required />
+              <input name="provider" type="text" autocomplete="off" />
             </label>
-            <label class="form-field form-field--wide">
-              <span>Tags</span>
-              <input name="tags" type="text" autocomplete="off" />
-              <small>Separate multiple tags with commas.</small>
-            </label>
+            <div class="form-field">
+              <span>Group</span>
+              <input type="hidden" name="group" />
+              <div data-transaction-group-picker></div>
+            </div>
+            <fieldset class="form-field form-field--wide transaction-tag-field" data-transaction-tag-picker>
+              <legend>Tags</legend>
+              <input name="tags" type="hidden" />
+              <div class="transaction-tag-controls" data-tag-controls>
+                <span class="transaction-tag-empty" data-tag-empty>No existing tags yet.</span>
+                <span class="transaction-tag-create">
+                  <input type="text" data-new-tag-input maxlength="100" placeholder="New tag"
+                    aria-label="New tag name" autocomplete="off" />
+                  <button type="button" data-new-tag-button aria-label="Add new tag" disabled>+</button>
+                </span>
+              </div>
+              <small>Select existing tags or create a new one. Selected tags are highlighted.</small>
+            </fieldset>
             <label class="form-field form-field--wide">
               <span>Notes</span>
               <textarea name="notes" rows="4"
@@ -632,11 +785,11 @@
             <label class="form-field form-field--wide">
               <span>Budget treatment</span>
               <select name="internalTransferTreatment">
-                <option value="automatic">Automatic</option>
+                <option value="automatic">Eligible for detection</option>
                 <option value="internal-transfer">Internal transfer — exclude from budget</option>
                 <option value="include-in-budget">Count normally — override automatic detection</option>
               </select>
-              <small>Automatic detects matching movements between your bank and credit accounts.</small>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
             </label>
           </div>
           <p class="form-error" id="import-edit-error" role="alert" hidden></p>

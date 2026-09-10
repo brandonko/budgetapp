@@ -3,12 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/theme.js?v=20260905-display-preferences-1"></script>
     <meta name="description" content="Create reusable rules that classify and update Ledger transactions." />
     <title>Classifications — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260903-classification-files" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transaction-ui.js" defer></script>
-    <script src="/settings.js?v=20260903-classification-files" defer></script>
+    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+    <script src="/settings.js?v=20260907-notes-search-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -24,6 +28,7 @@
         </summary>
         <nav class="menu-panel" id="main-navigation" aria-label="Main navigation">
           <a href="/">Dashboard</a>
+          <a href="/transactions">Transactions</a>
           <a href="/import">Import data</a>
           <a href="/classifications" aria-current="page">Classifications</a>
           <a href="/settings">Settings</a>
@@ -145,6 +150,15 @@
           </button>
         </header>
         <div class="transaction-sort-bar">
+          <details class="transaction-filter-menu classification-preview-filters" id="classification-preview-filters">
+            <summary class="transaction-filter-button">Filters <span id="classification-preview-filter-count" hidden></span></summary>
+            <div class="transaction-filter-popover" role="group" aria-label="Classification preview filters">
+              <label class="transaction-filter-wide"><span>Group</span><select id="classification-preview-group-filter"><option value="">All groups</option></select></label>
+              <div class="transaction-filter-popover-actions">
+                <button class="text-button" id="reset-classification-preview-filters" type="button">Reset</button>
+              </div>
+            </div>
+          </details>
           <div id="classification-preview-sort"></div>
         </div>
         <p class="form-error classification-preview-error" id="classification-preview-error" role="alert" hidden></p>
@@ -175,9 +189,9 @@
         </header>
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
-            <span>Description</span>
+            <span>Search</span>
             <input id="unclassified-search" type="search" autocomplete="off"
-              placeholder="Search descriptions" />
+              placeholder="Search descriptions and notes" />
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="unclassified-filter-button" type="button"
@@ -197,6 +211,7 @@
                   <label><span>Subcategory</span><select id="unclassified-subcategory-filter"><option value="">All subcategories</option></select></label>
                 </div>
                 <label class="transaction-filter-wide"><span>Tag</span><select id="unclassified-tag-filter"><option value="">All tags</option></select></label>
+                <label class="transaction-filter-wide"><span>Group</span><select id="unclassified-group-filter"><option value="">All groups</option></select></label>
               </fieldset>
               <fieldset>
                 <legend>Account</legend>
@@ -207,7 +222,6 @@
               </fieldset>
               <div class="transaction-filter-popover-actions">
                 <button class="text-button" id="reset-unclassified-filters" type="button">Reset</button>
-                <button class="primary-button" id="apply-unclassified-filters" type="button">Apply</button>
               </div>
             </div>
           </div>
@@ -217,9 +231,117 @@
           <div class="transaction-filter-chips" id="unclassified-filter-chips"></div>
           <button class="text-button" id="clear-unclassified-filters" type="button">Clear all</button>
         </div>
+        <div class="import-review-filters unclassified-review-filters" role="group"
+          aria-label="Visible unclassified transaction types">
+          <span>Show</span>
+          <button class="import-review-filter" id="unclassified-internal-transfer-filter" type="button"
+            aria-pressed="false">Internal transfer</button>
+        </div>
         <p class="form-error unclassified-error" id="unclassified-error" role="alert" hidden></p>
         <div class="transaction-list" id="unclassified-list"></div>
       </div>
+    </dialog>
+    <!-- Shared review editor: keep fields aligned with settings.html and transaction-ui.js. -->
+    <dialog class="transaction-form-dialog" id="import-history-edit-dialog">
+      <form class="transaction-form" id="import-history-edit-form">
+        <header class="form-header">
+          <div>
+            <p class="eyebrow">Import history</p>
+            <h2>Edit transaction</h2>
+            <p class="dialog-subtitle">Changes are saved directly to the master CSV.</p>
+          </div>
+          <button class="icon-button" id="close-import-history-edit" type="button"
+            aria-label="Close transaction editor">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.7" />
+            </svg>
+          </button>
+        </header>
+        <div class="form-body">
+          <div class="form-grid">
+            <label class="form-field">
+              <span>Date</span>
+              <input name="date" type="date" required />
+            </label>
+            <label class="form-field">
+              <span>Amount</span>
+              <span class="amount-input-wrap">
+                <span aria-hidden="true">$</span>
+                <input name="amount" type="number" step="0.01" required />
+              </span>
+              <small>Expenses are positive; credits and income are negative.</small>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Description</span>
+              <input name="description" type="text" autocomplete="off" required />
+            </label>
+            <label class="form-field">
+              <span>Category</span>
+              <input name="category" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>Subcategory</span>
+              <input name="subcategory" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>Account name</span>
+              <input name="accountName" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>Account type</span>
+              <input name="accountType" type="text" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>Provider</span>
+              <input name="provider" type="text" autocomplete="off" />
+            </label>
+            <div class="form-field">
+              <span>Group</span>
+              <input type="hidden" name="group" />
+              <div data-transaction-group-picker></div>
+            </div>
+            <fieldset class="form-field form-field--wide transaction-tag-field" data-transaction-tag-picker>
+              <legend>Tags</legend>
+              <input name="tags" type="hidden" />
+              <div class="transaction-tag-controls" data-tag-controls>
+                <span class="transaction-tag-empty" data-tag-empty>No existing tags yet.</span>
+                <span class="transaction-tag-create">
+                  <input type="text" data-new-tag-input maxlength="100" placeholder="New tag"
+                    aria-label="New tag name" autocomplete="off" />
+                  <button type="button" data-new-tag-button aria-label="Add new tag" disabled>+</button>
+                </span>
+              </div>
+              <small>Select existing tags or create a new one. Selected tags are highlighted.</small>
+            </fieldset>
+            <label class="form-field form-field--wide">
+              <span>Notes</span>
+              <textarea name="notes" rows="4"></textarea>
+            </label>
+            <label class="refund-toggle form-field--wide">
+              <input name="refunded" type="checkbox" value="refunded" />
+              <span>
+                <strong>Refunded</strong>
+                <small>Keep this transaction in the ledger but count it as $0 in spending totals.</small>
+              </span>
+            </label>
+            <label class="form-field form-field--wide">
+              <span>Budget treatment</span>
+              <select name="internalTransferTreatment">
+                <option value="automatic">Eligible for detection</option>
+                <option value="internal-transfer">Internal transfer — exclude from budget</option>
+                <option value="include-in-budget">Count normally — override automatic detection</option>
+              </select>
+              <small>Detection runs during imports or a Settings scan, never on page loads. Saved exclusions stay in effect until you change them.</small>
+            </label>
+          </div>
+          <p class="form-error" id="import-history-edit-error" role="alert" hidden></p>
+        </div>
+        <footer class="form-footer">
+          <span class="form-footer-spacer"></span>
+          <button class="secondary-button" id="cancel-import-history-edit" type="button">Cancel</button>
+          <button class="primary-button" id="save-import-history-edit" type="submit">Save transaction</button>
+        </footer>
+      </form>
     </dialog>
   </body>
 </html>

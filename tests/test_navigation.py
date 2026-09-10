@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = ROOT / "app"
-NAVIGATION_PAGES = ("index.html", "upload.html", "classifications.html", "settings.html")
+NAVIGATION_PAGES = ("index.html", "transactions.html", "upload.html", "classifications.html", "settings.html")
 
 
 class NavigationAccessibilityTests(unittest.TestCase):
