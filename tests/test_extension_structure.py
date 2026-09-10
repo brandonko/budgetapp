@@ -43,7 +43,7 @@ class ExtensionStructureTests(unittest.TestCase):
     def test_aliexpress_permissions_and_attribution_are_present(self) -> None:
         manifest = json.loads((EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertIn("cookies", manifest["permissions"])
-        self.assertIn("*://*.aliexpress.com/*", manifest["host_permissions"])
+        self.assertIn("https://*.aliexpress.com/*", manifest["host_permissions"])
         self.assertTrue((EXTENSION_ROOT / "aliexpress_extension" / "LICENSE").is_file())
         coordinator = (EXTENSION_ROOT / "shared" / "import_coordinator.js").read_text(
             encoding="utf-8"
@@ -98,9 +98,24 @@ class ExtensionStructureTests(unittest.TestCase):
         )
         self.assertIn('"/import"', coordinator)
 
+    def test_remote_permissions_and_content_scripts_require_https(self) -> None:
+        manifest = json.loads((EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8"))
+        patterns = list(manifest["host_permissions"])
+        patterns.extend(
+            pattern
+            for registration in manifest["content_scripts"]
+            for pattern in registration.get("matches", [])
+        )
+
+        for pattern in patterns:
+            with self.subTest(pattern=pattern):
+                if pattern.startswith(("http://127.0.0.1/", "http://localhost/")):
+                    continue
+                self.assertTrue(pattern.startswith("https://"))
+
     def test_ebay_import_is_scoped_and_connected(self) -> None:
         manifest = json.loads((EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8"))
-        self.assertIn("*://*.ebay.com/*", manifest["host_permissions"])
+        self.assertIn("https://*.ebay.com/*", manifest["host_permissions"])
         bridge = (EXTENSION_ROOT / "shared" / "ledger_bridge.js").read_text(encoding="utf-8")
         coordinator = (EXTENSION_ROOT / "shared" / "import_coordinator.js").read_text(encoding="utf-8")
         content = (EXTENSION_ROOT / "ebay_extension" / "content.js").read_text(encoding="utf-8")
