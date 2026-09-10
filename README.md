@@ -7,7 +7,7 @@ details.
 
 The dashboard includes:
 
-- Monthly and annual spending, income, and net summaries
+- Monthly and annual spending, income, and net summaries with a configurable large-number abbreviation threshold
 - An all-time Transactions dashboard for searching past purchases and exploring tags or groups
 - Monthly and annual spending breakdowns switchable between categories and a multi-tag explorer
 - Annual category-stacked spending with subcategory drill-down and monthly net charts
@@ -637,7 +637,7 @@ app/transactions.css
 app/group-comparison.js / .css
                     Read-only multi-group comparison workspace and visualizations
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Tabbed backup, import-history, taxonomy, and general settings
+app/settings.html  Tabbed exports, import-history, taxonomy, and display preferences
 app/classifications.html
                     Dedicated transaction-classification workspace
 app/settings.js    Exports, import-batch, taxonomy, and general settings

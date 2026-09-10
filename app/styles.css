@@ -4868,6 +4868,7 @@ body:has(dialog[open]) {
 
 .settings-preference-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 28px;
   align-items: center;
   justify-content: space-between;
@@ -4876,6 +4877,11 @@ body:has(dialog[open]) {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-subtle);
+}
+
+.settings-preference-row > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .settings-preference-row strong {

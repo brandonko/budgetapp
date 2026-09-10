@@ -52,8 +52,11 @@
     return "m";
   }
 
+  let numberAbbreviation = storedNumberAbbreviation();
+
   function setNumberAbbreviation(value, { persist = true } = {}) {
     const normalized = numberAbbreviationOptions.includes(value) ? value : "m";
+    numberAbbreviation = normalized;
     if (persist) {
       try {
         globalObject.localStorage.setItem(numberAbbreviationStorageKey, normalized);
@@ -69,19 +72,15 @@
     return normalized;
   }
 
-  let numberAbbreviation = storedNumberAbbreviation();
   globalObject.LedgerPreferences = {
     numberAbbreviation: () => numberAbbreviation,
-    setNumberAbbreviation: (value) => {
-      numberAbbreviation = setNumberAbbreviation(value);
-      return numberAbbreviation;
-    },
+    setNumberAbbreviation: (value) => setNumberAbbreviation(value),
   };
 
   globalObject.addEventListener("storage", (event) => {
     if (event.key === themeStorageKey) apply(storedTheme());
     if (event.key === numberAbbreviationStorageKey) {
-      numberAbbreviation = setNumberAbbreviation(storedNumberAbbreviation(), { persist: false });
+      setNumberAbbreviation(storedNumberAbbreviation(), { persist: false });
     }
   });
 })(window);

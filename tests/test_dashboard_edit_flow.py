@@ -458,6 +458,11 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('return "m";', preferences)
         self.assertIn("globalObject.LedgerPreferences", preferences)
         self.assertIn('new globalObject.CustomEvent("ledger-number-abbreviation-change"', preferences)
+        setter = preferences.split("function setNumberAbbreviation", 1)[1]
+        self.assertLess(
+            setter.index("numberAbbreviation = normalized;"),
+            setter.index("globalObject.dispatchEvent"),
+        )
         for tier in (
             '{ preference: "t", value: 1e12, suffix: "T" }',
             '{ preference: "b", value: 1e9, suffix: "B" }',
