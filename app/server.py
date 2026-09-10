@@ -866,6 +866,156 @@ CLASSIFICATION_REQUIRED_TEXT_ACTION_FIELDS = {
 CLASSIFICATION_RULE_NOTES_MAX_LENGTH = 2_000
 
 
+def validate_classification_regex(pattern: str, location: str) -> None:
+    try:
+        compiled_pattern = re.compile(pattern, re.IGNORECASE)
+    except (re.error, OverflowError, RecursionError) as exc:
+        raise CsvDataError(
+            f"{location} is not a valid regular expression: {exc}"
+        ) from exc
+
+    groups: list[dict[str, bool]] = []
+    last_group: dict[str, bool] | None = None
+    # Python 3.10 also accepts later global flags, which apply retroactively.
+    verbose = bool(compiled_pattern.flags & re.VERBOSE)
+    verbose_stack: list[bool] = []
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        # Verbose whitespace/comments preserve the preceding atom: a later
+        # quantifier still applies to that atom, even across comment lines.
+        if verbose and character in " \t\n\r\v\f":
+            index += 1
+            continue
+        if verbose and character == "#":
+            index += 1
+            while index < len(pattern):
+                if pattern[index] == "\\":
+                    index += 2
+                elif pattern[index] == "\n":
+                    index += 1
+                    break
+                else:
+                    index += 1
+            continue
+        if character == "\\":
+            following = pattern[index + 1 : index + 4]
+            digit_escape = re.match(r"[0-9]{1,3}", following)
+            is_octal_escape = following.startswith("0") or (
+                digit_escape is not None
+                and len(digit_escape.group()) == 3
+                and all(digit in "01234567" for digit in digit_escape.group())
+            )
+            if digit_escape is not None and not is_octal_escape:
+                raise CsvDataError(
+                    f"{location} cannot use regular-expression backreferences"
+                )
+            last_group = None
+            index += 2
+            continue
+        if character == "[":
+            index += 1
+            if pattern[index:index + 1] == "^":
+                index += 1
+            # ] is a literal in the first position, including after ^.
+            if pattern[index:index + 1] == "]":
+                index += 1
+            while index < len(pattern):
+                if pattern[index] == "\\":
+                    index += 2
+                elif pattern[index] == "]":
+                    index += 1
+                    break
+                else:
+                    index += 1
+            last_group = None
+            continue
+        if pattern.startswith("(?P=", index) or pattern.startswith("(?(", index):
+            raise CsvDataError(
+                f"{location} cannot use regular-expression backreferences"
+            )
+        if pattern.startswith("(?#", index):
+            index += 3
+            while index < len(pattern):
+                if pattern[index] == "\\":
+                    index += 2
+                elif pattern[index] == ")":
+                    index += 1
+                    break
+                else:
+                    index += 1
+            continue
+        if character == "(":
+            prefix = re.match(r"\(\?([aiLmsux]*)(?:-([imsx]+))?([:)])", pattern[index:])
+            if prefix is not None:
+                enabled, disabled, ending = prefix.groups()
+                next_verbose = (verbose or "x" in enabled) and "x" not in (disabled or "")
+                if ending == ")":
+                    verbose = next_verbose
+                    index += len(prefix.group())
+                    continue
+                verbose_stack.append(verbose)
+                verbose = next_verbose
+            else:
+                verbose_stack.append(verbose)
+            groups.append({"repetition": False, "alternation": False})
+            if pattern.startswith(("(?<=", "(?<!"), index):
+                index += 4
+            elif pattern.startswith(("(?:", "(?=", "(?!", "(?>"), index):
+                index += 3
+            elif pattern.startswith("(?P<", index):
+                index = pattern.index(">", index + 4) + 1
+            elif pattern.startswith("(?", index):
+                if prefix is not None:
+                    index += len(prefix.group())
+                else:
+                    index += 1
+            else:
+                index += 1
+            last_group = None
+            continue
+        if character == ")":
+            last_group = groups.pop()
+            verbose = verbose_stack.pop()
+            if groups:
+                groups[-1]["repetition"] |= last_group["repetition"]
+                groups[-1]["alternation"] |= last_group["alternation"]
+            index += 1
+            continue
+        if character == "|":
+            if groups:
+                groups[-1]["alternation"] = True
+            last_group = None
+            index += 1
+            continue
+
+        quantifier_end = None
+        if character in "*+?":
+            quantifier_end = index + 1
+        elif character == "{":
+            quantifier = re.match(r"\{(?:[0-9]+(?:,[0-9]*)?|,[0-9]*)\}", pattern[index:])
+            if quantifier is not None:
+                quantifier_end = index + len(quantifier.group())
+        if quantifier_end is not None:
+            if last_group is not None and (
+                last_group["repetition"] or last_group["alternation"]
+            ):
+                raise CsvDataError(
+                    f"{location} cannot repeat a group that contains another "
+                    "repetition or alternation"
+                )
+            if groups:
+                groups[-1]["repetition"] = True
+            if quantifier_end < len(pattern) and pattern[quantifier_end] in "?+":
+                quantifier_end += 1
+            index = quantifier_end
+            last_group = None
+            continue
+
+        last_group = None
+        index += 1
+
+
 def normalize_classification_updates(raw: Any, location: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise CsvDataError(f"{location} must be an object")
@@ -914,7 +1064,9 @@ def normalize_classification_updates(raw: Any, location: str) -> dict[str, Any]:
     return updates
 
 
-def normalize_classifications(raw: Any) -> dict[str, Any]:
+def normalize_classifications(
+    raw: Any, *, allow_invalid_regex: bool = False
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise CsvDataError("classifications must be a JSON object")
     raw_items = raw.get("classifications")
@@ -963,13 +1115,8 @@ def normalize_classifications(raw: Any) -> dict[str, Any]:
                 pattern = pattern.strip()
                 if len(pattern) > 300:
                     raise CsvDataError(f"{rule_location}.{field} cannot exceed 300 characters")
-                if pattern:
-                    try:
-                        re.compile(pattern, re.IGNORECASE)
-                    except re.error as exc:
-                        raise CsvDataError(
-                            f"{rule_location}.{field} is not a valid regular expression: {exc}"
-                        ) from exc
+                if pattern and not allow_invalid_regex:
+                    validate_classification_regex(pattern, f"{rule_location}.{field}")
                 rule[field] = pattern
             if not any(rule[field] for field in CLASSIFICATION_MATCHER_FIELDS):
                 raise CsvDataError(f"{rule_location} must include at least one matcher")
@@ -1006,7 +1153,28 @@ def classification_sort_key(classification: Mapping[str, Any]) -> tuple[str, str
     )
 
 
-def load_classifications(csv_path: Path) -> dict[str, Any]:
+def classification_regex_errors(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Inspect an editable library without ever matching a transaction."""
+    errors = []
+    for classification_index, classification in enumerate(document["classifications"]):
+        for rule_index, rule in enumerate(classification["rules"]):
+            for field in CLASSIFICATION_MATCHER_FIELDS:
+                if not rule[field]:
+                    continue
+                location = f"Classification {classification_index + 1}, rule {rule_index + 1}, {field}"
+                try:
+                    validate_classification_regex(rule[field], location)
+                except CsvDataError as exc:
+                    errors.append({
+                        "classificationIndex": classification_index,
+                        "ruleIndex": rule_index,
+                        "field": field,
+                        "message": str(exc),
+                    })
+    return errors
+
+
+def load_classifications(csv_path: Path, *, for_editing: bool = False) -> dict[str, Any]:
     path = classifications_path(csv_path)
     try:
         content = path.read_text(encoding="utf-8-sig")
@@ -1018,7 +1186,21 @@ def load_classifications(csv_path: Path) -> dict[str, Any]:
         raw = json.loads(content)
     except json.JSONDecodeError as exc:
         raise CsvDataError(f"classifications file contains invalid JSON: {exc}") from exc
-    return normalize_classifications(raw)
+    if for_editing:
+        # Read-only recovery: preserve every rule in memory and leave the saved
+        # bytes untouched. Only GET/export may opt into this path.
+        document = normalize_classifications(raw, allow_invalid_regex=True)
+        errors = classification_regex_errors(document)
+        if errors:
+            document["regexErrors"] = errors
+        return document
+    try:
+        return normalize_classifications(raw)
+    except CsvDataError as exc:
+        raise CsvDataError(
+            "Saved classifications need repair. Open Classifications to edit "
+            f"or export and replace the rules before importing. {exc}"
+        ) from exc
 
 
 def write_classifications_atomic(csv_path: Path, document: Mapping[str, Any]) -> None:
@@ -1049,6 +1231,9 @@ def write_classifications_atomic(csv_path: Path, document: Mapping[str, Any]) ->
 def classify_transactions(
     transactions: list[dict[str, Any]], document: Mapping[str, Any]
 ) -> tuple[list[dict[str, Any]], list[bool]]:
+    # Editable legacy documents are never trusted for execution, including
+    # callers that bypass the HTTP handler or the strict disk loader.
+    document = normalize_classifications(document)
     compiled = [
         (
             classification["updates"],
@@ -2277,7 +2462,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
     def get_classifications(self, *, export: bool = False) -> None:
         try:
             with self.data_lock:
-                document = load_classifications(self.csv_path)
+                document = load_classifications(self.csv_path, for_editing=True)
             if not export:
                 self.send_json(HTTPStatus.OK, document)
                 return

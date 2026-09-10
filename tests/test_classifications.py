@@ -20,10 +20,13 @@ from server import (  # noqa: E402
     apply_classifications,
     backup_directory,
     classifications_path,
+    classify_transactions,
     initialize_csv_if_missing,
+    load_classifications,
     normalize_classifications,
     normalize_transaction,
     read_transaction_state,
+    validate_classification_regex,
     write_transactions_atomic,
 )
 
@@ -44,6 +47,64 @@ def transaction(**overrides):
 
 
 class ClassificationEngineTests(unittest.TestCase):
+    def test_safe_regex_lexer_tracks_comments_flags_and_omitted_repeat_bounds(self) -> None:
+        for pattern in (
+            r"(?x)^(a+) +$",
+            "(?x)^(a+) # ignored group boundary\n +$",
+            r"(?x:^(a+) +$)",
+            r"(?i-x:(a+)+)",
+            r"(?x)^((?-x:a +)) +$",
+            r"^(a+)(?# comment)+$",
+            r"^(a+)(?# escaped \) comment)+$",
+            r"^(a+){,3}$", r"^(a+){,}$",
+            "(?x)^(a|aa) # alternatives\n +$",
+            r"(?x)^(a) \1$",
+            "(?x)^(a+) # escaped newline " + "\\" + "\n still comment\n +$",
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(CsvDataError, "cannot (repeat|use)"):
+                # Validation only: never evaluate hostile patterns on long text.
+                validate_classification_regex(pattern, "matcher")
+        if sys.version_info < (3, 11):
+            with self.assertRaisesRegex(CsvDataError, "cannot repeat"):
+                validate_classification_regex(r"^(a+) (?x)+$", "matcher")
+
+    def test_safe_regex_valid_character_classes_and_python_syntax_corpus(self) -> None:
+        for pattern in (
+            r"[])]+", r"[^])]+", r"[]()|+*?]+", r"[\]\)]+",
+            r"(?x)^ (whole) + $", r"(?x)^ (?-x:(a+) +) $",
+            r"(?x)^ [# ()]+ \# $",
+            r"(?x)^ (?P<merchant>whole) \s+ foods $",
+            r"(?x)^ (?:whole | trader) \s+ foods $",
+            r"^(a+)(?# comment) $", r"^(a+)(?# escaped \) comment) $",
+            r"(?x)^ (a+) \ + $",
+            r"^(a+) +$", r"^a{,3}$", r"^a{,}$",
+            r"\123", r"\0", r"\١", r"a{٢}",
+            r"(?i:whole)(?-i:FOODS)", r"(?<=whole )foods(?= market)",
+            "(?x)^a # comment " + "\\" + "\n ) +\n$",
+        ):
+            with self.subTest(pattern=pattern):
+                validate_classification_regex(pattern, "matcher")
+
+    def test_safe_regex_reports_oversized_repeat_as_validation_error(self) -> None:
+        with self.assertRaisesRegex(CsvDataError, "valid regular expression"):
+            validate_classification_regex(r"a{999999999999999999999}", "matcher")
+
+    def test_editable_legacy_document_cannot_bypass_matching_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path = Path(directory) / "transactions.csv"
+            content = json.dumps({"classifications": [{
+                "category": "Food", "rules": [{"description": r"(?x)^(a+) +$"}],
+            }]})
+            path = classifications_path(csv_path)
+            path.write_text(content, encoding="utf-8")
+            editable = load_classifications(csv_path, for_editing=True)
+            self.assertEqual(len(editable["regexErrors"]), 1)
+            with self.assertRaisesRegex(CsvDataError, "need repair"):
+                load_classifications(csv_path)
+            with self.assertRaisesRegex(CsvDataError, "cannot repeat"):
+                classify_transactions([transaction(description="aa!")], editable)
+            self.assertEqual(path.read_text(encoding="utf-8"), content)
+
     def test_classification_controls_use_the_theme_surface(self) -> None:
         css = (APP_DIR / "styles.css").read_text(encoding="utf-8")
 
@@ -416,8 +477,111 @@ class ClassificationEngineTests(unittest.TestCase):
                 }
             )
 
+    def test_dangerous_regular_expression_structures_are_rejected(self) -> None:
+        for pattern in (
+            r"^(a+)+$",
+            r"^(a|aa)+$",
+            r"^(a)\1+$",
+            r"^(?P<letter>a)(?P=letter)+$",
+        ):
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(
+                CsvDataError, "cannot (repeat|use)"
+            ):
+                normalize_classifications(
+                    {
+                        "classifications": [
+                            {
+                                "category": "Test",
+                                "rules": [{"description": pattern}],
+                            }
+                        ]
+                    }
+                )
+
+    def test_safe_regular_expression_features_remain_supported(self) -> None:
+        document = normalize_classifications(
+            {
+                "classifications": [
+                    {
+                        "category": "Food",
+                        "rules": [
+                            {
+                                "description": r"^(?:whole foods|trader joe's)\s+#?\d{1,4}$"
+                            },
+                            {"description": r"^(whole foods)+$"},
+                        ],
+                    }
+                ]
+            }
+        )
+
+        [classified] = apply_classifications(
+            [transaction(description="WHOLE FOODS #123")], document
+        )
+        self.assertEqual(classified["category"], "Food")
+
 
 class ClassificationApiTests(unittest.TestCase):
+    def test_unsafe_legacy_library_remains_readable_exportable_and_replaceable(self) -> None:
+        document = {"version": 1, "classifications": [
+            {"category": "Food", "rules": [{"description": r"(?x)^(a+) +$", "notes": "Keep this note"}]},
+            {"category": "Travel", "rules": [{"description": r"^(x)\1$"}]},
+        ]}
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+        path = classifications_path(self.csv_path)
+        original = (json.dumps(document, indent=4) + "\n").encode("utf-8")
+        path.write_bytes(original)
+        status, editable = self.request("GET", "/api/classifications")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(editable["classifications"]), 2)
+        self.assertEqual(len(editable["regexErrors"]), 2)
+        for index, item in enumerate(document["classifications"]):
+            self.assertEqual(editable["classifications"][index]["rules"][0]["description"], item["rules"][0]["description"])
+        self.assertEqual(editable["classifications"][0]["rules"][0]["notes"], "Keep this note")
+        self.assertEqual(self.request("GET", "/api/classifications/export"), (200, editable))
+        for method, endpoint, payload in (
+            ("PUT", "/api/classifications", editable),
+            ("POST", "/api/classifications/preview", editable),
+            ("POST", "/api/classifications/apply", {"confirm": True, "revision": "synthetic", "document": editable}),
+        ):
+            with self.subTest(endpoint=endpoint):
+                status, error = self.request(method, endpoint, payload)
+                self.assertEqual(status, 400)
+                self.assertIn("cannot repeat", error["error"])
+                self.assertEqual(path.read_bytes(), original)
+                self.assertFalse(self.csv_path.exists())
+
+        status, session = self.request("POST", "/api/applecard-import-sessions", {"startDate": "2026-08-01", "endDate": "2026-08-31"})
+        self.assertEqual(status, 201)
+        apple_csv = (
+            "Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD)\n"
+            "08/20/2026,08/21/2026,AAAA,AAAA,Shopping,Purchase,5.25\n"
+        )
+        status, error = self.request("POST", f'/api/applecard-import-sessions/{session["token"]}/complete', {"content": apple_csv})
+        self.assertEqual(status, 400)
+        self.assertIn("need repair", error["error"])
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse(self.csv_path.exists())
+        self.assertFalse(backup_directory(self.csv_path).exists())
+
+        editable["classifications"][0]["rules"][0]["description"] = "^a+$"
+        editable["classifications"][1]["rules"][0]["description"] = "^x+$"
+        status, repaired = self.request("PUT", "/api/classifications", editable)
+        self.assertEqual(status, 200)
+        self.assertNotIn("regexErrors", repaired)
+        self.assertEqual(len(repaired["classifications"]), 2)
+        self.assertEqual(self.request("GET", "/api/classifications"), (200, repaired))
+        [classified] = apply_classifications([transaction(description="AAAA")], load_classifications(self.csv_path))
+        self.assertEqual(classified["category"], "Food")
+
+    def test_valid_leading_literal_bracket_class_can_be_saved_through_api(self) -> None:
+        document = {"classifications": [{"category": "Food", "rules": [{"description": r"[])]+"}]}]}
+        status, saved = self.request("PUT", "/api/classifications", document)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request("GET", "/api/classifications"), (200, saved))
+        [classified] = apply_classifications([transaction(description=")")], saved)
+        self.assertEqual(classified["category"], "Food")
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.csv_path = Path(self.temporary_directory.name) / "data" / "transactions.csv"

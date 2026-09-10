@@ -150,6 +150,7 @@ function renderNumberAbbreviationPreference(value) {
 }
 
 let classifications = [];
+let classificationRegexErrors = [];
 let classificationsBusy = false;
 let selectedClassificationIndex = 0;
 let classificationEdit = null;
@@ -1921,7 +1922,7 @@ function renderClassifications() {
   elements.importClassificationsInput.disabled = classificationsBusy || editorOpen();
   elements.exportClassifications.disabled = classificationsBusy || editorOpen();
   elements.applyClassifications.disabled =
-    classificationsBusy || editorOpen() || classifications.length === 0;
+    classificationsBusy || editorOpen() || classifications.length === 0 || classificationRegexErrors.length > 0;
   elements.classificationPagination.hidden = classifications.length === 0;
   if (classifications.length === 0) {
     const empty = document.createElement("div");
@@ -1964,15 +1965,8 @@ function validateRule(rule, classificationIndex, ruleIndex) {
   if (!matchers.some((value) => value.trim())) {
     throw new Error(`Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} needs a matcher.`);
   }
-  for (const value of matchers.filter((matcher) => matcher.trim())) {
-    try {
-      new RegExp(value, "i");
-    } catch (error) {
-      throw new Error(
-        `Rule ${ruleIndex + 1} in classification ${classificationIndex + 1} has an invalid regular expression.`,
-      );
-    }
-  }
+  // The server validates Python regex syntax and its safe subset before save
+  // or preview. JavaScript regex syntax differs (notably (?x) and (?P<name>)).
 }
 
 function validateClassifications(candidate = classifications) {
@@ -1995,6 +1989,17 @@ async function loadClassifications() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not load classifications (${response.status}).`);
     classifications = Array.isArray(payload.classifications) ? payload.classifications : [];
+    classificationRegexErrors = Array.isArray(payload.regexErrors) ? payload.regexErrors : [];
+    if (classificationRegexErrors.length) {
+      setClassificationStatus(
+        "Saved matchers need repair; matching and imports are blocked until they are fixed. "
+        + "Edit a rule below. If several need repair, Export the library, correct all listed matchers "
+        + "in the JSON file, then Import the corrected copy. Your saved rules have not been changed. "
+        + classificationRegexErrors.slice(0, 5).map((error) => error.message).join(" ")
+        + (classificationRegexErrors.length > 5 ? " More errors are listed in the exported JSON." : ""),
+        "error",
+      );
+    }
     selectedClassificationIndex = Math.min(selectedClassificationIndex, classifications.length - 1);
   } catch (error) {
     setClassificationStatus(error instanceof Error ? error.message : "Could not load classifications.", "error");
@@ -2025,6 +2030,7 @@ async function persistClassifications(successMessage, candidate = classification
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save classifications (${response.status}).`);
     classifications = payload.classifications;
+    classificationRegexErrors = [];
     if (selectedSignature !== null) {
       const sortedIndex = classifications.findIndex(
         (classification) => classificationActionSignature(classification) === selectedSignature,
@@ -2210,6 +2216,7 @@ async function confirmClassificationPreview() {
       throw new Error(result.error || `Could not apply classifications (${response.status}).`);
     }
     classifications = result.classifications;
+    classificationRegexErrors = [];
     pendingClassificationPreview = null;
     elements.previewDialog.close();
     setClassificationStatus(
@@ -2770,6 +2777,7 @@ async function importClassifications(event) {
     }
     classifications = payload.classifications;
     selectedClassificationIndex = 0;
+    classificationRegexErrors = [];
     classificationEdit = null;
     ruleEdits.clear();
     pendingNewClassificationIndex = null;

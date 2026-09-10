@@ -162,6 +162,16 @@ third-party Python dependency unless a future requirement clearly justifies it.
   current category, subcategory, description, account name, and provider. Ignore
   blank matchers. All populated matchers in
   one rule must match; multiple rules within a classification are alternatives.
+  Reject backreferences and repeated groups containing another repetition or
+  alternation to block known high-risk backtracking structures. This is a
+  conservative structural policy, not a linear-time regex engine.
+  Interpret verbose flags, comments, escapes, and literal leading brackets
+  consistently with Python regex syntax; client-side JavaScript must not reject
+  valid Python patterns. GET and Export preserve older rejected matchers for
+  repair and report field-level errors without executing them or rewriting the
+  saved file. All save, preview, import, and matching paths remain strict. A
+  library containing multiple rejected matchers can be exported, corrected, and
+  explicitly re-imported as a complete valid replacement.
 - Each rule may include optional freeform notes documenting its rationale. Keep
   the notes editor visually separate from regex matchers and explicitly explain
   that notes do not participate in matching. In read-only mode, show a saved note
