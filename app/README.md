@@ -1,5 +1,11 @@
 # Ledger budget dashboard
 
+This guide covers the implementation committed on this branch. For the newer,
+uncommitted local workflows (including linked refunds, Reconcile, import
+preferences, and Schwab Checking), read the
+[local-development snapshot](../docs/local-development.md). Those changes are
+documented separately so they are not mistaken for released functionality.
+
 The dashboard reads and writes `data/transactions.csv`. If that
 file does not exist, the dashboard directs the user to Import data. The first
 successful import creates the database automatically before adding its

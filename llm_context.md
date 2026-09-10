@@ -3,6 +3,16 @@
 This document records the product and implementation preferences that should
 guide future work on Ledger. Update it whenever a decision changes.
 
+## Documentation scope
+
+The contract below describes the implementation committed on this branch.
+The [local-development snapshot](docs/local-development.md) separately records
+the primary checkout's uncommitted implementation as of September 9, 2026,
+including a fifteen-column linked-transaction schema. Do not apply that schema
+to this branch or present those workflows as shipped merely because the guide
+exists. When the corresponding implementation is merged, reconcile these
+documents with its final behavior and regression tests.
+
 ## Product direction
 
 Ledger is a local-first personal budgeting application. It should remain simple,
@@ -598,8 +608,8 @@ restores without saved flags can be scanned again through Settings.
 During the initial upgrade scan only, an already manually excluded row without
 pair metadata can still identify its old automatic counterpart, preserving legacy
 matching. Never reuse a persisted pair or override an explicit Count normally.
-The obsolete `/api/import` upload endpoint rejects proposed transfer matches and
-directs clients to staged import sessions; it must never apply unseen pair changes.
+The retired `/api/import` endpoint always returns HTTP 410 and writes nothing.
+All imports must use staged sessions and explicit confirmation.
 
 Excluded rows do not affect monthly or annual category cards, subcategories,
 charts, breakdown tables, spending, income, or net totals. They must remain
@@ -733,6 +743,9 @@ ingestion belongs in the **Import data** page at `/import`.
   prevent dismissal during commit. Temporarily opening an editor is not discard.
 - Bind previews to the CSV revision used for duplicate classification and reject
   confirmation if the database changed during review.
+- Do not expose an alternate direct-upload endpoint that parses and writes in one
+  request. Every supported file and browser import must use the staged session,
+  preview, explicit-confirmation, and revision-check flow.
 - If the database is new and empty, the first valid import populates it.
 
 ### Direct browser ingestion

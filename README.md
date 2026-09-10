@@ -6,9 +6,20 @@ One; order history from Amazon, AliExpress, eBay, and Walmart; and Ledger-format
 CSV files. It avoids duplicate imports and provides monthly and annual summaries
 with editable transaction details.
 
+## Documentation status
+
+This README describes the implementation committed on this branch. The primary
+local checkout also contains uncommitted work on linked refunds and repayments,
+reconciliation, import preferences, Schwab Checking, extension connections, and
+deployment. See the [local-development snapshot](docs/local-development.md) for
+those workflows, their schema changes, and verification limits. This
+documentation update does not ship that implementation.
+
+## Features
+
 The dashboard includes:
 
-- Monthly and annual spending, income, and net summaries
+- Monthly and annual spending, income, and net summaries with a configurable large-number abbreviation threshold
 - An all-time Transactions dashboard for searching past purchases and exploring tags or groups
 - Monthly and annual spending breakdowns switchable between categories and a multi-tag explorer
 - Annual category-stacked spending with subcategory drill-down and monthly net charts
@@ -45,9 +56,17 @@ python -m unittest discover -s tests -v
 Tests must use synthetic data and temporary directories. Never copy private
 contents from `data/` or `raw_data_files/` into tests or commits.
 
-If Node.js is available, also run
-`node --test tests/test_transactions_model.js tests/test_transactions_controller.js`
-for the all-time query calculations and browser-controller interaction tests.
+If Node.js is available, also run every JavaScript regression file. In PowerShell:
+
+```powershell
+$ledgerJsTests = @(Get-ChildItem -LiteralPath tests -Filter 'test_*.js' | ForEach-Object FullName)
+node --test @ledgerJsTests
+```
+
+In a shell that expands file globs, use `node --test tests/test_*.js`. Node.js is
+a contributor testing tool, not an application runtime dependency. Python tests
+that exercise JavaScript may skip those checks when Node.js is unavailable;
+check the test summary rather than treating skipped checks as coverage.
 
 ## Run Ledger
 
@@ -194,6 +213,10 @@ and duplicates can be deliberately selected before confirming the import.
 The review modal uses the same searchable, filterable, and sortable transaction
 toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
 toggles sit immediately below that toolbar.
+
+All file and browser imports use this staged session workflow. The retired
+direct-upload API (`/api/import`) always returns HTTP 410 and writes nothing;
+use a staged import session instead.
 
 Closing an uncommitted review with Cancel, X, Escape, or an outside click asks
 before discarding the imported data. Cancel that prompt to keep reviewing with
@@ -673,6 +696,8 @@ ledger_data_importer_extension/
   walmart_extension/ Walmart purchase-history and receipt collector
   shared/           Ledger bridge and import coordinator
 tests/              Isolated standard-library regression tests
+docs/local-development.md
+                    Dated snapshot of uncommitted local workflows and verification limits
 raw_data_files/     Optional private source exports (ignored by Git)
 data/               Master CSV database and backups (ignored by Git)
   transactions.csv
