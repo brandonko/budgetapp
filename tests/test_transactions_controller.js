@@ -231,12 +231,15 @@ async function start(rows, { stored = null, comparisonStored = null, mutationSta
 test("period-report links replace stale browse filters and show only the linked spending scope", async () => {
   const app = await start([tx({ category: "Food", amount: 12 }), tx({ category: "Food", date: "2023-05-12", amount: 99 }),
     tx({ category: "Food", amount: 100, flags: "refunded" }), tx({ category: "Income", amount: -500 })], {
-    stored: { filters: { description: "old search", provider: "Other bank", tags: ["missing"] } },
+    stored: { mode: "compare", filters: { description: "old search", provider: "Other bank", tags: ["missing"] } },
     query: "?report=period-comparison&startDate=2024-05-01&endDate=2024-05-31&category=Food&type=spending",
   });
   assert.equal(app.el("matching-spent").textContent, "$12.00");
   assert.equal(app.el("matching-income").textContent, "$0.00");
   assert.equal(app.el("alltime-search").value, "");
+  assert.equal(app.el("browse-transactions-panel").hidden, false);
+  assert.equal(app.el("group-comparison-panel").hidden, true);
+  assert.equal(app.el("browse-transactions-tab").getAttribute("aria-selected"), "true");
   assert.equal(app.edits().length, 1); assert.equal(app.writes().length, 0);
 });
 

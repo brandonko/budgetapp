@@ -10,6 +10,13 @@ from test_transactions_page import BudgetRequestHandler, PageContract, Threading
 
 
 class PeriodComparisonRouteTests(unittest.TestCase):
+    def test_review_continuation_opens_the_actual_settings_transfer_tab(self):
+        links = [attrs.get("href") for tag, attrs in PageContract("period-comparison.html").elements if tag == "a"]
+        self.assertIn("/settings#internal-transfers", links)
+        self.assertNotIn("/settings?tab=internal-transfers", links)
+        settings = (Path(__file__).resolve().parents[1] / "app" / "settings.html").read_text(encoding="utf-8")
+        self.assertIn('id="internal-transfers-settings-panel"', settings)
+
     def test_report_and_all_script_dependencies_do_not_create_a_database(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "data" / "transactions.csv"
