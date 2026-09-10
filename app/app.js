@@ -303,6 +303,7 @@ const elements = {
   transactionFilterButton: document.querySelector("#transaction-filter-button"),
   transactionFilterPopover: document.querySelector("#transaction-filter-popover"),
   transactionGroupFilter: document.querySelector("#transaction-group-filter"),
+  transactionFlaggedFilter: document.querySelector("#transaction-flagged-filter"),
   transactionFilterCount: document.querySelector("#transaction-filter-count"),
   resetTransactionFilters: document.querySelector("#reset-transaction-filters"),
   transactionActiveFilters: document.querySelector("#transaction-active-filters"),
@@ -381,6 +382,7 @@ function isIncome(transaction) {
 }
 
 function displayAmount(transaction) {
+  if (transaction._budgetAmount !== undefined) return transaction._budgetAmount;
   if (transactionUi.hasTransactionFlag(transaction, "refunded") || isInternalTransfer(transaction)) {
     return 0;
   }
@@ -1965,14 +1967,16 @@ const dashboardBulk = window.LedgerTransactionBulk.create({
   render: () => renderTransactionDialogTransactions(),
   onSaved: (payload) => {
     const context = state.transactionDialogContext;
+    const wasOpen = elements.dialog.open;
     elements.dialog.close();
     applyPayload(payload);
-    reopenTransactionDialog(context);
+    if (wasOpen) reopenTransactionDialog(context);
   },
 });
 
 function currentTransactionDialogFilters() {
   return {
+    flagged: state.transactionDialogFilters.flagged || "",
     group: state.transactionDialogFilters.group || "",
     description: elements.transactionSearch.value.trim(),
     category: state.transactionDialogFilters.category || "",
@@ -1985,6 +1989,7 @@ function currentTransactionDialogFilters() {
 
 function transactionFilterDraft() {
   return {
+    flagged: transactionUi.flagFilterValue(elements.transactionFlaggedFilter),
     group: elements.transactionGroupFilter.value,
     category: elements.transactionCategoryFilter.value,
     subcategory: elements.transactionSubcategoryFilter.value,
@@ -2009,6 +2014,7 @@ function populateTransactionFilter(select, values, allLabel, selectedValue) {
 }
 
 function configureTransactionFilters(transactions, filters) {
+  transactionUi.setFlagFilter(elements.transactionFlaggedFilter, filters.flagged || "");
   transactionUi.populateGroupFilter(elements.transactionGroupFilter, transactions, filters.group);
   elements.transactionSearch.value = filters.description || "";
   const categories = [...new Set(transactions.map((transaction) => transaction.category))]
@@ -2042,6 +2048,7 @@ function configureTransactionFilters(transactions, filters) {
   );
   populateTransactionSubcategoryFilter(filters.category, filters.subcategory);
   state.transactionDialogFilters = {
+    flagged: transactionUi.flagFilterValue(elements.transactionFlaggedFilter),
     group: elements.transactionGroupFilter.value,
     description: filters.description || "",
     category: elements.transactionCategoryFilter.value,
@@ -2077,6 +2084,7 @@ function populateTransactionSubcategoryFilter(category, selectedValue = "") {
 }
 
 function transactionFilterLabel(field, value) {
+  if (field === "flagged") return transactionUi.flagFilterLabel(value);
   if (field === "group") return transactionUi.groupFilterLabel(value);
   if (field === "subcategory" && value === UNCLASSIFIED_SUBCATEGORY) return "Unclassified";
   return value;
@@ -2084,6 +2092,7 @@ function transactionFilterLabel(field, value) {
 
 function renderActiveTransactionFilters() {
   const definitions = [
+    ["flagged", "Flag status"],
     ["group", "Group"],
     ["category", "Category"],
     ["subcategory", "Subcategory"],
@@ -2110,13 +2119,15 @@ function renderActiveTransactionFilters() {
         populateTransactionSubcategoryFilter("", state.transactionDialogFilters.subcategory);
       } else {
         const select = {
+          flagged: elements.transactionFlaggedFilter,
           group: elements.transactionGroupFilter,
           subcategory: elements.transactionSubcategoryFilter,
           tag: elements.transactionTagFilter,
           accountName: elements.transactionAccountFilter,
           provider: elements.transactionProviderFilter,
         }[field];
-        if (select) select.value = "";
+        if (field === "flagged") transactionUi.setFlagFilter(select, "");
+        else if (select) select.value = "";
       }
       renderTransactionDialogTransactions();
     });
@@ -2127,6 +2138,7 @@ function renderActiveTransactionFilters() {
 
 function syncTransactionFilterDraft() {
   const filters = state.transactionDialogFilters;
+  transactionUi.setFlagFilter(elements.transactionFlaggedFilter, filters.flagged || "");
   elements.transactionGroupFilter.value = filters.group || "";
   elements.transactionCategoryFilter.value = filters.category || "";
   populateTransactionSubcategoryFilter(filters.category || "", filters.subcategory || "");
@@ -2137,9 +2149,7 @@ function syncTransactionFilterDraft() {
 
 function setTransactionFilterPopover(open, { restoreDraft = true } = {}) {
   if (!open && restoreDraft) syncTransactionFilterDraft();
-  elements.transactionFilterPopover.hidden = !open;
-  if (open) transactionUi.fitTransactionFilterPopover(elements.transactionFilterPopover);
-  elements.transactionFilterButton.setAttribute("aria-expanded", String(open));
+  transactionUi.setTransactionFilterPanel(elements.transactionFilterPopover, elements.transactionFilterButton, open);
 }
 
 function renderSubcategorySummary() {
@@ -2193,6 +2203,7 @@ function renderTransactionDialogTransactions() {
   const visibleTransactions = transactionUi.sortTransactions(
     state.transactionDialogTransactions.filter((transaction) => (
       transactionUi.matchesTransactionSearch(transaction, filters.description) &&
+      transactionUi.matchesFlagFilter(transaction, filters.flagged) &&
       (!filters.category || transaction.category === filters.category) &&
       (!filters.tag || transactionTags(transaction).some(
         (tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase(),
@@ -2336,7 +2347,8 @@ function transactionFromForm() {
   const existingTransaction = state.transactions.find(
     (transaction) => transaction._id === state.editingTransactionId,
   );
-  return transactionUi.transactionFromEditor(elements.form, existingTransaction);
+  const transaction = transactionUi.transactionFromEditor(elements.form, existingTransaction);
+  return existingTransaction ? dashboardBulk.prepareSave(transaction, existingTransaction) : transaction;
 }
 
 function closeTransactionForm({ returnToList = true, force = false } = {}) {
@@ -2367,6 +2379,7 @@ async function mutationRequest(url, method, transaction = undefined) {
 }
 
 function applyPayload(payload, preferredMonth = selectedMonthKey()) {
+  dashboardBulk.acceptSaved(payload);
   state.transactions = payload.transactions;
   state.revision = payload.revision;
   const stablePreferredMonth = state.viewMode === "year-over-year"
@@ -2405,7 +2418,7 @@ async function deleteTransaction() {
   }
   const confirmed = window.confirm(
     `Permanently delete “${transaction.description}” for ${currency.format(transaction.amount)}?\n\n` +
-      "This updates the master CSV and cannot be undone.",
+      "This updates the master CSV and cannot be undone. A safety backup is created first. Any links to this row are removed, which can change the remaining purchase or credit’s budget amount.",
   );
   if (!confirmed) {
     return;
@@ -2671,7 +2684,11 @@ elements.comparisonChartModeButtons.forEach((button) => {
     renderYearComparison();
   });
 });
-elements.closeDialog.addEventListener("click", () => elements.dialog.close());
+async function closeTransactionList() {
+  if (await dashboardBulk.flushFlags()) elements.dialog.close();
+}
+elements.closeDialog.addEventListener("click", closeTransactionList);
+elements.dialog.addEventListener("cancel", event => { event.preventDefault(); closeTransactionList(); });
 elements.transactionSearch.addEventListener("input", renderTransactionDialogTransactions);
 elements.transactionFilterButton.addEventListener("click", () => {
   const open = elements.transactionFilterButton.getAttribute("aria-expanded") !== "true";
@@ -2685,6 +2702,7 @@ elements.transactionCategoryFilter.addEventListener("change", () => {
   );
 });
 elements.resetTransactionFilters.addEventListener("click", () => {
+  transactionUi.setFlagFilter(elements.transactionFlaggedFilter, "");
   elements.transactionGroupFilter.value = "";
   elements.transactionCategoryFilter.value = "";
   populateTransactionSubcategoryFilter("");
@@ -2703,6 +2721,7 @@ transactionUi.bindLiveTransactionFilters(elements.transactionFilterPopover, () =
 elements.clearTransactionFilters.addEventListener("click", () => {
   state.transactionDialogFilters = {
     ...state.transactionDialogFilters,
+    flagged: "",
     group: "",
     category: "",
     subcategory: "",
@@ -2714,12 +2733,7 @@ elements.clearTransactionFilters.addEventListener("click", () => {
   renderTransactionDialogTransactions();
   elements.transactionFilterButton.focus();
 });
-document.addEventListener("click", (event) => {
-  const open = elements.transactionFilterButton.getAttribute("aria-expanded") === "true";
-  if (open && !event.target.closest(".transaction-filter-menu")) {
-    setTransactionFilterPopover(false);
-  }
-});
+
 elements.dialog.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && elements.transactionFilterButton.getAttribute("aria-expanded") === "true") {
     event.preventDefault();
@@ -2730,7 +2744,7 @@ elements.dialog.addEventListener("keydown", (event) => {
 });
 elements.dialog.addEventListener("click", (event) => {
   if (event.target === elements.dialog) {
-    elements.dialog.close();
+    closeTransactionList();
   }
 });
 elements.form.addEventListener("submit", saveTransaction);

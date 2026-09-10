@@ -103,9 +103,10 @@ class TransactionsPageContractTests(unittest.TestCase):
         self.assertIn("max-height: none", tags[1])
         self.assertIn("overflow: visible", tags[1])
         self.assertNotIn("overflow-y:", tags[1])
-        panel = re.search(r"\.transactions-query \.transaction-filter-popover\s*\{([^}]+)\}", css)
+        panel = re.search(r"\.transactions-query \.transaction-filter-panel\s*\{([^}]+)\}", css)
         self.assertIsNotNone(panel)
-        self.assertIn("overflow-y: auto", panel[1])
+        self.assertNotIn("overflow-y: auto", panel[1])
+        self.assertNotIn("max-height", panel[1])
 
     def test_all_transaction_filter_variants_have_no_apply_button(self) -> None:
         html = (APP_DIR / "transactions.html").read_text(encoding="utf-8")

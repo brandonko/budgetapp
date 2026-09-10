@@ -8,7 +8,7 @@
   const BLANK = "__ledger_blank__";
   const UNTAGGED = "__ledger_untagged__";
   const defaults = () => ({ description: "", category: "", subcategory: "", accountName: "",
-    provider: "", group: "", tags: [], tagMode: "any", startDate: "", endDate: "", type: "all", showExcluded: true });
+    provider: "", group: "", flagged: "", tags: [], tagMode: "any", startDate: "", endDate: "", type: "all", showExcluded: true });
   const key = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
   const byId = (id) => document.getElementById(id);
   const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -36,6 +36,7 @@
       ? [...new Set(saved.filters.tags.filter((tag) => typeof tag === "string" && tag.trim()).map(key))] : [];
     filters.tagMode = filters.tagMode === "all" ? "all" : "any";
     filters.type = ["all", "income", "spending"].includes(filters.type) ? filters.type : "all";
+    filters.flagged = filters.flagged === "flagged" ? "flagged" : "";
     filters.showExcluded = saved.filters.showExcluded !== false;
     if (filters.tags.includes(UNTAGGED)) filters.tagMode = "any";
   }
@@ -45,6 +46,7 @@
   });
   transactionUi.configureTransactionTagPicker(editor, []);
   const bulk = window.LedgerTransactionBulk.create({
+    page: true,
     container: byId("alltime-list"), getTransactions: () => state.transactions,
     getRevision: () => state.revision, render: () => updateResults(false),
     getGroupFilter: () => filters.group,
@@ -144,14 +146,14 @@
     populateSelect("accountName", state.transactions.map((tx) => tx.accountName), values.accountName, "All accounts");
     populateSelect("provider", state.transactions.map((tx) => tx.provider), values.provider, "All providers");
     for (const name of ["startDate", "endDate", "type"]) field(name).value = values[name];
+    transactionUi.setFlagFilter(field("flagged"), values.flagged);
     field("showExcluded").checked = values.showExcluded;
     field("endDate").setCustomValidity("");
     byId("alltime-date-error").hidden = true;
   }
 
   function closeFilters(returnFocus = false) {
-    filterForm.hidden = true;
-    byId("alltime-filter-button").setAttribute("aria-expanded", "false");
+    transactionUi.setTransactionFilterPanel(filterForm, byId("alltime-filter-button"), false);
     if (returnFocus) byId("alltime-filter-button").focus();
   }
 
@@ -204,10 +206,10 @@
       chips.append(element);
     }
     const labels = { description: "Search", category: "Category", subcategory: "Subcategory",
-      accountName: "Account", provider: "Provider", startDate: "From", endDate: "Through", type: "Activity" };
+      accountName: "Account", provider: "Provider", startDate: "From", endDate: "Through", type: "Activity", flagged: "Flag status" };
     for (const [name, label] of Object.entries(labels)) {
       if (!filters[name] || (name === "type" && filters[name] === "all")) continue;
-      const value = filters[name] === BLANK ? (name === "category" ? "Uncategorized" : "No subcategory") : filters[name];
+      const value = name === "flagged" ? transactionUi.flagFilterLabel(filters[name]) : filters[name] === BLANK ? (name === "category" ? "Uncategorized" : "No subcategory") : filters[name];
       chip(`${label}: ${value}`, () => {
         filters[name] = defaults()[name];
         if (name === "category") filters.subcategory = "";
@@ -220,7 +222,7 @@
       filters.tagMode === "all" ? "Tags: match all (AND)" : "Tags: match any (OR)", "alltime-tag-match-label"));
     for (const tag of filters.tags) chip(tagLabel(tag), () => { filters.tags = filters.tags.filter((item) => item !== tag); });
     byId("active-filters").hidden = !chips.children.length;
-    const filterCount = ["category", "subcategory", "group", "accountName", "provider", "startDate", "endDate"]
+    const filterCount = ["flagged", "category", "subcategory", "group", "accountName", "provider", "startDate", "endDate"]
       .filter((name) => filters[name]).length + Number(filters.type !== "all") + Number(!filters.showExcluded) + filters.tags.length;
     byId("alltime-filter-count").textContent = String(filterCount);
     byId("alltime-filter-count").hidden = filterCount === 0;
@@ -263,7 +265,7 @@
     byId("matching-net-card").classList.toggle("is-negative", summary.net < 0);
     const span = summary.startDate ? ` · ${formatDate(summary.startDate)} – ${formatDate(summary.endDate)}` : "";
     byId("matching-scope").textContent = `${summary.count} matching of ${state.transactions.length} recorded transactions${span}. `
-      + `${summary.excludedCount} refunded or internal transfer transaction${summary.excludedCount === 1 ? " is" : "s are"} excluded from totals.`;
+      + `${summary.excludedCount} linked credit, refund, or internal transfer transaction${summary.excludedCount === 1 ? " is" : "s are"} excluded from totals.`;
     const pages = Math.max(1, Math.ceil(matching.length / PAGE_SIZE));
     state.page = Math.min(state.page, pages - 1);
     const sorted = transactionUi.sortTransactions(matching, sortControl.value());
@@ -312,6 +314,7 @@
     if (!Array.isArray(payload.transactions) || typeof payload.revision !== "string") {
       throw new Error("Ledger returned an unfamiliar response. Refresh the page before editing.");
     }
+    bulk.acceptSaved(payload);
     state.transactions = payload.transactions;
     state.revision = payload.revision;
     state.loaded = true;
@@ -322,6 +325,7 @@
 
   async function loadTransactions() {
     if (state.loading || dialog.open) return;
+    if (bulk.hasPendingFlags() && !await bulk.flushFlags()) return;
     state.loading = true;
     status("");
     try {
@@ -397,7 +401,7 @@
     if (!state.editing || state.busy) return;
     const original = state.editing;
     const body = { revision: state.editingRevision };
-    if (method === "PUT") body.transaction = transactionUi.transactionFromEditor(editor, original);
+    if (method === "PUT") body.transaction = bulk.prepareSave(transactionUi.transactionFromEditor(editor, original), original);
     setBusy(true);
     byId("form-error").hidden = true;
     try {
@@ -419,9 +423,7 @@
   byId("alltime-filter-button").addEventListener("click", () => {
     if (!filterForm.hidden) { closeFilters(true); return; }
     populateFilterForm();
-    filterForm.hidden = false;
-    transactionUi.fitTransactionFilterPopover(filterForm);
-    byId("alltime-filter-button").setAttribute("aria-expanded", "true");
+    transactionUi.setTransactionFilterPanel(filterForm, byId("alltime-filter-button"), true);
     field("category").focus();
   });
   field("category").addEventListener("change", () => populateSubcategories());
@@ -440,6 +442,7 @@
       filters.endDate = end;
     }
     for (const name of ["category", "subcategory", "group", "accountName", "provider", "type"]) filters[name] = field(name).value;
+    filters.flagged = transactionUi.flagFilterValue(field("flagged"));
     filters.showExcluded = field("showExcluded").checked;
     updateResults();
   }
@@ -461,12 +464,7 @@
     updateResults();
   }));
   byId("tag-search").addEventListener("input", () => renderTagOptions());
-  document.addEventListener("click", (event) => {
-    // A tag click rerenders its button before bubbling; use the original event
-    // path so selecting several tags never accidentally closes the picker.
-    const path = event.composedPath();
-    if (!path.includes(filterForm) && !path.includes(byId("alltime-filter-button"))) closeFilters();
-  });
+
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (!filterForm.hidden) { closeFilters(true); event.preventDefault(); }
@@ -487,7 +485,7 @@
   editor.addEventListener("submit", (event) => { event.preventDefault(); if (editor.reportValidity()) void mutate("PUT"); });
   byId("delete-transaction-button").addEventListener("click", () => {
     if (!state.editing || state.busy) return;
-    if (window.confirm(`Permanently delete “${state.editing.description}” for ${currency.format(state.editing.amount)}?\n\nThis removes the transaction from the master CSV.`)) void mutate("DELETE");
+    if (window.confirm(`Permanently delete “${state.editing.description}” for ${currency.format(state.editing.amount)}?\n\nA safety backup is created first. Links to this row are removed, which can change the remaining purchase or credit’s budget amount.`)) void mutate("DELETE");
   });
   byId("browse-transactions-tab").addEventListener("click", () => showWorkspace("browse"));
   byId("compare-groups-tab").addEventListener("click", () => showWorkspace("compare"));

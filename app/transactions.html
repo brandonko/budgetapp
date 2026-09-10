@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="/theme.js?v=20260905-display-preferences-1"></script>
+  <script src="/theme.js?v=20260909-import-preferences-1"></script>
   <title>Transactions — Ledger</title>
   <meta name="description" content="Search all your Ledger transactions and explore spending across tags, trips, and projects." />
-  <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
-  <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
-  <link rel="stylesheet" href="/transactions.css?v=20260905-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+  <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
+  <link rel="stylesheet" href="/transactions.css?v=20260909-inline-filters-1" />
   <link rel="stylesheet" href="/group-comparison.css?v=20260907-1" />
   <script src="/navigation.js" defer></script>
-  <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
-  <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
-  <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
+  <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
+  <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
+  <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
   <script src="/group-comparison.js?v=20260907-stable-colors-1" defer></script>
-  <script src="/transactions.js?v=20260907-notes-search-1" defer></script>
+  <script src="/transactions.js?v=20260909-reconcile-flags-1" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -98,8 +98,12 @@
         </label>
         <div class="transaction-filter-menu">
           <button id="alltime-filter-button" class="transaction-filter-button" type="button" aria-expanded="false" aria-controls="alltime-filter-popover">Filters <span id="alltime-filter-count" hidden></span></button>
-          <form id="alltime-filter-popover" class="transaction-filter-popover" aria-label="Transaction filters" hidden>
-            <div class="transaction-filter-popover-heading"><strong>Filter transactions</strong><span>Changes apply instantly. Leave dates blank to search all time.</span></div>
+
+        </div>
+        <div id="alltime-sort"></div>
+      </div>
+        <form id="alltime-filter-popover" class="transaction-filter-panel" aria-label="Transaction filters" hidden>
+            <div class="transaction-filter-panel-heading"><strong>Filter transactions</strong><span>Changes apply instantly. Leave dates blank to search all time.</span></div>
             <fieldset><legend>Classification</legend>
               <div class="transaction-filter-pair">
                 <label><span>Category</span><select name="category" aria-label="Category"></select></label>
@@ -131,15 +135,13 @@
               <label class="transaction-filter-wide"><span>Activity</span><select name="type">
                 <option value="all">All transactions</option><option value="spending">Spending</option><option value="income">Income</option>
               </select></label>
-              <label class="alltime-excluded-toggle"><input type="checkbox" name="showExcluded" checked /> Show refunds and internal transfers excluded from totals</label>
+              <label class="transaction-flag-filter"><input name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
+              <label class="alltime-excluded-toggle"><input type="checkbox" name="showExcluded" checked /> Show linked credits, refunds, and internal transfers excluded from totals</label>
             </fieldset>
-            <div class="transaction-filter-popover-actions">
+            <div class="transaction-filter-panel-actions">
               <button type="button" class="text-button" id="reset-alltime-filters">Reset</button>
             </div>
           </form>
-        </div>
-        <div id="alltime-sort"></div>
-      </div>
       <div class="transaction-active-filters" id="active-filters" hidden>
         <div class="transaction-filter-chips" id="filter-chips"></div>
         <button type="button" id="clear-alltime-filters" class="text-button">Clear all</button>

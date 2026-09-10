@@ -1,19 +1,15 @@
 # Ledger
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
-It imports account transactions from Credit Karma, Venmo, Apple Card, and Capital
-One; order history from Amazon, AliExpress, eBay, and Walmart; and Ledger-format
-CSV files. It avoids duplicate imports and provides monthly and annual summaries
+It imports account transactions from Credit Karma, Venmo, Apple Card, Capital
+One, and Schwab Checking; order history from Amazon, AliExpress, eBay, and
+Walmart; and Ledger-format CSV files. It avoids duplicate imports and provides monthly and annual summaries
 with editable transaction details.
 
-## Documentation status
-
-This README describes the implementation committed on this branch. The primary
-local checkout also contains uncommitted work on linked refunds and repayments,
-reconciliation, import preferences, Schwab Checking, extension connections, and
-deployment. See the [local-development snapshot](docs/local-development.md) for
-those workflows, their schema changes, and verification limits. This
-documentation update does not ship that implementation.
+For a task-oriented guide to linked refunds, Reconcile, import preferences,
+follow-up flags, Schwab, and extension connections, see
+[Current workflows](docs/current-workflows.md). It also explains schema
+migration, deployment recovery, and what still needs live verification.
 
 ## Features
 
@@ -29,8 +25,12 @@ The dashboard includes:
 - A shared navigation menu for the dashboard, transactions, data imports, classifications, and settings
 - Manual transaction creation, editing, multi-tag labeling, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
-- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, and Capital One through a companion Chrome extension
-- Manual Apple Card CSV fallback with editable account details
+- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, Capital One, and Schwab Checking through a companion Chrome extension
+- Manual Apple Card and Capital One CSV fallbacks with editable account details
+- Linked refunds and repayments that retain original transactions while adjusting spending
+- A Reconcile workspace for reviewing transfer and refund suggestions before saving
+- Follow-up flags, a Flagged only filter, and bulk flag actions across transaction lists
+- Browser-local import lookback and refund-matching preferences
 - Automatic and manually overridable internal-transfer exclusion
 - Ordered, regular-expression classification rules for import categories and subcategories
 - A visual taxonomy editor for maintaining available categories and subcategories
@@ -94,13 +94,31 @@ python app\server.py --csv path\to\transactions.csv --port 8080
 The server binds to `127.0.0.1` by default so the financial data and editing
 endpoints are accessible only from the local machine.
 
+For a local-network test, run `python app/server.py --host 0.0.0.0 --port 8000`
+and open `http://YOUR_SERVER_IP:8000/import` from your browser. For direct imports,
+reload Ledger Data Importer in `chrome://extensions`, open its popup's
+**Ledger connection settings**, add `http://YOUR_SERVER_IP:8000`, click
+**Trust server**, approve site access, and refresh the import page. The extension
+checks the exact address and port; localhost continues to connect automatically.
+If the server is already listed but Ledger is not detecting the extension, use
+**Reconnect** beside that server (or **Allow site access** if permission is missing).
+Version 0.11.1 restores the connection script automatically after extension/browser
+startup and permission changes. Reload the extension once to activate this fix,
+then refresh Import data. Do not add the same server again.
+The extension stays in the browsing device, even when Ledger runs on a home
+server. This setting does not add server authentication or HTTPS.
+
 ## Import data
+
+For a dedicated home server, see [the Proxmox deployment guide](deploy/README.md).
+It includes a Debian service and a `ledger-deploy` command that tests and deploys
+the latest `main`, with financial data and deployment backups outside the code.
 
 Raw financial data is private and must not be committed to Git. This
 repository's `.gitignore` excludes both `raw_data_files/` and `data/`.
 
 With Ledger running, open <http://127.0.0.1:8000/import> or select **Import
-data** from the dashboard. The page presents nine sources as tabs so only one
+data** from the dashboard. The page presents ten sources as tabs so only one
 importer is visible at a time:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
@@ -108,8 +126,26 @@ importer is visible at a time:
   Venmo, eBay, and Walmart transactions so they can be replaced by richer source data. Each filter
   can be disabled for an individual import.
   The Walmart filter matches `walmart`, `wal-mart`, `wal mart`, or
-  `wm supercenter` (case-insensitive). Turn it off to include membership charges,
-  refunds, or purchases not covered by itemized imports.
+  `wm supercenter` (case-insensitive). Turn it off to include membership charges
+  or purchases not covered by itemized imports.
+  The global **Settings → Preferences → Suggest refund matches** option is enabled
+  by default and remembered in this browser; it applies to every importer, not just Credit Karma.
+  It keeps credits from these services even when their merchant filter is on,
+  and suggests saved purchases at the exact opposite amount within the preceding
+  **90 days**. Same-account purchases appear first; a matching price is only a
+  suggestion, particularly for Venmo payments.
+  In review, click **Mark as refunded**. The adjacent chevron expands the
+  explanation and matched purchases, displayed as transaction rows. If there is
+  more than one candidate, select a purchase explicitly before marking it.
+  The credit remains visible and is linked instead of counted independently;
+  **Undo match** restores normal import selection. Only final confirmation saves
+  the real credit and its link to the original purchase, and
+  cancelling discards both the import and the proposed refund changes. Leave
+  the credit selected to import it normally instead. Turn the toggle off to
+  restore merchant exclusions for credits and manage refunds manually.
+  Automatic suggestions cover full refunds of saved purchases. For partial
+  refunds, link credits manually in the purchase editor. Repayments can be linked
+  from either the original purchase or the repayment's editor.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
   tax multiplier. Its editable payment-account defaults are `Prime VISA`,
   `CREDIT CARD`, and `chase`.
@@ -143,11 +179,35 @@ importer is visible at a time:
   Transaction Date range, through the companion extension or a manual CSV
   fallback. See the Capital One workflow below for supported layouts and account
   options.
+- **Schwab Checking** captures a CSV export from your signed-in Schwab tab.
+  Start in Ledger, select one checking account in Schwab, set its transaction
+  history range, and export CSV. Defaults are `Schwab Checking`, `BANK`, and
+  `Charles Schwab`; use a distinct account name for each checking account.
+  Withdrawals become expenses, deposits become credits, and pending activity is
+  skipped with a notice. Review categories and duplicates before confirming.
+  Interest-adjustment entries with both amount cells blank are also skipped
+  with a warning; Ledger never infers an amount from the running balance.
+  Brokerage and retirement activity are not supported.
 - **CSV** accepts Ledger's transaction schema without the system-managed
   `createdAt` column. Each row requires `date`, `description`, and `amount`; all
   other columns must be present but may contain blank values. Rows are validated
   independently, so valid rows reach review while the modal reports how many
   invalid rows were skipped.
+
+**Settings → Preferences** also sets the default lookback for every importer's
+date controls: **1, 2, or 3 weeks**, or **1, 2, or 3 calendar months**. The default
+is **2 weeks**, ending today. Calendar months clamp to the last valid day when
+necessary. Dates remain editable; changing the preference does not replace
+custom dates on an already-open import page. Ledger-format and Apple Card CSV
+uploads still read the entire file rather than applying this default window.
+
+**Suggest refund matches** controls suggestions for credits from all sources,
+including uploaded CSVs. Each new import snapshots this preference; changing it
+does not alter an import already in review. Matching uses an exact-price saved
+purchase from the preceding 90 days and always requires explicit review and
+confirmation. When off, no importer suggests refunds. Credits otherwise remain
+normal transactions, except Credit Karma restores its selected merchant exclusions.
+These preferences are saved in the current browser, like the theme preference.
 
 For Apple Card, select **Import from Apple Card** and sign in if Apple asks.
 Ledger's extension drives Apple's official export form and receives the CSV
@@ -156,7 +216,21 @@ page, manually export a CSV from [card.apple.com](https://card.apple.com) and
 select it in the same source tab. Manual CSV imports review every valid row in
 the file; the page's date selectors apply only to the automatic workflow.
 
+Schwab Checking requires companion **0.11.0+**. Reload Ledger Data Importer in
+`chrome://extensions`, accept the `client.schwab.com` permission, restart the
+Python backend, and refresh Import data. Dates filter the export inclusively.
+Keep the opened Schwab tab active through the export, then return to Ledger for
+review. Current live export capture still needs verification with your account;
+see [Schwab integration details](ledger_data_importer_extension/schwab_extension/README.md).
+
 ### Companion browser extension
+
+The extension toolbar opens a **Ledger** popup, not an Amazon exporter. Select
+your Ledger server and **Open Import data** to choose any supported source.
+Use **Ledger connection settings** to add a trusted home-server address. Keep
+Ledger running; the popup does not launch Python or start an import itself.
+After updating to companion **0.10.2**, reload the extension in
+`chrome://extensions` to see the new popup. No backend restart is required.
 
 **Capital One:** choose its tab, set an inclusive date range and account labels,
 then click **Import Capital One transactions**. Requires companion **0.9.1+**;
@@ -186,8 +260,8 @@ CSV layout references: [Capital One credit parser](https://github.com/mtlynch/be
 and [Capital One checking CSV example](https://github.com/wgwz/capital-one-recurring-expenses).
 
 The Import data page supports selecting a date range and importing from an
-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, or
-Capital One session without first saving a file. This
+authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card,
+Capital One, or Schwab Checking session without first saving a file. This
 requires a one-time installation of the unpacked Chrome companion extension:
 
 1. Open `chrome://extensions` in Chrome.
@@ -224,6 +298,23 @@ your edits and selections intact. Confirming discard saves nothing.
 Successful individual and bulk changes show an **Edited** badge, helping you
 track manually reviewed rows alongside **No rule matched** or **Duplicate**.
 This badge belongs only to the current review; it does not add a saved tag.
+Edited rows keep **No rule matched**, but no longer have the yellow background.
+
+The icon-only flag next to **Edit** marks a transaction for follow-up and gives
+it a soft red highlight. Click again to remove the flag. Turn on **Filters →
+Flagged only** to see flagged rows; turn it off to see all rows matching your
+other filters. This is available across shared
+transaction lists, including the all-time Transactions page. Flags on saved
+transactions update instantly in memory and save together when the transaction
+list closes, with revision protection and one safety backup. Opening an editor
+does not flush these flags; other edits preserve them. A failed save keeps the
+list open and the pending flags available to retry. On the full-page Transactions
+view, flags save when following a Ledger navigation link; **Save flags** also
+lets you save without leaving. Reloading or closing the browser warns while flags
+remain unsaved rather than relying on an unreliable background write.
+Import and proposed-change reviews keep flags staged until their final confirmation.
+Flags do not change amounts, import inclusion, or budget totals. **Edit multiple**
+also supports setting or clearing flags for selected transactions.
 
 Before duplicate detection and review, Ledger applies classifications saved
 on the dedicated **Classifications** page. If no rule matches, the importer-provided
@@ -232,7 +323,7 @@ category is retained and the subcategory stays blank.
 CSV imports use this exact header:
 
 ```text
-date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,id,links
 ```
 
 The app assigns a shared `createdAt` timestamp to the selected valid rows only
@@ -284,7 +375,7 @@ the complete transaction history, without choosing a reporting month or year.
 Search descriptions and notes, filter category and subcategory, account name or provider,
 and combine tags inside **Filters** using **Match any** (OR) or **Match all** (AND).
 Filters update results and totals immediately, without Apply or Refresh buttons.
-**Reset** clears the popover filters immediately; closing it keeps your selections.
+**Reset** clears the expanded filters immediately; collapsing them keeps your selections.
 Incomplete or reversed date ranges show an inline message and retain the last
 valid date range until corrected. Selected tags
 appear as removable chips and count toward the Filters indicator. Optional start
@@ -517,23 +608,32 @@ rows. Cancelling a preview does not create or modify the file. An existing file 
 never replaced by initialization.
 
 ```text
-date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt,id,links
 ```
 
 Ledger automatically and atomically adds missing optional `subcategory`, `notes`, `tags`, `group`, `flags`, and
-`createdAt` columns when it opens an older database. Notes may contain commas or multiple
+`createdAt`, `id`, and `links` columns when it opens an older database. Notes may contain commas or multiple
 lines. Tags are optional comma-separated labels; surrounding whitespace is
 trimmed and repeated labels are removed case-insensitively. Flags are normalized,
-comma-separated identifiers; the first supported
-flag is `refunded`. `createdAt` is an immutable UTC ISO 8601 timestamp assigned
+comma-separated identifiers, including `refunded`, `internal-transfer`, and
+`flagged` (follow-up only).
+`createdAt` is an immutable UTC ISO 8601 timestamp assigned
 to imported rows; it remains blank for manual and legacy rows.
 A snapshot of the original CSV is placed in `data/backups/` before schema migration.
 Older CSV imports without `group` remain accepted and receive a blank group.
+Each transaction has an immutable unique `id`. `links` is an optional JSON array
+stored on the original purchase; leave both fields blank when making a new CSV
+by hand. Older CSV layouts without these fields remain supported.
 
 Debit expenses and Amazon purchases are positive. Credits, refunds, and income
 are negative in the CSV. In the interface, income is displayed as a positive
 value and net total is calculated as income minus spending: a surplus is green
 and a spending deficit is red.
+
+Transaction rows show money received as **+$25.00**, including income, refunds,
+repayments, and incoming transfers. Purchases remain **$25.00**. The plus sign
+does not rely on green text, so it remains clear on highlighted rows. Excluded
+credits retain the plus sign along with their muted, struck-through amount.
 
 ### Dashboard periods and totals
 
@@ -546,17 +646,37 @@ and a spending deficit is red.
 - Transaction lists default to latest-first, support description/notes search and
   category, subcategory, tag, account name, and provider filters, and can be sorted by date,
   description, or absolute cost in ascending or descending order.
+- All transaction rows use the same rounded card shape, with a subtle neutral
+  border and background by default. Import warnings and follow-up flags change
+  the card's colors without changing its spacing or shape.
+  Expanded refund matches and linked transactions use outlined inset cards,
+  with clearly separated month/day/year dates and wrapping account details.
 - Transaction dialogs keep description/notes search and sorting visible. Search
   is case-insensitive, matches literal text in either field, and supports phrases
   across line breaks in notes without changing the saved text. Less-frequent
-  filters live in a compact popover, with category beside its dependent
+  filters expand as a full-width section below the search/sort bar, with category beside its dependent
   subcategory and account name beside provider. Active filters appear as
   individually removable chips. The tag filter lists tags present in the
   transactions available to the current dialog.
-  Selections and Reset apply immediately while the popover stays open. This only
+  Selections and Reset apply immediately while the section stays open. Click Filters
+  again or press Escape to collapse it without clearing selections. In transaction
+  modals, a generous viewport-sized default leaves room for several rows. Opening
+  or closing Filters keeps the modal's size unchanged, and
+  filters stay fixed above an independently scrolling transaction list;
+  on short screens the controls can scroll separately. The header and final
+  actions stay accessible even when no rows match. This only
   filters the list; import and transaction-edit confirmations remain explicit.
-- Transactions flagged `refunded` remain visible but contribute $0 to category,
-  spending, income, net, and annual-chart totals.
+- Confirmed refund matches preserve both source transactions and link the credit
+  to its purchase. Re-importing a handled credit shows **Refund already handled**,
+  unchecked as a duplicate. Old `refund-receipt-YYYY-MM-DD-<cents>` flags remain
+  supported for refunds from releases that omitted the credit; never strip these
+  receipts or invent a missing source transaction. New matches do not create
+  receipt flags. Links and selected imports use one revision-checked, backed-up
+  atomic CSV write.
+- On unlinked transactions, the `refunded` flag keeps the row visible while
+  contributing $0 to category, spending, income, net, and annual-chart totals.
+  Linked transactions use their relationship's effective amount instead;
+  unlink before changing budget treatment.
 - The default reporting period is the latest month containing at least one
   budget-visible transaction.
 - **Today** beside the period controls switches from any dashboard view to the
@@ -598,7 +718,54 @@ and a spending deficit is red.
   Import data or Settings restores that reporting context when it is still
   available in the transaction data.
 
-### Internal transfers and bill-payment reconciliation
+### Reconcile: transfers, refunds, and repayments
+
+Open **Settings → Reconcile → Find matches** to review internal-transfer pairs
+and possible full refunds. Refund suggestions match opposite amounts within the
+preceding 90 days; a price match is not proof. Expand **Possible refund**, choose
+the correct purchase, and click **Link selected purchase** below the matches.
+The row shows **Refund link staged**; **Save reviewed changes** is the final
+confirmation. **Undo refund link** removes a staged choice without saving it.
+Multiple candidates require an explicit choice. Flagging a transaction preserves
+its suggestion, selected purchase, and expanded details.
+Enable **Match nonzero decimal** before scanning to skip whole-dollar transfer
+and refund suggestions such as $10.00. The option applies to this reconciliation
+scan, not saved links or manual linking; it is off initially.
+
+For a partial refund, restocking fee, or shared expense, edit the **original
+positive-amount purchase** and expand **Refunds & repayments**. Choose Refund,
+Internal transfer, or Repayment; search credits by description/notes and select
+the matching records. Refunds and transfers are one-to-one. Repayments allow
+several credits against one purchase. Linked records and search results use the
+same transaction cards as the rest of Ledger. Remove a link with **Unlink**.
+Selection stays staged until the editor (and any enclosing review) is saved.
+
+You can edit either side of any relationship under **Refunds & repayments**.
+The editor identifies the role from the amount: expenses are positive in storage,
+and money received is negative (displayed with a **+** in lists). Choose the link
+type explicitly. An expense can link several repayments; a received credit can
+link only one original expense. Existing repayments on that expense are preserved.
+Refunds can be partial, but internal transfers require equal and opposite amounts
+in different accounts. Unlink before choosing a different expense; never reuse a
+credit on two expenses. Import selections still control what is saved: canceling
+or unchecking a credit does not update the expense.
+
+The purchase displays the **net cost** while keeping its original amount in the
+CSV. A $100 purchase with an $80 refund contributes $20; a $200 shared purchase
+with $60 and $40 repayments contributes $100. The net belongs to the original
+purchase's month, category, tags, and group. Linked credits remain on their own
+posting dates, greyed and struck through, but do not count as income or credits
+again. Expand either row to see its counterpart(s). An over-repayment can produce
+a negative net expense. Internal transfers must balance exactly; record fees as
+separate expenses.
+
+One credit cannot belong to two purchases, and links cannot form chains or loops.
+Unlink from the original purchase before switching to a manual budget override.
+Deleting a linked row removes its link, so surviving records count at their
+remaining net/source amount. Deletion still requires confirmation and a backup.
+Exports include the entire linked set, even when a counterpart is outside the
+chosen date range, and display that expanded count. Import the whole linked set
+to preserve its net cost; incomplete or ambiguous links are rejected.
 
 Ledger does not exclude every transaction categorized as `Transfer`. Detection
 proposes matched transactions from
@@ -615,31 +782,34 @@ to count normally. These choices are stored as `internal-transfer` and
 `include-in-budget` flags; the original amount always remains in the CSV.
 
 **Detection runs only during import review or when requested in Settings.**
-Confirmed internal-transfer flags are persisted in the CSV, so dashboard loads
-do not rerun matching. Automatically matched pairs share an internal pairing
-identifier in the existing `flags` column; older CSV layouts remain compatible.
-Changing a description or deleting a counterpart does not silently remove a saved
-exclusion. Choose **Eligible for detection**, **Internal transfer**, or **Count
-normally** in any transaction editor to control budget treatment explicitly.
+Confirmed pairs are persisted as durable ID-based links, so dashboard loads do
+not rerun matching. Existing exact two-member `transfer-pair-*` flags are upgraded
+to links during the backed-up schema migration. Unpaired legacy exclusion flags
+stay intact. Changing a description never breaks a link. On unlinked records,
+**Eligible for detection**, **Internal transfer**, and **Count normally** remain
+available as manual budget overrides for incomplete historical data.
 
 Imports match selected incoming rows against each other and existing unmatched
 transactions. The review shows any existing counterparts that will also be
-flagged. Editing or unchecking an incoming row recalculates the proposal. Only
-confirmation saves the selected rows and existing-side flags together, with a
-safety backup of an existing database. Cancelling saves nothing.
+linked. Editing or unchecking an incoming row recalculates the proposal. Only
+confirmation saves the selected rows, reviewed links, and affected existing-row
+flags together, with a safety backup of an existing database. Cancelling saves
+nothing.
 
-Open **Settings → Internal transfers → Find internal transfers** to scan all
+Open **Settings → Reconcile → Find matches** to scan all
 saved transactions. The shared review modal supports search, filters, sorting,
 and staged individual or bulk edits, and shows the exact proposed changes.
-The **Proposed changes** toggle starts on; **Already flagged** starts off and
-reveals unchanged saved internal transfers. Both only affect visibility, not
+The **To review** toggle starts on; **Already reconciled** starts off and
+reveals saved links and legacy exclusions. Both only affect visibility, not
 what gets saved. Editing a saved transfer moves it into proposed changes.
 Confirm to save them; Cancel, Escape, X, or clicking outside discards the review.
 Already excluded transactions and explicit Count normally overrides are not
 reused as matching candidates.
 
 After upgrading, Ledger asks for this one-time review before showing dashboard
-totals under the saved-only policy. Your existing CSV is not silently rewritten.
+totals under the saved-only policy. Startup may migrate a supported older
+schema and exact saved pairs with a safety backup; new transfer/refund detection
+still requires explicit review.
 Completion is recorded in `data/transactions.transfer-review.json`; transfer
 status itself stays in `transactions.csv`. A new database created by a confirmed
 import needs no extra review. If you later restore older data without saved
@@ -666,6 +836,9 @@ edited or deleted.
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Bank/account and merchant-order source parsers
+app/reconciliation.py
+                    Durable transaction IDs, link validation, and effective budget amounts
+app/refunds.py      Refund suggestions and legacy receipt deduplication helpers
 app/index.html      Monthly and annual dashboard
 app/transactions.html
                     All-time search, tag/group exploration, and matching summaries
@@ -677,14 +850,14 @@ app/transactions.css
 app/group-comparison.js / .css
                     Read-only multi-group comparison workspace and visualizations
 app/navigation.js  Shared accessible navigation-menu behavior
-app/settings.html  Exports, import history, transfer review, taxonomy, and preferences
+app/settings.html  Exports, import history, Reconcile, taxonomy, and preferences
 app/classifications.html
                     Dedicated transaction-classification workspace
 app/settings.js    Settings and classification-workspace behavior
 app/upload.html     Data import page
 ledger_data_importer_extension/
                     Unpacked Chrome companion extension for direct imports
-  amazon_extension/ Amazon-specific scraper and popup
+  amazon_extension/ Amazon scraper and retained upstream popup assets
   creditkarma_extension/
                     Credit Karma-specific collector
   aliexpress_extension/
@@ -694,10 +867,12 @@ ledger_data_importer_extension/
   apple_card_extension/ Apple Card export-form automation
   capitalone_extension/ Capital One CSV capture and export-form assistance
   walmart_extension/ Walmart purchase-history and receipt collector
-  shared/           Ledger bridge and import coordinator
+  schwab_extension/ Schwab Checking user-guided CSV capture and normalization
+  shared/           Ledger toolbar popup, connection settings, icons, bridge, and coordinator
 tests/              Isolated standard-library regression tests
-docs/local-development.md
-                    Dated snapshot of uncommitted local workflows and verification limits
+docs/current-workflows.md
+                    Linked transactions, review workflows, connections, and verification limits
+deploy/             Optional Debian/systemd deployment guide and update helper
 raw_data_files/     Optional private source exports (ignored by Git)
 data/               Master CSV database and backups (ignored by Git)
   transactions.csv

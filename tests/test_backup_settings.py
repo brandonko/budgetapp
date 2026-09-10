@@ -341,7 +341,7 @@ class SettingsPageTests(unittest.TestCase):
         )
         guide = card.split('<details', 1)[1].split('</details>', 1)[0]
         self.assertIn('<summary>', guide)
-        self.assertIn('How transfer detection works', guide)
+        self.assertIn('How reconciliation works', guide)
         self.assertIn('class="import-guide-content"', guide)
         for heading in (
             'How pairs are found', 'You review before saving', 'Reviewing older data'
@@ -408,7 +408,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("const NUMBER_ABBREVIATION_OPTIONS", javascript)
         self.assertIn("window.LedgerPreferences.numberAbbreviation()", javascript)
         self.assertIn("window.LedgerPreferences.setNumberAbbreviation(option?.value)", javascript)
-        self.assertIn('<script src="/theme.js?v=20260905-display-preferences-1"></script>', html)
+        self.assertRegex(html, r'<script src="/theme\.js\?v=[^"]+"></script>')
+        self.assertIn('id="import-lookback"', html)
+        self.assertIn('id="import-match-refunds" type="checkbox" role="switch" checked', html)
+        for lookback in ("1w", "2w", "3w", "1m", "2m", "3m"):
+            self.assertIn(f'value="{lookback}"', html)
+        self.assertIn('window.LedgerPreferences.setImports', javascript)
         self.assertIn('method: "DELETE"', javascript)
         self.assertEqual(DEFAULT_CSV.parent.name, "data")
 

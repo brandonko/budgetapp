@@ -21,6 +21,8 @@ const state = {
   transferReview: null,
   transferReviewBusy: false,
   transferReviewFilters: { proposed: true, flagged: false },
+  reconciliationRefundChoices: new Map(),
+  reconciliationRefundExpanded: new Set(),
   taxonomy: { version: 1, categories: [] },
   taxonomyRevision: "",
   taxonomyBusy: false,
@@ -56,6 +58,7 @@ const elements = {
   importHistoryFilterButton: document.querySelector("#import-history-filter-button"),
   importHistoryFilterPopover: document.querySelector("#import-history-filter-popover"),
   importHistoryGroup: document.querySelector("#import-history-group-filter"),
+  importHistoryFlagged: document.querySelector("#import-history-flagged-filter"),
   importHistoryFilterCount: document.querySelector("#import-history-filter-count"),
   resetImportHistoryFilters: document.querySelector("#reset-import-history-filters"),
   importHistoryActiveFilters: document.querySelector("#import-history-active-filters"),
@@ -101,6 +104,7 @@ const elements = {
   unclassifiedFilterButton: document.querySelector("#unclassified-filter-button"),
   unclassifiedFilterPopover: document.querySelector("#unclassified-filter-popover"),
   unclassifiedGroup: document.querySelector("#unclassified-group-filter"),
+  unclassifiedFlagged: document.querySelector("#unclassified-flagged-filter"),
   unclassifiedFilterCount: document.querySelector("#unclassified-filter-count"),
   resetUnclassifiedFilters: document.querySelector("#reset-unclassified-filters"),
   unclassifiedActiveFilters: document.querySelector("#unclassified-active-filters"),
@@ -117,7 +121,9 @@ const elements = {
   previewList: document.querySelector("#classification-preview-list"),
   previewSort: document.querySelector("#classification-preview-sort"),
   previewFilters: document.querySelector("#classification-preview-filters"),
+  previewFilterButton: document.querySelector("#classification-preview-filter-button"),
   previewGroupFilter: document.querySelector("#classification-preview-group-filter"),
+  previewFlaggedFilter: document.querySelector("#classification-preview-flagged-filter"),
   previewFilterCount: document.querySelector("#classification-preview-filter-count"),
   closePreview: document.querySelector("#close-classification-preview"),
   cancelPreview: document.querySelector("#cancel-classification-preview"),
@@ -151,6 +157,7 @@ let ruleEdits = new Map();
 let pendingNewClassificationIndex = null;
 let pendingClassificationPreview = null;
 let classificationPreviewGroup = "";
+let classificationPreviewFlagged = "";
 let unclassifiedTransactions = [];
 let unclassifiedRevision = "";
 let unclassifiedFieldFilters = {
@@ -205,6 +212,22 @@ const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactio
     if (confirm) confirm.disabled = active || state.transferReviewBusy;
   },
   onStage: async (_ids, proposed) => refreshTransferReview(proposed),
+  onFlagChange: (row, before) => {
+    if (!state.transferReview) return;
+    const review = state.transferReview;
+    const overrides = new Map(review.overrides.map(item => [item._id, item]));
+    overrides.set(row._id, { ...row });
+    review.overrides = [...overrides.values()];
+    const existing = review.changes.find(entry => entry._id === row._id);
+    if (existing) {
+      existing.transaction = row;
+      existing.after = window.LedgerTransactionBulk.applyChanges(existing.after, { flagged: transactionUi.hasTransactionFlag(row, "flagged") });
+      existing.changedFields = window.LedgerTransactionBulk.changedFields(existing.before, existing.after);
+      if (!existing.changedFields.length) review.changes = review.changes.filter(entry => entry !== existing);
+    } else review.changes.push({ _id: row._id, transaction: row, before, after: { ...row }, changedFields: ["flags"] });
+    document.querySelector("#confirm-transfer-review").textContent = review.changes.length
+      ? `Save reviewed changes (${review.changes.length})` : "Finish review";
+  },
   decorateRow: (row, transaction) => {
     if (!state.transferReview) return;
     const change = state.transferReview.changes.find((entry) => entry._id === transaction._id);
@@ -213,7 +236,9 @@ const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactio
     details.className = "transfer-change-details";
     for (const field of change.changedFields) {
       const line = document.createElement("p");
-      const display = (value) => field === "flags"
+      const display = (value) => field === "links"
+        ? (()=>{const links=JSON.parse(value || "[]");return links.length ? `${links.length} ${links[0].type === "transfer" ? "internal transfer" : links[0].type} link${links.length===1?"":"s"}` : "No links";})()
+        : field === "flags"
         ? String(value).split(",").filter((flag) => !flag.startsWith("transfer-pair-")).join(", ") || "Counted / eligible for detection"
         : String(value || "(blank)");
       line.textContent = `${field === "flags" ? "Budget flags" : field}: ${display(change.before[field])} → ${display(change.after[field])}`;
@@ -230,7 +255,8 @@ const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactio
     state.importHistoryRevision = payload.revision;
     state.availableTransactions = payload.transactions;
     state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
-    state.importHistoryTransactions = payload.transactions.filter((row) => row.createdAt === state.importHistoryBatch.createdAt);
+    state.importHistoryTransactions = state.importHistoryBatch
+      ? payload.transactions.filter((row) => row.createdAt === state.importHistoryBatch.createdAt) : [];
     if (Array.isArray(payload.imports)) renderImportHistory(payload.imports);
     configureImportHistoryFilters();
   },
@@ -247,6 +273,7 @@ const unclassifiedBulk = elements.unclassifiedList ? window.LedgerTransactionBul
 }) : null;
 
 function updateUnclassifiedTransactions(payload) {
+  unclassifiedBulk.acceptSaved(payload);
   unclassifiedRevision = payload.revision;
   state.availableTransactions = payload.transactions;
   state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
@@ -261,7 +288,18 @@ const classificationBulk = elements.previewList ? window.LedgerTransactionBulk.c
   getAllTransactions: () => [...state.availableTransactions, ...(pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [])],
   getRevision: () => pendingClassificationPreview?.revision,
   render: () => renderClassificationPreviewChanges(),
-  onStage: (ids, proposed) => {
+  onFlagChange: (row) => stageClassificationRows([row._id], [row]),
+  onStage: stageClassificationRows,
+  decorateRow: (row, transaction) => {
+    const entry = pendingClassificationPreview.changes.find((item) => item._id === transaction._id);
+    const details = classificationPreviewRow(entry);
+    const transitions = details.querySelector(".classification-preview-transitions");
+    transitions.classList.add("bulk-classification-transitions");
+    row.append(transitions);
+  },
+}) : null;
+
+function stageClassificationRows(ids, proposed) {
     const replacements = new Map(proposed.map((row) => [row._id, row]));
     pendingClassificationPreview.changes.forEach((entry) => {
       if (replacements.has(entry._id)) {
@@ -277,15 +315,7 @@ const classificationBulk = elements.previewList ? window.LedgerTransactionBulk.c
     elements.previewSummary.textContent = `${count} ${count === 1 ? "transaction" : "transactions"} will be modified. Changes are not saved yet.`;
     elements.confirmPreview.textContent = `Apply changes (${pendingClassificationPreview.changed})`;
     elements.confirmPreview.disabled = !pendingClassificationPreview.changed;
-  },
-  decorateRow: (row, transaction) => {
-    const entry = pendingClassificationPreview.changes.find((item) => item._id === transaction._id);
-    const details = classificationPreviewRow(entry);
-    const transitions = details.querySelector(".classification-preview-transitions");
-    transitions.classList.add("bulk-classification-transitions");
-    row.append(transitions);
-  },
-}) : null;
+}
 
 function selectSettingsTab(selectedTab, { focus = false, updateHash = true } = {}) {
   for (const tab of elements.tabs) {
@@ -344,9 +374,18 @@ function exportTransactionsInRange() {
   const startDate = elements.exportStartDate.value;
   const endDate = elements.exportEndDate.value;
   if (!startDate || !endDate || startDate > endDate) return [];
-  return state.exportTransactions.filter(
+  const selected = state.exportTransactions.filter(
     (transaction) => transaction.date >= startDate && transaction.date <= endDate,
   );
+  const ids = new Set(selected.map(row=>row.id).filter(Boolean));
+  for (const row of selected) {
+    if (row._linkedTo) ids.add(row._linkedTo.id);
+    for (const child of row._linkedTransactions || []) ids.add(child.id);
+  }
+  for (const row of state.exportTransactions) {
+    if (ids.has(row.id)) for (const child of row._linkedTransactions || []) ids.add(child.id);
+  }
+  return state.exportTransactions.filter(row=>selected.includes(row) || ids.has(row.id));
 }
 
 function renderExportSummary() {
@@ -361,7 +400,8 @@ function renderExportSummary() {
       : "Select a start and end date.";
     return;
   }
-  elements.exportSummary.textContent = `${count} ${count === 1 ? "transaction" : "transactions"} in this range`;
+  const outside = exportTransactionsInRange().filter(row=>row.date < startDate || row.date > endDate).length;
+  elements.exportSummary.textContent = `${count} ${count === 1 ? "transaction" : "transactions"}${outside ? `, including ${outside} linked counterparts outside this range` : " in this range"}`;
 }
 
 async function loadExportTransactions() {
@@ -535,8 +575,84 @@ function importHistoryTransactionOptions(transaction) {
   return {
     currency: currencyFormatter,
     shortMonthFormatter: unclassifiedMonthFormatter,
+    detailContent: reconciliationRefundControl(transaction),
+    detailPlacement: "row",
+    showLinks: !(state.transferReview?.refundLinks || []).some(link => link.transactionId === transaction.id),
+    disabled: state.transferReviewBusy,
     onEdit: () => openImportHistoryTransactionEditor(transaction),
   };
+}
+
+function reconciliationRefundControl(transaction) {
+  const review = state.transferReview;
+  if (!review) return null;
+  const selected = (review.refundLinks || []).find(link => link.transactionId === transaction.id);
+  const candidates = transaction._refundCandidates || [];
+  if (!selected && !candidates.length) return null;
+  const detail = document.createElement("details");
+  detail.className = "transaction-linked-details reconciliation-refund-match";
+  detail.open = state.reconciliationRefundExpanded.has(transaction.id);
+  detail.addEventListener("toggle", () => {
+    if (detail.isConnected === false) return;
+    if (detail.open) state.reconciliationRefundExpanded.add(transaction.id);
+    else state.reconciliationRefundExpanded.delete(transaction.id);
+  });
+  const summary = document.createElement("summary");
+  summary.textContent = selected ? "Refund link staged" : `Possible refund · ${candidates.length} matching purchase${candidates.length === 1 ? "" : "s"}`;
+  const note = document.createElement("p");
+  note.textContent = selected
+    ? "This refund will reduce the purchase's cost. Both transactions stay in Ledger. Select Save reviewed changes to save the link, or undo it below."
+    : "Choose the original purchase, then select Link selected purchase below. This stages the link; Save reviewed changes is the final confirmation. Both transactions stay in Ledger and the refund is not counted twice.";
+  detail.append(summary, note);
+  const remembered = state.reconciliationRefundChoices.get(transaction.id);
+  let chosen = candidates.some(row => row.id === remembered) ? remembered
+    : remembered === undefined && candidates.length === 1 ? candidates[0].id : null;
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = selected ? "secondary-button" : "primary-button";
+  action.textContent = selected ? "Undo refund link" : "Link selected purchase";
+  action.disabled = state.transferReviewBusy || (!selected && !chosen);
+  const purchases = selected
+    ? [transaction._linkedTo || [...review.transactions, ...state.availableTransactions].find(row => row.id === selected.purchaseId)].filter(Boolean)
+    : candidates;
+  for (const purchase of purchases) {
+    let selection = null;
+    if (!selected) {
+      selection = document.createElement("label"); selection.className = "import-selection";
+      const radio = document.createElement("input");
+      radio.type = "radio"; radio.name = `reconcile-refund-${transaction.id}`;
+      radio.checked = chosen === purchase.id;
+      radio.disabled = state.transferReviewBusy;
+      radio.setAttribute("aria-label", `Match refund to ${purchase.description} on ${purchase.date}`);
+      radio.addEventListener("change", () => {
+        if (!radio.checked || state.transferReviewBusy) return;
+        chosen = purchase.id;
+        state.reconciliationRefundChoices.set(transaction.id, chosen);
+        state.reconciliationRefundExpanded.add(transaction.id);
+        action.disabled = false;
+      });
+      selection.append(radio);
+    }
+    detail.append(transactionUi.createTransactionRow(purchase, {
+      currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
+      showYear: true, showEdit: false, showLinks: false, leadingControl: selection,
+    }));
+  }
+  const footer = document.createElement("div"); footer.className = "reconciliation-refund-actions";
+  footer.append(action); detail.append(footer);
+  action.addEventListener("click", async () => {
+    if (action.disabled || state.transferReviewBusy || state.transferReview !== review) return;
+    const next = (review.refundLinks || []).filter(link => link.transactionId !== transaction.id);
+    if (!selected) next.push({ transactionId: transaction.id, purchaseId: chosen });
+    state.reconciliationRefundExpanded.add(transaction.id);
+    action.disabled = true;
+    try { await refreshTransferReview([], next); }
+    catch (error) {
+      elements.importHistoryDialogError.textContent = error.message;
+      elements.importHistoryDialogError.hidden = false;
+    }
+  });
+  return detail;
 }
 
 function importHistoryTags(transaction) {
@@ -575,6 +691,7 @@ function populateImportHistorySubcategories(category, selected = "") {
 }
 
 function configureImportHistoryFilters(filters = state.importHistoryFilters) {
+  transactionUi.setFlagFilter(elements.importHistoryFlagged, filters.flagged || "");
   transactionUi.populateGroupFilter(elements.importHistoryGroup, state.importHistoryTransactions, filters.group);
   const tags = new Map();
   state.importHistoryTransactions.forEach((transaction) => importHistoryTags(transaction).forEach((tag) => {
@@ -591,6 +708,7 @@ function configureImportHistoryFilters(filters = state.importHistoryFilters) {
   populateImportHistoryFilter(elements.importHistoryAccount, importHistoryFilterValues("accountName"), "All accounts", filters.accountName);
   populateImportHistoryFilter(elements.importHistoryProvider, importHistoryFilterValues("provider"), "All providers", filters.provider);
   state.importHistoryFilters = {
+    flagged: transactionUi.flagFilterValue(elements.importHistoryFlagged),
     description: elements.importHistorySearch.value.trim(),
     group: elements.importHistoryGroup.value,
     category: elements.importHistoryCategory.value,
@@ -604,6 +722,7 @@ function configureImportHistoryFilters(filters = state.importHistoryFilters) {
 
 function importHistoryFilterDraft() {
   return {
+    flagged: transactionUi.flagFilterValue(elements.importHistoryFlagged),
     group: elements.importHistoryGroup.value,
     category: elements.importHistoryCategory.value,
     subcategory: elements.importHistorySubcategory.value,
@@ -615,6 +734,7 @@ function importHistoryFilterDraft() {
 
 function renderImportHistoryFilterChips() {
   const definitions = [
+    ["flagged", "Flag status"],
     ["group", "Group"],
     ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
     ["accountName", "Account"], ["provider", "Provider"],
@@ -625,7 +745,7 @@ function renderImportHistoryFilterChips() {
   elements.importHistoryFilterButton.classList.toggle("has-active-filters", active.length > 0);
   elements.importHistoryActiveFilters.hidden = active.length === 0;
   elements.importHistoryFilterChips.replaceChildren(...active.map(([field, label]) => {
-    const value = field === "group" ? transactionUi.groupFilterLabel(state.importHistoryFilters[field]) : state.importHistoryFilters[field];
+    const value = field === "flagged" ? transactionUi.flagFilterLabel(state.importHistoryFilters[field]) : field === "group" ? transactionUi.groupFilterLabel(state.importHistoryFilters[field]) : state.importHistoryFilters[field];
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
@@ -642,9 +762,7 @@ function renderImportHistoryFilterChips() {
 
 function setImportHistoryFilterPopover(open, restore = true) {
   if (!open && restore) configureImportHistoryFilters(state.importHistoryFilters);
-  elements.importHistoryFilterPopover.hidden = !open;
-  if (open) transactionUi.fitTransactionFilterPopover(elements.importHistoryFilterPopover);
-  elements.importHistoryFilterButton.setAttribute("aria-expanded", String(open));
+  transactionUi.setTransactionFilterPanel(elements.importHistoryFilterPopover, elements.importHistoryFilterButton, open);
 }
 
 function renderImportHistoryTransactions() {
@@ -654,8 +772,8 @@ function renderImportHistoryTransactions() {
   const flaggedIds = new Set((review?.alreadyFlagged || []).map((transaction) => transaction._id));
   elements.transferReviewFilters.hidden = !review;
   if (review) {
-    elements.transferReviewProposedFilter.textContent = `Proposed changes (${review.changes.length})`;
-    elements.transferReviewFlaggedFilter.textContent = `Already flagged (${review.alreadyFlagged.length})`;
+    elements.transferReviewProposedFilter.textContent = `To review (${transactions.filter(row=>!flaggedIds.has(row._id)).length})`;
+    elements.transferReviewFlaggedFilter.textContent = `Already reconciled (${review.alreadyFlagged.length})`;
     elements.transferReviewProposedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.proposed));
     elements.transferReviewFlaggedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.flagged));
   }
@@ -664,6 +782,7 @@ function renderImportHistoryTransactions() {
   const visible = transactionUi.sortTransactions(transactions.filter((transaction) =>
     (!review || state.transferReviewFilters[flaggedIds.has(transaction._id) ? "flagged" : "proposed"])
     && transactionUi.matchesTransactionSearch(transaction, filters.description)
+    && transactionUi.matchesFlagFilter(transaction, filters.flagged)
     && (!filters.category || transaction.category === filters.category)
     && (!filters.subcategory || transaction.subcategory === filters.subcategory)
     && (!filters.tag || importHistoryTags(transaction).some(
@@ -676,7 +795,7 @@ function renderImportHistoryTransactions() {
   const filtered = Object.values(filters).some(Boolean) || groupFiltered.length !== transactions.length;
   const count = filtered ? `${groupFiltered.length} of ${transactions.length}` : String(transactions.length);
   elements.importHistoryDialogSubtitle.textContent = state.transferReview
-    ? `${review.changes.length} proposed changes · ${review.alreadyFlagged.length} already flagged · ${groupFiltered.length} shown. Changes are saved only when you confirm; visibility filters do not affect saving.`
+    ? `${review.changes.length} proposed change${review.changes.length===1?"":"s"} · ${(review.refundSuggestions || []).length} possible refund${review.refundSuggestions?.length===1?"":"s"} · ${review.alreadyFlagged.length} already reconciled · ${groupFiltered.length} shown. Changes are saved only when you confirm; visibility filters do not affect saving.`
     : `${count} ${
     transactions.length === 1 ? "transaction" : "transactions"
   } imported ${backupDateFormatter.format(new Date(state.importHistoryBatch.createdAt))}`;
@@ -686,7 +805,7 @@ function renderImportHistoryTransactions() {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
     empty.textContent = state.transferReview
-      ? "No new transfer pairs found. Existing saved exclusions and manual overrides stay unchanged."
+      ? "No new transfer or refund matches found. Existing links and manual overrides stay unchanged."
       : "This import no longer contains any transactions.";
     elements.importHistoryTransactions.replaceChildren(empty);
     return;
@@ -696,7 +815,7 @@ function renderImportHistoryTransactions() {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
     empty.textContent = review && review.changes.length === 0 && !state.transferReviewFilters.flagged
-      ? "No proposed changes. Turn on Already flagged to review your saved internal transfers."
+      ? "No proposed changes. Turn on Already reconciled to review your saved links and exclusions."
       : "No transactions match these filters.";
     elements.importHistoryTransactions.replaceChildren(empty);
     return;
@@ -746,7 +865,7 @@ async function openImportHistoryBatch(importBatch) {
   }
 }
 
-async function refreshTransferReview(proposed = []) {
+async function refreshTransferReview(proposed = [], refundLinks = state.transferReview?.refundLinks || []) {
   const previous = state.transferReview;
   const overrides = new Map((previous?.overrides || []).map((row) => [row._id, row]));
   proposed.forEach((row) => overrides.set(row._id, row));
@@ -756,7 +875,8 @@ async function refreshTransferReview(proposed = []) {
   try {
     const response = await fetch("/api/internal-transfers/preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides: [...overrides.values()] }),
+      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides: [...overrides.values()], includeRefunds:true, refundLinks,
+        nonzeroDecimal: previous?.nonzeroDecimal ?? Boolean(document.querySelector("#reconciliation-nonzero-decimal")?.checked) }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || (response.status === 404
@@ -767,7 +887,11 @@ async function refreshTransferReview(proposed = []) {
     }
     state.transferReview = { ...payload, overrides: [...overrides.values()] };
     state.importHistoryRevision = payload.revision;
-    state.importHistoryTransactions = [...payload.transactions, ...payload.alreadyFlagged];
+    const refundCandidates = new Map((payload.refundSuggestions || []).map(row => [row.id, row._refundCandidates]));
+    state.importHistoryTransactions = [...payload.transactions, ...(payload.refundSuggestions || []), ...payload.alreadyFlagged]
+      .filter((row,index,rows)=>rows.findIndex(other=>other._id===row._id)===index)
+      // Edited rows take precedence, but their matching metadata is additive.
+      .map(row => refundCandidates.has(row.id) ? { ...row, _refundCandidates: refundCandidates.get(row.id) } : row);
     state.importHistoryBatch = { transferReview: true };
     configureImportHistoryFilters();
     renderImportHistoryTransactions();
@@ -775,11 +899,14 @@ async function refreshTransferReview(proposed = []) {
   } finally {
     state.transferReviewBusy = false;
     confirm.disabled = historyBulk.isActive() || !state.transferReview;
+    if (state.transferReview) renderImportHistoryTransactions();
   }
 }
 
 async function openTransferReview() {
   if (state.transferReviewBusy) return;
+  state.reconciliationRefundChoices.clear();
+  state.reconciliationRefundExpanded.clear();
   historyBulk.reset();
   state.transferReview = null;
   state.transferReviewFilters = { proposed: true, flagged: false };
@@ -787,7 +914,7 @@ async function openTransferReview() {
   state.importHistoryFilters = { description: "", category: "", subcategory: "", tag: "", group: "", accountName: "", provider: "" };
   elements.importHistorySearch.value = "";
   setImportHistoryFilterPopover(false, false);
-  elements.importHistoryDialog.querySelector("h2").textContent = "Review internal transfers";
+  elements.importHistoryDialog.querySelector("h2").textContent = "Review reconciliation";
   elements.importHistoryDialog.querySelector(".eyebrow").textContent = "Proposed changes";
   elements.closeImportHistoryDialog.setAttribute("aria-label", "Cancel transfer review");
   elements.importHistoryDialogSubtitle.textContent = "Scanning all dates…";
@@ -804,6 +931,8 @@ async function openTransferReview() {
 
 async function confirmTransferReview() {
   if (!state.transferReview || state.transferReviewBusy || historyBulk.isActive()) return;
+  if (!await historyBulk.flushFlags()) return;
+  if (!state.transferReview || state.transferReviewBusy) return;
   const review = state.transferReview;
   const button = document.querySelector("#confirm-transfer-review");
   state.transferReviewBusy = true;
@@ -814,13 +943,13 @@ async function confirmTransferReview() {
   try {
     const response = await fetch("/api/internal-transfers/confirm", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ revision: review.revision, plan: review.plan, overrides: review.overrides, confirm: true }),
+      body: JSON.stringify({ revision: review.revision, plan: review.plan, overrides: review.overrides, confirm: true, includeRefunds:true, refundLinks:review.refundLinks || [], nonzeroDecimal: review.nonzeroDecimal || false }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "Could not save the transfer review.");
     const status = document.querySelector("#transfer-review-status");
-    status.textContent = `${payload.changed} transactions updated · ${payload.transferPairs} transfer pairs saved. ` +
-      (payload.changed ? "A safety backup was created. " : "") + "Your dashboards now use saved transfer flags.";
+    status.textContent = `${payload.changed} transaction${payload.changed===1?"":"s"} updated · ${payload.transferPairs} transfer pair${payload.transferPairs===1?"":"s"} · ${payload.refundsLinked || 0} refund${payload.refundsLinked===1?"":"s"} linked. ` +
+      (payload.changed ? "A safety backup was created. " : "") + "Your dashboards now use saved links.";
     status.hidden = false;
     state.availableTransactions = payload.transactions;
     state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
@@ -853,8 +982,12 @@ for (const [button, filter] of [
   });
 }
 
-function closeImportHistoryDialog() {
+async function closeImportHistoryDialog() {
   if (state.transferReviewBusy) return;
+  if (!state.transferReview && !await historyBulk.flushFlags()) return;
+  historyBulk.discardFlags();
+  state.reconciliationRefundChoices.clear();
+  state.reconciliationRefundExpanded.clear();
   state.transferReview = null;
   elements.transferReviewFilters.hidden = true;
   document.querySelector("#transfer-review-footer").hidden = true;
@@ -883,10 +1016,10 @@ function openImportHistoryTransactionEditor(transaction, source = "history") {
     transactions: [...state.availableTransactions, ...state.importHistoryTransactions],
   });
   elements.importHistoryEditForm.querySelector(".dialog-subtitle").textContent = staged
-    ? "Changes remain staged until you confirm the transfer review."
+    ? "Changes remain staged until you confirm the reconciliation review."
     : "Changes are saved directly to the master CSV.";
   elements.importHistoryEditForm.querySelector(".eyebrow").textContent = unclassified
-    ? "Unclassified transactions" : staged ? "Internal transfers" : "Import history";
+    ? "Unclassified transactions" : staged ? "Reconcile" : "Import history";
   if (returnDialog.open) returnDialog.close();
   elements.importHistoryEditDialog.showModal();
   elements.importHistoryEditForm.elements.namedItem("description").focus();
@@ -934,11 +1067,13 @@ async function saveImportHistoryTransaction(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         revision: edit.revision,
-        transaction: transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
+        transaction: (edit.source === "unclassified" ? unclassifiedBulk : historyBulk)
+          .prepareSave(transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction), transaction),
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save transaction (${response.status}).`);
+    (edit.source === "unclassified" ? unclassifiedBulk : historyBulk).acceptSaved(payload);
     state.availableTransactions = payload.transactions;
     state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
     if (edit.source === "unclassified") {
@@ -967,7 +1102,7 @@ async function removeImportBatch(importBatch) {
   const importedAt = backupDateFormatter.format(new Date(importBatch.createdAt));
   const confirmed = window.confirm(
     `Remove all ${count} ${count === 1 ? "transaction" : "transactions"} imported ${importedAt}?\n\n` +
-      "Ledger will create a safety backup first. This action removes the entire import batch.",
+      "Ledger will create a safety backup first. This action removes the entire import batch and its links. Surviving purchases or credits may count toward your budget again.",
   );
   if (!confirmed) return;
 
@@ -1038,6 +1173,7 @@ async function loadAvailableTransactionTags() {
 }
 
 function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
+  transactionUi.setFlagFilter(elements.unclassifiedFlagged, filters.flagged || "");
   transactionUi.populateGroupFilter(elements.unclassifiedGroup, unclassifiedTransactions, filters.group);
   const unique = (field) => [...new Set(
     unclassifiedTransactions.map((transaction) => transaction[field]).filter(Boolean),
@@ -1074,6 +1210,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
     ? UNCLASSIFIED_FILTER_VALUE
     : "";
   unclassifiedFieldFilters = {
+    flagged: transactionUi.flagFilterValue(elements.unclassifiedFlagged),
     description: elements.unclassifiedSearch.value.trim(),
     group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
@@ -1087,6 +1224,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
 
 function unclassifiedFilterDraft() {
   return {
+    flagged: transactionUi.flagFilterValue(elements.unclassifiedFlagged),
     group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
     subcategory: elements.unclassifiedSubcategory.value,
@@ -1098,6 +1236,7 @@ function unclassifiedFilterDraft() {
 
 function renderUnclassifiedFilterChips() {
   const definitions = [
+    ["flagged", "Flag status"],
     ["group", "Group"],
     ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
     ["accountName", "Account"], ["provider", "Provider"],
@@ -1111,7 +1250,7 @@ function renderUnclassifiedFilterChips() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
-    const value = field === "subcategory" ? "Unclassified" : field === "group" ? transactionUi.groupFilterLabel(unclassifiedFieldFilters[field]) : unclassifiedFieldFilters[field];
+    const value = field === "flagged" ? transactionUi.flagFilterLabel(unclassifiedFieldFilters[field]) : field === "subcategory" ? "Unclassified" : field === "group" ? transactionUi.groupFilterLabel(unclassifiedFieldFilters[field]) : unclassifiedFieldFilters[field];
     chip.textContent = `${label}: ${value} ×`;
     chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
     chip.addEventListener("click", () => {
@@ -1125,9 +1264,7 @@ function renderUnclassifiedFilterChips() {
 
 function setUnclassifiedFilterPopover(open, restore = true) {
   if (!open && restore) configureUnclassifiedFilters(unclassifiedFieldFilters);
-  elements.unclassifiedFilterPopover.hidden = !open;
-  if (open) transactionUi.fitTransactionFilterPopover(elements.unclassifiedFilterPopover);
-  elements.unclassifiedFilterButton.setAttribute("aria-expanded", String(open));
+  transactionUi.setTransactionFilterPanel(elements.unclassifiedFilterPopover, elements.unclassifiedFilterButton, open);
 }
 
 function renderUnclassifiedTransactions() {
@@ -1136,6 +1273,7 @@ function renderUnclassifiedTransactions() {
     unclassifiedTransactions.filter((transaction) =>
       (showUnclassifiedInternalTransfers || !transactionUi.isInternalTransfer(transaction))
       && transactionUi.matchesTransactionSearch(transaction, unclassifiedFieldFilters.description)
+      && transactionUi.matchesFlagFilter(transaction, unclassifiedFieldFilters.flagged)
       && (!unclassifiedFieldFilters.category || transaction.category === unclassifiedFieldFilters.category)
       && (!unclassifiedFieldFilters.subcategory || !transaction.subcategory)
       && (!unclassifiedFieldFilters.tag || unclassifiedTags(transaction).some(
@@ -1204,7 +1342,8 @@ async function openUnclassifiedDialog() {
   }
 }
 
-function closeUnclassifiedDialog() {
+async function closeUnclassifiedDialog() {
+  if (!await unclassifiedBulk.flushFlags()) return;
   unclassifiedBulk.reset();
   setUnclassifiedFilterPopover(false);
   elements.unclassifiedDialog.close();
@@ -1956,13 +2095,17 @@ function classificationPreviewRow(change) {
 function renderClassificationPreviewChanges() {
   if (!pendingClassificationPreview) return;
   const changes = transactionUi.sortTransactions(
-    pendingClassificationPreview.changes.map((entry) => entry.transaction),
+    pendingClassificationPreview.changes.map((entry) => entry.transaction)
+      .filter((transaction) => transactionUi.matchesFlagFilter(transaction, classificationPreviewFlagged)),
     classificationPreviewSort.value(),
   );
-  transactionUi.populateGroupFilter(elements.previewGroupFilter, changes, classificationPreviewGroup);
-  elements.previewFilterCount.textContent = "1";
-  elements.previewFilterCount.hidden = !classificationPreviewGroup;
-  elements.previewFilters.querySelector("summary").classList.toggle("has-active-filters", !!classificationPreviewGroup);
+  transactionUi.populateGroupFilter(elements.previewGroupFilter,
+    pendingClassificationPreview.changes.map((entry) => entry.transaction), classificationPreviewGroup);
+  transactionUi.setFlagFilter(elements.previewFlaggedFilter, classificationPreviewFlagged);
+  const filterCount = Number(!!classificationPreviewGroup) + Number(!!classificationPreviewFlagged);
+  elements.previewFilterCount.textContent = String(filterCount);
+  elements.previewFilterCount.hidden = !filterCount;
+  elements.previewFilterButton.classList.toggle("has-active-filters", !!filterCount);
   classificationBulk.render(changes, (transaction) => ({
     currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
     showEdit: false, onEdit: () => {},
@@ -1970,10 +2113,12 @@ function renderClassificationPreviewChanges() {
 }
 
 function closeClassificationPreview() {
+  classificationBulk.discardFlags();
   if (classificationsBusy) return;
   classificationBulk.reset();
   classificationPreviewGroup = "";
-  elements.previewFilters.open = false;
+  classificationPreviewFlagged = "";
+  transactionUi.setTransactionFilterPanel(elements.previewFilters, elements.previewFilterButton, false);
   pendingClassificationPreview = null;
   elements.previewDialog.close();
 }
@@ -2014,7 +2159,8 @@ async function previewClassificationsForExisting() {
     }
     pendingClassificationPreview = { ...preview, document };
     classificationPreviewGroup = "";
-    elements.previewFilters.open = false;
+    classificationPreviewFlagged = "";
+    transactionUi.setTransactionFilterPanel(elements.previewFilters, elements.previewFilterButton, false);
     classificationBulk.reset();
     const matched = preview.matched || preview.changed;
     const unchangedMatches = Math.max(0, matched - preview.changed);
@@ -2039,6 +2185,8 @@ async function previewClassificationsForExisting() {
 }
 
 async function confirmClassificationPreview() {
+  if (!pendingClassificationPreview || classificationsBusy) return;
+  if (!await classificationBulk.flushFlags()) return;
   if (!pendingClassificationPreview || classificationsBusy) return;
   classificationsBusy = true;
   elements.closePreview.disabled = true;
@@ -2419,6 +2567,19 @@ async function deleteTaxonomyEntry(mode, name, parentCategory = "") {
 }
 
 if (elements.exportForm) {
+  const importLookback = document.querySelector("#import-lookback");
+  const importRefunds = document.querySelector("#import-match-refunds");
+  if (importLookback && importRefunds && window.LedgerPreferences?.imports) {
+    const renderImportPreferences = () => {
+      const preferences = window.LedgerPreferences.imports();
+      importLookback.value = preferences.lookback;
+      importRefunds.checked = preferences.matchRefunds;
+    };
+    renderImportPreferences();
+    importLookback.addEventListener("change", () => window.LedgerPreferences.setImports({ lookback: importLookback.value }));
+    importRefunds.addEventListener("change", () => window.LedgerPreferences.setImports({ matchRefunds: importRefunds.checked }));
+    window.addEventListener("ledger-import-preferences-change", renderImportPreferences);
+  }
   if (elements.darkModeToggle && window.LedgerTheme) {
     elements.darkModeToggle.checked = window.LedgerTheme.isDark();
     elements.darkModeToggle.addEventListener("change", () => {
@@ -2458,6 +2619,7 @@ if (elements.exportForm) {
     );
   });
   elements.resetImportHistoryFilters.addEventListener("click", () => {
+    transactionUi.setFlagFilter(elements.importHistoryFlagged, "");
     elements.importHistoryGroup.value = "";
     elements.importHistoryCategory.value = "";
     populateImportHistorySubcategories("");
@@ -2473,6 +2635,7 @@ if (elements.exportForm) {
   elements.clearImportHistoryFilters.addEventListener("click", () => {
     state.importHistoryFilters = {
       ...state.importHistoryFilters,
+      flagged: "",
       group: "",
       category: "", subcategory: "", tag: "", accountName: "", provider: "",
     };
@@ -2480,12 +2643,7 @@ if (elements.exportForm) {
     renderImportHistoryTransactions();
     elements.importHistoryFilterButton.focus();
   });
-  document.addEventListener("click", (event) => {
-    if (
-      elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true"
-      && !event.target.closest(".transaction-filter-menu")
-    ) setImportHistoryFilterPopover(false);
-  });
+
   elements.importHistoryDialog.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true") {
       event.preventDefault();
@@ -2671,6 +2829,7 @@ if (elements.addClassification) {
   if (open) elements.unclassifiedCategory.focus();
   });
   elements.resetUnclassifiedFilters.addEventListener("click", () => {
+  transactionUi.setFlagFilter(elements.unclassifiedFlagged, "");
   elements.unclassifiedGroup.value = "";
   elements.unclassifiedCategory.value = "";
   elements.unclassifiedSubcategory.value = "";
@@ -2686,6 +2845,7 @@ if (elements.addClassification) {
   elements.clearUnclassifiedFilters.addEventListener("click", () => {
   unclassifiedFieldFilters = {
     ...unclassifiedFieldFilters,
+    flagged: "",
     group: "",
     category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
@@ -2701,12 +2861,7 @@ if (elements.addClassification) {
   );
   renderUnclassifiedTransactions();
   });
-  document.addEventListener("click", (event) => {
-  if (
-    elements.unclassifiedFilterButton.getAttribute("aria-expanded") === "true"
-    && !event.target.closest(".transaction-filter-menu")
-  ) setUnclassifiedFilterPopover(false);
-  });
+
   elements.unclassifiedDialog.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && elements.unclassifiedFilterButton.getAttribute("aria-expanded") === "true") {
     event.preventDefault();
@@ -2724,26 +2879,27 @@ if (elements.addClassification) {
   if (event.target === elements.unclassifiedDialog) closeUnclassifiedDialog();
   });
   elements.applyClassifications.addEventListener("click", previewClassificationsForExisting);
-  elements.previewFilters.addEventListener("toggle", () => {
-    if (elements.previewFilters.open) transactionUi.fitTransactionFilterPopover(elements.previewFilters.querySelector(".transaction-filter-popover"));
+  elements.previewFilterButton.addEventListener("click", () => {
+    transactionUi.setTransactionFilterPanel(elements.previewFilters, elements.previewFilterButton, elements.previewFilters.hidden);
     transactionUi.populateGroupFilter(elements.previewGroupFilter,
       pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [], classificationPreviewGroup);
+    if (!elements.previewFilters.hidden) elements.previewGroupFilter.focus();
   });
   document.querySelector("#reset-classification-preview-filters").addEventListener("click", () => {
+    transactionUi.setFlagFilter(elements.previewFlaggedFilter, "");
     elements.previewGroupFilter.value = "";
   });
   transactionUi.bindLiveTransactionFilters(elements.previewFilters, () => {
     classificationPreviewGroup = elements.previewGroupFilter.value;
+    classificationPreviewFlagged = transactionUi.flagFilterValue(elements.previewFlaggedFilter);
     renderClassificationPreviewChanges();
   }, document.querySelector("#reset-classification-preview-filters"));
-  document.addEventListener("click", (event) => {
-    if (elements.previewFilters.open && !elements.previewFilters.contains(event.target)) elements.previewFilters.open = false;
-  });
+
   elements.previewDialog.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && elements.previewFilters.open) {
+    if (event.key === "Escape" && !elements.previewFilters.hidden) {
       event.preventDefault(); event.stopPropagation();
-      elements.previewFilters.open = false;
-      elements.previewFilters.querySelector("summary").focus();
+      transactionUi.setTransactionFilterPanel(elements.previewFilters, elements.previewFilterButton, false);
+      elements.previewFilterButton.focus();
     }
   });
   elements.closePreview.addEventListener("click", closeClassificationPreview);

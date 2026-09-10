@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <script src="/theme.js?v=20260909-import-preferences-1"></script>
     <meta name="description" content="Configure Ledger preferences." />
     <title>Settings — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
-    <script src="/settings.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
+    <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/settings.js?v=20260909-reconcile-flags-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -51,7 +51,7 @@
         <button class="settings-tab" id="taxonomy-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="taxonomy-settings-panel" tabindex="-1">Taxonomy</button>
         <button class="settings-tab" id="internal-transfers-settings-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="internal-transfers-settings-panel" tabindex="-1">Internal transfers</button>
+            aria-selected="false" aria-controls="internal-transfers-settings-panel" tabindex="-1">Reconcile</button>
         <button class="settings-tab" id="preferences-settings-tab" role="tab" type="button"
           aria-selected="false" aria-controls="preferences-settings-panel" tabindex="-1">Preferences</button>
       </div>
@@ -149,16 +149,20 @@
           <div class="settings-card-heading">
             <div>
               <p class="eyebrow">Budget treatment</p>
-              <h2>Internal transfers</h2>
-              <p>Find movements between your own accounts across all dates, then review before saving.</p>
+              <h2>Reconcile transactions</h2>
+              <p>Find internal transfers and possible refunds across all dates, then review the links before saving.</p>
             </div>
-            <button class="primary-button" id="find-internal-transfers" type="button">Find internal transfers</button>
+            <button class="primary-button" id="find-internal-transfers" type="button">Find matches</button>
           </div>
+          <label class="checkbox-label reconciliation-decimal-option">
+            <input id="reconciliation-nonzero-decimal" type="checkbox">
+            <span>Match nonzero decimal <small>Skip whole-dollar suggestions such as $10.00. Saved links and manual linking are unchanged.</small></span>
+          </label>
           <details class="import-note import-guide internal-transfer-guide">
             <summary>
               <span class="import-note-icon" aria-hidden="true">i</span>
               <span>
-                <strong>How transfer detection works</strong>
+                <strong>How reconciliation works</strong>
                 <small>Learn what gets matched and what happens when you save.</small>
               </span>
             </summary>
@@ -168,11 +172,17 @@
                 <p>Ledger looks for equal and opposite nonzero amounts in different accounts within
                   five days. At least one side must look like a transfer or account payment.</p>
                 <p>The closest dates are paired first, and each transaction can belong to only one pair.</p>
+                <p>Possible refunds are credits matching a purchase's exact price within the preceding 90 days.
+                  A price match is a suggestion, not proof: choose the purchase before confirming.</p>
               </section>
               <section>
                 <h3>You review before saving</h3>
-                <p>Nothing changes until you confirm the review. Confirmed flags are saved in your
+                <p>Nothing changes until you confirm the review. Durable transaction links are saved in your
                   transaction file; page loads never rerun detection.</p>
+                <p>For partial refunds or repayments from several people, edit the original purchase and open
+                  <strong>Refunds &amp; repayments</strong>. Refunds and transfers link one pair;
+                  repayments can link several credits. The purchase shows their net cost in its original month.
+                  Both source amounts stay intact and linked credits are not counted twice.</p>
                 <p>Imports also propose matches between incoming and existing unmatched transactions.
                   Saved exclusions and <strong>Count normally</strong> overrides stay unchanged.</p>
               </section>
@@ -194,7 +204,7 @@
             <div>
               <p class="eyebrow">Your experience</p>
               <h2 id="preferences-settings-title">Preferences</h2>
-              <p>Choose how Ledger looks and displays values in this browser.</p>
+              <p>Personalize Ledger and import defaults in this browser.</p>
             </div>
           </div>
           <div class="settings-preference-row">
@@ -208,6 +218,31 @@
               <span class="theme-switch-track" aria-hidden="true">
                 <span class="theme-switch-thumb"></span>
               </span>
+            </label>
+          </div>
+          <div class="settings-preference-row">
+            <div>
+              <label for="import-lookback"><strong>Default import lookback</strong></label>
+              <p id="import-lookback-help">Start every importer this far back from today. You can still change its dates before importing. Ledger-format and Apple Card CSV uploads are not date-filtered.</p>
+            </div>
+            <select id="import-lookback" aria-describedby="import-lookback-help">
+              <option value="1w">1 week</option>
+              <option value="2w" selected>2 weeks</option>
+              <option value="3w">3 weeks</option>
+              <option value="1m">1 month</option>
+              <option value="2m">2 months</option>
+              <option value="3m">3 months</option>
+            </select>
+          </div>
+          <div class="settings-preference-row">
+            <div>
+              <strong>Suggest refund matches</strong>
+              <p id="import-refunds-help">For all imports, suggest saved purchases at the exact same price in the previous 90 days. You choose whether to link each refund during review. Also keeps credits from merchants excluded in Credit Karma. Changes apply to new imports.</p>
+            </div>
+            <label class="theme-switch" for="import-match-refunds">
+              <span class="sr-only">Suggest refund matches</span>
+              <input id="import-match-refunds" type="checkbox" role="switch" checked aria-describedby="import-refunds-help" />
+              <span class="theme-switch-track" aria-hidden="true"><span class="theme-switch-thumb"></span></span>
             </label>
           </div>
           <div class="settings-preference-row settings-preference-row--stacked">
@@ -249,6 +284,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-dialog-body">
+          <div class="transaction-dialog-controls">
+
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
             <span>Search</span>
@@ -257,12 +295,16 @@
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="import-history-filter-button" type="button"
-              aria-expanded="false" aria-haspopup="true" aria-controls="import-history-filter-popover">
+              aria-expanded="false" aria-controls="import-history-filter-popover">
               Filters <span id="import-history-filter-count" hidden></span>
             </button>
-            <div class="transaction-filter-popover" id="import-history-filter-popover"
+
+          </div>
+          <div id="import-history-sort"></div>
+        </div>
+        <div class="transaction-filter-panel" id="import-history-filter-popover"
               role="group" aria-label="Imported transaction filters" hidden>
-              <div class="transaction-filter-popover-heading">
+              <div class="transaction-filter-panel-heading">
                 <strong>Filter transactions</strong>
                 <span>Choose one or more filters.</span>
               </div>
@@ -281,29 +323,30 @@
                   <label><span>Account name</span><select id="import-history-account-filter"><option value="">All accounts</option></select></label>
                   <label><span>Provider</span><select id="import-history-provider-filter"><option value="">All providers</option></select></label>
                 </div>
+              <label class="transaction-flag-filter"><input id="import-history-flagged-filter" name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
               </fieldset>
-              <div class="transaction-filter-popover-actions">
+
+              <div class="transaction-filter-panel-actions">
                 <button class="text-button" id="reset-import-history-filters" type="button">Reset</button>
               </div>
             </div>
-          </div>
-          <div id="import-history-sort"></div>
-        </div>
         <div class="transaction-active-filters" id="import-history-active-filters" hidden>
           <div class="transaction-filter-chips" id="import-history-filter-chips"></div>
           <button class="text-button" id="clear-import-history-filters" type="button">Clear all</button>
         </div>
         <div class="import-review-filters" id="transfer-review-filters" role="group"
-          aria-label="Visible transfer transaction types" hidden>
+          aria-label="Visible reconciliation transaction types" hidden>
           <span>Show</span>
           <button class="import-review-filter" id="transfer-review-proposed-filter" type="button"
-            aria-pressed="true">Proposed changes (0)</button>
+            aria-pressed="true">To review (0)</button>
           <button class="import-review-filter" id="transfer-review-flagged-filter" type="button"
-            aria-pressed="false">Already flagged (0)</button>
+            aria-pressed="false">Already reconciled (0)</button>
         </div>
         <p class="form-error import-history-dialog-error" id="import-history-dialog-error"
           role="alert" hidden></p>
+          </div>
         <div class="transaction-list" id="import-history-transactions"></div>
+        </div>
         <footer class="form-footer" id="transfer-review-footer" hidden>
           <span class="form-footer-spacer"></span>
           <button class="secondary-button" id="cancel-transfer-review" type="button">Cancel</button>

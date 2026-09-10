@@ -18,12 +18,30 @@ class ExtensionStructureTests(unittest.TestCase):
         }
         referenced_scripts.add(manifest["background"]["service_worker"])
         referenced_scripts.add(manifest["action"]["default_popup"])
+        referenced_scripts.add(manifest["options_ui"]["page"])
         referenced_scripts.update(manifest["icons"].values())
         referenced_scripts.update(manifest["action"]["default_icon"].values())
 
         for relative_path in referenced_scripts:
             with self.subTest(relative_path=relative_path):
                 self.assertTrue((EXTENSION_ROOT / relative_path).is_file())
+
+    def test_toolbar_uses_one_ledger_popup_not_the_amazon_exporter(self) -> None:
+        manifest = json.loads((EXTENSION_ROOT / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["action"]["default_popup"], "shared/popup.html")
+        popup = (EXTENSION_ROOT / manifest["action"]["default_popup"]).read_text(encoding="utf-8")
+        self.assertEqual(popup.count("<main>"), 1)
+        self.assertEqual(popup.count("<h1>Ledger</h1>"), 1)
+        self.assertNotIn("Amazon Order Exporter", popup)
+        self.assertNotIn("data-i18n", popup, "Amazon catalogs must not overwrite Ledger branding")
+        self.assertIn("Open Import data", popup)
+        self.assertIn("Ledger connection settings", popup)
+        self.assertIn("https://github.com/brandonko/budgetapp", popup)
+        for source in ("Credit Karma", "Amazon", "AliExpress", "Venmo", "eBay", "Walmart", "Apple Card", "Capital One"):
+            self.assertIn(f"<li>{source}</li>", popup)
+        self.assertLess(popup.index('src="trusted_origins.js"'), popup.index('src="popup.js"'))
+        for asset in ("popup.css", "popup.js", "trusted_origins.js", "icons/ledger.svg"):
+            self.assertTrue((EXTENSION_ROOT / "shared" / asset).is_file())
 
     def test_source_modules_have_explicit_ownership(self) -> None:
         self.assertTrue((EXTENSION_ROOT / "amazon_extension" / "content.js").is_file())

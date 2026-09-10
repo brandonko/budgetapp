@@ -1,40 +1,19 @@
-# Local-development snapshot
+# Current workflows
 
-As of **September 9, 2026**, the primary local `main` checkout contains
-uncommitted implementation changes on top of `58a2f96`. This documentation PR
-incorporates published `origin/main` at `573b8f9`, but **does not include or
-release the uncommitted code**. The workflows below require that local code;
-checking out this documentation branch alone will not enable them.
+This guide was checked against local and published `main` at `1861ade` on
+**September 9, 2026**. It explains the linked-transaction, import, and connection
+workflows now in the repository. This PR updates documentation, not application
+behavior. See the [main README](../README.md) for setup and all source-specific
+details, the [dashboard guide](../app/README.md) for everyday navigation, and the
+[product contract](../llm_context.md) for contributor invariants.
 
-The [main README](../README.md), [dashboard guide](../app/README.md), and
-[product contract](../llm_context.md) continue to describe the committed
-implementation. Promote the relevant sections below into those guides when
-their implementation lands, and remove or refresh this dated snapshot. Source
-paths in backticks identify the inspected local files; some do not yet exist
-on this PR's branch.
-
-## What differs from published main
-
-| Area | Published implementation on this branch | Uncommitted local implementation |
-| --- | --- | --- |
-| Transaction storage | Thirteen CSV columns; refund and transfer flags | Fifteen columns with durable `id` and structured `links` |
-| Refunds | Manually exclude a refunded purchase from spending | Link actual refund credits to purchases, including partial refunds and repayments |
-| Settings review | Internal-transfer review | Reconcile workspace for transfers and possible refunds |
-| Import sources | Eight website sources plus Ledger CSV | Nine website sources plus Ledger CSV, adding Schwab Checking |
-| Preferences | Theme and number abbreviations | Also default import lookback and refund-match suggestions |
-| Follow-up tracking | Existing transaction editing | Persistent flags, a Flagged only filter, and bulk flag actions |
-| Extension connection | Existing import bridge | Trusted-server management and a Ledger launcher popup |
-| Deployment | Local Python server | Optional Debian/systemd deployment and an update helper |
-
-Theme and number-abbreviation preferences are already published functionality,
-not new features introduced by this snapshot. The dependency-free Python
-runtime, expense-positive/income-negative storage, occurrence-aware deduplication,
-immutable import timestamps, revision checks, safety backups, and atomic writes
-remain requirements of the local changes.
+The dependency-free Python runtime, expense-positive/income-negative storage,
+occurrence-aware deduplication, immutable import timestamps, revision checks,
+safety backups, and atomic writes remain unchanged requirements.
 
 ## Linked refunds, repayments, and transfers
 
-The local shared transaction editor has a **Refunds & repayments** section.
+The shared transaction editor has a **Refunds & repayments** section.
 Choose Refund, Internal transfer, or Repayment, search for the other transaction
 by description or notes, and stage the relationship. A relationship can be
 edited or removed from either side. Saving the transaction, or confirming its
@@ -66,7 +45,7 @@ pre-mutation backup.
 
 ### CSV schema and portability
 
-The local persisted column order is:
+The persisted column order is:
 
 ```text
 date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt,id,links
@@ -152,9 +131,9 @@ links.
 - **Suggest refund matches:** enabled by default for every importer, including
   CSV. Turning it off disables suggestions, not existing links or manual editing.
 
-Preference changes synchronize across open tabs only while date fields retain
-their untouched defaults. They must not overwrite custom dates or active
-imports. Generic Ledger CSV and manual Apple Card CSV read the entire file;
+Preferences synchronize across open tabs. Updated default dates replace only
+fields still showing their previous defaults; existing import sessions keep
+their captured settings. Generic Ledger CSV and manual Apple Card CSV read the entire file;
 their rows are not restricted by this lookback. Capital One manual CSV uses
 Transaction Date, and Schwab imports apply the inclusive selected Date range.
 
@@ -162,7 +141,8 @@ For Credit Karma, enabling refund suggestions retains merchant credits that
 would otherwise be removed by its five merchant-exclusion filters, allowing
 refund review. Credit direction comes from source credit metadata, not a guessed
 raw amount sign. With suggestions off, the exclusions apply normally. A prior
-Credit Karma opt-out is migrated only when no global preference already exists.
+Credit Karma opt-out supplies the fallback when no valid global refund-matching
+boolean has been saved.
 The server validates and snapshots the choice when an import session starts;
 completion cannot substitute a different value.
 
@@ -200,14 +180,14 @@ excluded credits retain that sign with a strike-through.
 
 ## Import sources and Schwab Checking
 
-The local import page has ten tabs: Credit Karma, Amazon, AliExpress, Venmo,
+The import page has ten tabs: Credit Karma, Amazon, AliExpress, Venmo,
 eBay, Walmart, Apple Card, Capital One, Schwab Checking, and Ledger CSV. Nine
 are website sources handled through the companion extension; Ledger CSV is
 not a website connector. Apple Card and Capital One also have manual CSV
 fallbacks. There is no dedicated manual Schwab CSV picker in the current UI.
 
 Schwab Checking requires extension **0.11.0 or newer and the updated backend**.
-The inspected local extension manifest is **0.11.1**. Its flow is user-guided:
+The inspected extension manifest is **0.11.1**. Its flow is user-guided:
 
 1. Start the Schwab Checking import in Ledger with the intended dates and a
    distinct account name for the checking account.
@@ -278,7 +258,7 @@ Sources: `ledger_data_importer_extension/shared/trusted_origins.js`,
 
 ## Optional self-hosted deployment
 
-The uncommitted `deploy/` directory contains a Debian/systemd guide, service,
+The [deployment guide](../deploy/README.md) describes the Debian/systemd service
 and update helper intended for a private server such as a Proxmox VM. This is
 optional, not a replacement for `python app/server.py`. The service runs as an
 unprivileged user, keeps data outside versioned code at `/var/lib/ledger`, and
@@ -306,13 +286,11 @@ this documentation update.
 
 ## Verification and remaining manual checks
 
-The inspected primary checkout passed **271 Python tests** and **195 JavaScript
-tests** on September 9, 2026. These counts describe the uncommitted local
-snapshot, not the test count on this documentation-only branch. Run both full
-suites using the [contributor commands](../README.md#development-and-testing);
+Run both full suites using the
+[contributor commands](../README.md#development-and-testing);
 use synthetic data and temporary directories, never private financial exports.
 
-Focused local coverage includes `test_reconciliation.py`,
+Focused coverage in `tests/` includes `test_reconciliation.py`,
 `test_reconcile_updates.py`, `test_refund_import.py`,
 `test_import_preferences.py` / `.js`, `test_schwab_import.py`,
 `test_schwab_extension.js`, `test_extension_worlds.js`, and the deployment,
@@ -320,10 +298,10 @@ popup, trusted-origin, and shared transaction-UI tests. A green synthetic suite
 does not establish current third-party website compatibility or a completed
 manual browser acceptance test.
 
-Before releasing the corresponding code, manually verify linked partial
+When validating these workflows in your environment, manually verify linked partial
 refunds and multiple repayments across reporting months, cancel and stale-save
 paths in every shared dialog, complete linked-family export/reimport, real
 Schwab export capture, and explicit trusted-origin permission grant/revocation.
 Review a private deployment separately before enabling remote access. Keep the
-published guides, product invariants, and tests synchronized with the final
-implementation instead of treating this snapshot as a migration instruction.
+guides, product invariants, and tests synchronized with the implementation;
+synthetic checks cannot substitute for live integration acceptance.

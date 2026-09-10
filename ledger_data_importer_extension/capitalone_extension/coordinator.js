@@ -39,7 +39,7 @@ export function registerCapitalOneImporter({ validateRequest, broadcast }) {
     serial(async () => {
       let job = await current();
       if (message.action === "ledgerStartCapitalOneImport") {
-        validateRequest(message.data, sender);
+        await validateRequest(message.data, sender);
         if (job) throw new Error("Another Capital One import is already running.");
         job = { token: message.data.token, startDate: message.data.startDate, endDate: message.data.endDate,
           ledgerOrigin: message.data.ledgerOrigin, tabId: null, createdAt: Date.now(), nonce: "" };
@@ -55,7 +55,7 @@ export function registerCapitalOneImporter({ validateRequest, broadcast }) {
       }
       if (message.action === "ledgerCancelCapitalOneImport") {
         if (!job || job.token !== message.data?.token) return { success: true };
-        validateRequest(job, sender);
+        await validateRequest(job, sender);
         await stop(job);
         try { await update(job, {}, "cancel"); } finally { await clear(); }
         return { success: true };

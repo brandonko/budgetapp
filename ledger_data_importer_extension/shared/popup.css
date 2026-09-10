@@ -1,0 +1,58 @@
+:root {
+  color-scheme: light;
+  --canvas: #f5f7f5;
+  --surface: #ffffff;
+  --text: #1b2922;
+  --muted: #58685f;
+  --border: #d4ddd6;
+  --accent: #285e43;
+  --accent-hover: #1d4933;
+  --on-accent: #ffffff;
+  --warning: #9a342b;
+}
+
+/* Extension pages follow the device theme, independently of a Ledger server. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --canvas: #101813;
+    --surface: #1c2921;
+    --text: #ecf2ed;
+    --muted: #b3c2b8;
+    --border: #3d5144;
+    --accent: #a4d2b5;
+    --accent-hover: #c1e5cd;
+    --on-accent: #163322;
+    --warning: #ffb6ab;
+  }
+}
+
+* { box-sizing: border-box; }
+body { width: 380px; max-width: 100%; margin: 0; background: var(--canvas); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+main { padding: 20px; }
+h1, h2, p { margin: 0; }
+.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.brand h1 { font: 30px/1.1 Georgia, serif; letter-spacing: -.6px; }
+.brand p, .version, .hint { color: var(--muted); font-size: 12px; }
+.brand p { margin-top: 3px; }
+.version { margin-left: auto; align-self: flex-start; padding-top: 4px; }
+.launch > p:not(.status) { color: var(--muted); }
+form { margin-top: 16px; }
+label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 650; }
+select, button { font: inherit; }
+select { width: 100%; min-height: 43px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); color: var(--text); text-overflow: ellipsis; }
+.hint { margin-top: 7px; }
+button { cursor: pointer; }
+.primary { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; min-height: 46px; margin-top: 16px; padding: 11px 16px; border: 0; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-weight: 650; }
+.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button:disabled, select:disabled { opacity: .65; cursor: default; }
+a, .text-button { color: var(--accent); text-underline-offset: 3px; }
+.text-button { display: block; padding: 7px 0; margin-top: 7px; border: 0; background: transparent; font-size: 12px; }
+.text-button:hover { text-decoration: underline; }
+:is(button, select, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.status { margin-top: 12px; color: var(--warning); font-size: 12px; overflow-wrap: anywhere; }
+.sources { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 17px; }
+.sources h2 { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 1px; text-transform: uppercase; }
+.sources ul { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 18px; padding: 0; margin: 12px 0; list-style: none; font-size: 13px; }
+footer { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; color: var(--muted); font-size: 11px; }
+@media (max-width: 340px) { main { padding: 18px; } }
