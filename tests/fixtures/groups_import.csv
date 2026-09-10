@@ -1,0 +1,5 @@
+date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags
+2026-08-20,Bike helmet,50.00,Shopping,Apparel,Test card,CREDIT CARD,Test bank,Synthetic only,tools,,
+2026-08-20,Bike jersey,80.00,Shopping,Apparel,Test card,CREDIT CARD,Test bank,Synthetic only,"bike, apparel",Canyon Aeroad,
+2026-08-21,Travel ticket,120.00,Travel,Transit,Test card,CREDIT CARD,Test bank,Synthetic import fixture,travel,LA trip,
+2026-08-21,Bike pedals,65.00,Shopping,,Test card,CREDIT CARD,Test bank,Synthetic import fixture,bike,,
