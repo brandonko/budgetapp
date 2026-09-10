@@ -1,6 +1,11 @@
 "use strict";
 
 import { exportAliExpressOrders } from "../aliexpress_extension/importer.js";
+import { registerWalmartImporter } from "../walmart_extension/coordinator.js";
+import { registerCapitalOneImporter } from "../capitalone_extension/coordinator.js";
+
+registerWalmartImporter({ validateRequest, broadcast });
+registerCapitalOneImporter({ validateRequest, broadcast });
 
 // Shared service worker that coordinates source tabs with Ledger import sessions.
 

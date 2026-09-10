@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
 import sys
 import tempfile
@@ -17,12 +19,16 @@ APP_DIR = ROOT / "app"
 sys.path.insert(0, str(APP_DIR))
 
 from server import (  # noqa: E402
+    CsvDataError,
     GENERATED_BACKUP_FILENAME,
+    LEDGER_IMPORT_COLUMNS,
     BudgetRequestHandler,
     DEFAULT_CSV,
     ThreadingHTTPServer,
     initialize_csv_if_missing,
+    parse_ledger_import_csv,
     read_transaction_state,
+    transaction_export_csv,
     write_transactions_atomic,
 )
 
@@ -198,6 +204,57 @@ class BackupApiTests(unittest.TestCase):
             backup_names_before,
         )
 
+    def test_restore_recovers_malformed_active_csv_and_preserves_raw_safety_copy(self) -> None:
+        _, created = self.request("POST", "/api/backups", {})
+        restore_path = f'/api/backups/{created["backup"]["name"]}/restore'
+        for damaged in (b"damaged,header\nmissing,columns\n", b"\xff\xfeinvalid UTF-8"):
+            with self.subTest(damaged=damaged):
+                self.csv_path.write_bytes(damaged)
+                status, listed = self.request("GET", "/api/backups")
+                self.assertEqual(status, 200)
+                self.assertEqual(listed["revision"], hashlib.sha256(damaged).hexdigest())
+                status, restored = self.request("POST", restore_path, {
+                    "confirm": True, "revision": listed["revision"],
+                })
+                self.assertEqual(status, 200)
+                self.assertEqual(restored["transactionCount"], 2)
+                self.assertFalse(restored["safetyBackup"]["valid"])
+                safety_path = self.csv_path.parent / "backups" / restored["safetyBackup"]["name"]
+                self.assertEqual(safety_path.read_bytes(), damaged)
+
+    def test_restore_rejects_changed_malformed_csv_without_a_safety_write(self) -> None:
+        _, created = self.request("POST", "/api/backups", {})
+        self.csv_path.write_bytes(b"invalid header\n")
+        _, listed = self.request("GET", "/api/backups")
+        self.csv_path.write_bytes(b"different invalid header\n")
+        directory = self.csv_path.parent / "backups"
+        before = {path.name for path in directory.iterdir()}
+        status, _ = self.request("POST", f'/api/backups/{created["backup"]["name"]}/restore', {
+            "confirm": True, "revision": listed["revision"],
+        })
+        self.assertEqual(status, 409)
+        self.assertEqual(self.csv_path.read_bytes(), b"different invalid header\n")
+        self.assertEqual({path.name for path in directory.iterdir()}, before)
+
+    def test_restore_missing_database_requires_current_missing_revision(self) -> None:
+        _, created = self.request("POST", "/api/backups", {})
+        old_revision = read_transaction_state(self.csv_path)[1]
+        self.csv_path.unlink()
+        _, listed = self.request("GET", "/api/backups")
+        self.assertEqual(listed["revision"], "missing")
+        restore_path = f'/api/backups/{created["backup"]["name"]}/restore'
+        status, _ = self.request("POST", restore_path, {
+            "confirm": True, "revision": old_revision,
+        })
+        self.assertEqual(status, 409)
+        self.assertFalse(self.csv_path.exists())
+        status, restored = self.request("POST", restore_path, {
+            "confirm": True, "revision": listed["revision"],
+        })
+        self.assertEqual(status, 200)
+        self.assertIsNone(restored["safetyBackup"])
+        self.assertEqual(restored["transactionCount"], 2)
+
     def test_import_history_groups_batches_and_removes_one_with_a_backup(self) -> None:
         first_timestamp = "2026-09-02T10:00:00.000000Z"
         second_timestamp = "2026-09-02T11:00:00.000000Z"
@@ -333,23 +390,74 @@ class BackupApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(payload["code"], "transaction_file_missing")
 
+    def test_transaction_export_endpoint_downloads_selected_range(self) -> None:
+        url = (
+            f"{self.base_url}/api/transactions/export"
+            "?startDate=2026-09-01&endDate=2026-09-01"
+        )
+        with urlopen(url, timeout=3) as response:
+            body = response.read().decode("utf-8-sig")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "text/csv; charset=utf-8")
+            self.assertEqual(response.headers["X-Ledger-Transaction-Count"], "2")
+            self.assertIn("ledger-transactions_2026-09-01_to_2026-09-01.csv", response.headers["Content-Disposition"])
+        rows = list(csv.DictReader(io.StringIO(body)))
+        self.assertEqual([row["description"] for row in rows], ["First", "Second"])
+        self.assertEqual(tuple(rows[0]), LEDGER_IMPORT_COLUMNS)
+
+        status, payload = self.request(
+            "GET", "/api/transactions/export?startDate=bad&endDate=2026-09-01"
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("YYYY-MM-DD", payload["error"])
+
 
 class SettingsPageTests(unittest.TestCase):
-    def test_backup_is_the_first_accessible_settings_tab(self) -> None:
+    def test_internal_transfer_guidance_uses_shared_collapsed_info_panel(self) -> None:
+        html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
+        card = html.split('id="internal-transfers-settings-panel"', 1)[1].split(
+            '</article>', 1
+        )[0]
+        self.assertIn('class="settings-card internal-transfer-settings-card"', card)
+        self.assertIn(
+            '<details class="import-note import-guide internal-transfer-guide">', card
+        )
+        guide = card.split('<details', 1)[1].split('</details>', 1)[0]
+        self.assertIn('<summary>', guide)
+        self.assertIn('How transfer detection works', guide)
+        self.assertIn('class="import-guide-content"', guide)
+        for heading in (
+            'How pairs are found', 'You review before saving', 'Reviewing older data'
+        ):
+            self.assertIn(f'<h3>{heading}</h3>', guide)
+        self.assertIn('Nothing changes until you confirm', guide)
+        self.assertIn('Count normally', guide)
+        self.assertIn('id="find-internal-transfers"', card.split('<details', 1)[0])
+        after_guide = card.split('</details>', 1)[1]
+        self.assertIn('id="transfer-review-status" role="status" hidden', after_guide)
+
+    def test_exports_is_the_first_accessible_settings_tab(self) -> None:
         html = (APP_DIR / "settings.html").read_text(encoding="utf-8")
         javascript = (APP_DIR / "settings.js").read_text(encoding="utf-8")
-        self.assertLess(html.index('id="backup-settings-tab"'), html.index('id="general-settings-tab"'))
+        self.assertLess(html.index('id="exports-settings-tab"'), html.index('id="preferences-settings-tab"'))
         self.assertNotIn('id="classification-settings-tab"', html)
         self.assertNotIn('id="classification-settings-panel"', html)
         self.assertIn('href="/classifications"', html)
         self.assertIn(
-            '<section class="settings-panel" id="general-settings-panel" role="tabpanel"',
+            '<section class="settings-panel" id="preferences-settings-panel" role="tabpanel"',
             html,
         )
-        self.assertIn('aria-selected="true" aria-controls="backup-settings-panel"', html)
+        self.assertIn('aria-selected="true" aria-controls="exports-settings-panel"', html)
         self.assertIn('id="import-history-settings-tab"', html)
         self.assertIn('tabindex="-1">Imports</button>', html)
         self.assertIn('id="import-history-settings-panel"', html)
+        self.assertIn('id="import-history-pagination"', html)
+        self.assertIn('id="previous-import-history-page"', html)
+        self.assertIn('id="next-import-history-page"', html)
+        self.assertIn('id="import-history-page-indicator"', html)
+        self.assertIn("const IMPORT_HISTORY_PAGE_SIZE = 5", javascript)
+        self.assertIn("imports.slice(pageStart, pageStart + IMPORT_HISTORY_PAGE_SIZE)", javascript)
+        self.assertIn("state.importHistoryPage = Math.min", javascript)
         self.assertIn('fetch("/api/import-history"', javascript)
         self.assertIn(
             'selectedTab === document.querySelector("#import-history-settings-tab")',
@@ -359,25 +467,61 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('view.textContent = "View transactions"', javascript)
         self.assertIn('id="import-history-dialog"', html)
         self.assertIn('id="import-history-edit-form"', html)
-        self.assertIn('<script src="/transaction-ui.js" defer>', html)
-        self.assertIn("transactionUi.renderTransactionList", javascript)
+        self.assertRegex(html, r'<script src="/transaction-ui\.js\?v=[^"]+" defer>')
+        self.assertIn("historyBulk.render", javascript)
         self.assertIn("transactionUi.transactionFromEditor", javascript)
         self.assertIn('method: "PUT"', javascript)
         self.assertIn('method: "DELETE"', javascript)
-        self.assertIn('id="create-backup-button"', html)
-        self.assertIn('id="backup-list"', html)
-        self.assertIn("window.confirm", javascript)
-        self.assertIn("completely replace transactions.csv", javascript)
-        self.assertIn(
-            "JSON.stringify({ confirm: true, revision: state.backupRevision })",
-            javascript,
-        )
+        self.assertIn('id="transaction-export-form"', html)
+        self.assertIn('id="export-start-date"', html)
+        self.assertIn('id="export-end-date"', html)
+        self.assertIn('id="export-transactions-button"', html)
+        self.assertIn('fetch(`/api/transactions/export?${query}`', javascript)
+        self.assertIn('window.showSaveFilePicker', javascript)
+        self.assertIn('suggestedName = `ledger-transactions_${startDate}_to_${endDate}.csv`', javascript)
+        self.assertNotIn('id="backup-settings-tab"', html)
+        self.assertNotIn('id="create-backup-button"', html)
+        self.assertIn('id="dark-mode-toggle" type="checkbox" role="switch"', html)
+        self.assertIn('window.LedgerTheme.setDark', javascript)
+        self.assertIn('tabindex="-1">Preferences</button>', html)
+        self.assertIn('id="number-abbreviation-threshold" type="range"', html)
+        self.assertIn('min="0" max="4" step="1" value="2"', html)
+        for label in ("None", "K", "M", "B", "T"):
+            self.assertIn(f"<span>{label}</span>", html)
+        self.assertIn("const NUMBER_ABBREVIATION_OPTIONS", javascript)
+        self.assertIn("window.LedgerPreferences.numberAbbreviation()", javascript)
+        self.assertIn("window.LedgerPreferences.setNumberAbbreviation(option?.value)", javascript)
+        self.assertIn('<script src="/theme.js?v=20260905-display-preferences-1"></script>', html)
         self.assertIn('method: "DELETE"', javascript)
-        self.assertIn("cannot be recovered after deletion", javascript)
-        self.assertIn('rename.textContent = "Rename"', javascript)
-        self.assertIn("window.prompt", javascript)
-        self.assertIn("/rename", javascript)
         self.assertEqual(DEFAULT_CSV.parent.name, "data")
+
+    def test_transaction_export_is_reimportable_and_date_bounded(self) -> None:
+        older = transaction("Older", 1.2)
+        older["date"] = "2026-08-31"
+        included = transaction("Included", -3.456)
+        included["date"] = "2026-09-02"
+        included["subcategory"] = "Salary"
+        included["tags"] = "Work"
+        included["flags"] = "refunded"
+        included["createdAt"] = "2026-09-03T00:00:00Z"
+        newer = transaction("Newer", 5)
+        newer["date"] = "2026-09-10"
+
+        body, count = transaction_export_csv(
+            [older, included, newer], "2026-09-01", "2026-09-05"
+        )
+        rows = list(csv.DictReader(io.StringIO(body.decode("utf-8-sig"))))
+
+        self.assertEqual(count, 1)
+        self.assertEqual(tuple(rows[0]), LEDGER_IMPORT_COLUMNS)
+        self.assertEqual(rows[0]["description"], "Included")
+        self.assertEqual(rows[0]["amount"], "-3.46")
+        self.assertNotIn("createdAt", rows[0])
+        reparsed, row_count, invalid = parse_ledger_import_csv(body.decode("utf-8-sig"))
+        self.assertEqual((len(reparsed), row_count, invalid), (1, 1, []))
+
+        with self.assertRaisesRegex(CsvDataError, "on or before"):
+            transaction_export_csv([], "2026-09-05", "2026-09-01")
 
     def test_classifications_page_explains_order_and_offers_export(self) -> None:
         html = (APP_DIR / "classifications.html").read_text(encoding="utf-8")
@@ -445,8 +589,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn("classification-add-rule", javascript)
         self.assertIn("openUnclassifiedDialog", javascript)
         self.assertNotIn('id="save-classifications-button"', html)
-        self.assertIn('/settings.js?v=20260903-classification-files', html)
-        self.assertIn('/styles.css?v=20260903-classification-files', html)
+        self.assertRegex(html, r'<script src="/settings\.js\?v=[^"]+" defer></script>')
+        self.assertRegex(html, r'href="/styles\.css\?v=[^\"]+"')
         self.assertIn("persistClassifications", javascript)
         self.assertIn('smallAction("Edit"', javascript)
         self.assertIn('smallAction("Cancel"', javascript)

@@ -1,29 +1,70 @@
 "use strict";
 const transactionUi = window.LedgerTransactionUI;
+void transactionUi.loadEditorTaxonomy();
+const IMPORT_HISTORY_PAGE_SIZE = 5;
 
 const state = {
-  backupRevision: "",
+  exportTransactions: [],
+  exportBusy: false,
   importHistoryRevision: "",
+  importHistoryImports: [],
+  importHistoryPage: 0,
   importHistoryBatch: null,
   importHistoryTransactions: [],
-  editingImportTransactionId: null,
+  importHistoryFilters: {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  },
+  transactionEdit: null,
   importHistoryEditBusy: false,
+  availableTransactionTags: [],
+  availableTransactions: [],
+  transferReview: null,
+  transferReviewBusy: false,
+  transferReviewFilters: { proposed: true, flagged: false },
+  taxonomy: { version: 1, categories: [] },
+  taxonomyRevision: "",
+  taxonomyBusy: false,
+  hideTaxonomyCategoriesWithoutSubcategories: true,
 };
 
 const elements = {
   tabs: [...document.querySelectorAll('[role="tab"][aria-controls]')],
-  createBackup: document.querySelector("#create-backup-button"),
-  refreshBackups: document.querySelector("#refresh-backups-button"),
-  backupStatus: document.querySelector("#backup-status"),
-  backupList: document.querySelector("#backup-list"),
+  exportsTab: document.querySelector("#exports-settings-tab"),
+  exportForm: document.querySelector("#transaction-export-form"),
+  exportStartDate: document.querySelector("#export-start-date"),
+  exportEndDate: document.querySelector("#export-end-date"),
+  exportSummary: document.querySelector("#export-transaction-summary"),
+  exportButton: document.querySelector("#export-transactions-button"),
+  exportStatus: document.querySelector("#export-status"),
   refreshImportHistory: document.querySelector("#refresh-import-history-button"),
   importHistoryStatus: document.querySelector("#import-history-status"),
   importHistoryList: document.querySelector("#import-history-list"),
+  importHistoryPagination: document.querySelector("#import-history-pagination"),
+  previousImportHistoryPage: document.querySelector("#previous-import-history-page"),
+  nextImportHistoryPage: document.querySelector("#next-import-history-page"),
+  importHistoryPageIndicator: document.querySelector("#import-history-page-indicator"),
   importHistoryDialog: document.querySelector("#import-history-dialog"),
   importHistoryDialogSubtitle: document.querySelector("#import-history-dialog-subtitle"),
   importHistoryDialogError: document.querySelector("#import-history-dialog-error"),
   importHistoryTransactions: document.querySelector("#import-history-transactions"),
+  importHistorySearch: document.querySelector("#import-history-search"),
+  importHistoryCategory: document.querySelector("#import-history-category-filter"),
+  importHistorySubcategory: document.querySelector("#import-history-subcategory-filter"),
+  importHistoryTag: document.querySelector("#import-history-tag-filter"),
+  importHistoryAccount: document.querySelector("#import-history-account-filter"),
+  importHistoryProvider: document.querySelector("#import-history-provider-filter"),
+  importHistoryFilterButton: document.querySelector("#import-history-filter-button"),
+  importHistoryFilterPopover: document.querySelector("#import-history-filter-popover"),
+  importHistoryGroup: document.querySelector("#import-history-group-filter"),
+  importHistoryFilterCount: document.querySelector("#import-history-filter-count"),
+  resetImportHistoryFilters: document.querySelector("#reset-import-history-filters"),
+  importHistoryActiveFilters: document.querySelector("#import-history-active-filters"),
+  importHistoryFilterChips: document.querySelector("#import-history-filter-chips"),
+  clearImportHistoryFilters: document.querySelector("#clear-import-history-filters"),
   importHistorySort: document.querySelector("#import-history-sort"),
+  transferReviewFilters: document.querySelector("#transfer-review-filters"),
+  transferReviewProposedFilter: document.querySelector("#transfer-review-proposed-filter"),
+  transferReviewFlaggedFilter: document.querySelector("#transfer-review-flagged-filter"),
   closeImportHistoryDialog: document.querySelector("#close-import-history-dialog"),
   importHistoryEditDialog: document.querySelector("#import-history-edit-dialog"),
   importHistoryEditForm: document.querySelector("#import-history-edit-form"),
@@ -31,6 +72,12 @@ const elements = {
   closeImportHistoryEdit: document.querySelector("#close-import-history-edit"),
   cancelImportHistoryEdit: document.querySelector("#cancel-import-history-edit"),
   saveImportHistoryEdit: document.querySelector("#save-import-history-edit"),
+  taxonomyTab: document.querySelector("#taxonomy-settings-tab"),
+  taxonomyStatus: document.querySelector("#taxonomy-status"),
+  taxonomySummary: document.querySelector("#taxonomy-summary"),
+  taxonomyTree: document.querySelector("#taxonomy-tree"),
+  taxonomySearch: document.querySelector("#taxonomy-search"),
+  taxonomySubcategoryFilter: document.querySelector("#taxonomy-subcategory-filter"),
   importClassifications: document.querySelector("#import-classifications-button"),
   importClassificationsInput: document.querySelector("#import-classifications-input"),
   exportClassifications: document.querySelector("#export-classifications-button"),
@@ -53,12 +100,13 @@ const elements = {
   unclassifiedProvider: document.querySelector("#unclassified-provider-filter"),
   unclassifiedFilterButton: document.querySelector("#unclassified-filter-button"),
   unclassifiedFilterPopover: document.querySelector("#unclassified-filter-popover"),
+  unclassifiedGroup: document.querySelector("#unclassified-group-filter"),
   unclassifiedFilterCount: document.querySelector("#unclassified-filter-count"),
   resetUnclassifiedFilters: document.querySelector("#reset-unclassified-filters"),
-  applyUnclassifiedFilters: document.querySelector("#apply-unclassified-filters"),
   unclassifiedActiveFilters: document.querySelector("#unclassified-active-filters"),
   unclassifiedFilterChips: document.querySelector("#unclassified-filter-chips"),
   clearUnclassifiedFilters: document.querySelector("#clear-unclassified-filters"),
+  unclassifiedInternalTransferFilter: document.querySelector("#unclassified-internal-transfer-filter"),
   unclassifiedError: document.querySelector("#unclassified-error"),
   unclassifiedList: document.querySelector("#unclassified-list"),
   unclassifiedSort: document.querySelector("#unclassified-sort"),
@@ -68,10 +116,32 @@ const elements = {
   previewError: document.querySelector("#classification-preview-error"),
   previewList: document.querySelector("#classification-preview-list"),
   previewSort: document.querySelector("#classification-preview-sort"),
+  previewFilters: document.querySelector("#classification-preview-filters"),
+  previewGroupFilter: document.querySelector("#classification-preview-group-filter"),
+  previewFilterCount: document.querySelector("#classification-preview-filter-count"),
   closePreview: document.querySelector("#close-classification-preview"),
   cancelPreview: document.querySelector("#cancel-classification-preview"),
   confirmPreview: document.querySelector("#confirm-classification-preview"),
+  darkModeToggle: document.querySelector("#dark-mode-toggle"),
+  numberAbbreviationThreshold: document.querySelector("#number-abbreviation-threshold"),
+  numberAbbreviationValue: document.querySelector("#number-abbreviation-value"),
 };
+
+const NUMBER_ABBREVIATION_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "k", label: "Thousands (K)" },
+  { value: "m", label: "Millions (M)" },
+  { value: "b", label: "Billions (B)" },
+  { value: "t", label: "Trillions (T)" },
+];
+
+function renderNumberAbbreviationPreference(value) {
+  if (!elements.numberAbbreviationThreshold || !elements.numberAbbreviationValue) return;
+  const optionIndex = NUMBER_ABBREVIATION_OPTIONS.findIndex((option) => option.value === value);
+  const normalizedIndex = optionIndex >= 0 ? optionIndex : 2;
+  elements.numberAbbreviationThreshold.value = String(normalizedIndex);
+  elements.numberAbbreviationValue.textContent = NUMBER_ABBREVIATION_OPTIONS[normalizedIndex].label;
+}
 
 let classifications = [];
 let classificationsBusy = false;
@@ -80,10 +150,13 @@ let classificationEdit = null;
 let ruleEdits = new Map();
 let pendingNewClassificationIndex = null;
 let pendingClassificationPreview = null;
+let classificationPreviewGroup = "";
 let unclassifiedTransactions = [];
+let unclassifiedRevision = "";
 let unclassifiedFieldFilters = {
   description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
 };
+let showUnclassifiedInternalTransfers = false;
 
 const backupDateFormatter = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -124,6 +197,96 @@ const unclassifiedMonthFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 });
 
+const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactionBulk.create({
+  container: elements.importHistoryTransactions,
+  staged: () => Boolean(state.transferReview),
+  onModeChange: (active) => {
+    const confirm = document.querySelector("#confirm-transfer-review");
+    if (confirm) confirm.disabled = active || state.transferReviewBusy;
+  },
+  onStage: async (_ids, proposed) => refreshTransferReview(proposed),
+  decorateRow: (row, transaction) => {
+    if (!state.transferReview) return;
+    const change = state.transferReview.changes.find((entry) => entry._id === transaction._id);
+    if (!change) return;
+    const details = document.createElement("div");
+    details.className = "transfer-change-details";
+    for (const field of change.changedFields) {
+      const line = document.createElement("p");
+      const display = (value) => field === "flags"
+        ? String(value).split(",").filter((flag) => !flag.startsWith("transfer-pair-")).join(", ") || "Counted / eligible for detection"
+        : String(value || "(blank)");
+      line.textContent = `${field === "flags" ? "Budget flags" : field}: ${display(change.before[field])} → ${display(change.after[field])}`;
+      details.append(line);
+    }
+    row.append(details);
+  },
+  getGroupFilter: () => state.importHistoryFilters.group,
+  getTransactions: () => state.importHistoryTransactions,
+  getAllTransactions: () => state.availableTransactions,
+  getRevision: () => state.importHistoryRevision,
+  render: () => renderImportHistoryTransactions(),
+  onSaved: (payload) => {
+    state.importHistoryRevision = payload.revision;
+    state.availableTransactions = payload.transactions;
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    state.importHistoryTransactions = payload.transactions.filter((row) => row.createdAt === state.importHistoryBatch.createdAt);
+    if (Array.isArray(payload.imports)) renderImportHistory(payload.imports);
+    configureImportHistoryFilters();
+  },
+}) : null;
+
+const unclassifiedBulk = elements.unclassifiedList ? window.LedgerTransactionBulk.create({
+  container: elements.unclassifiedList,
+  getGroupFilter: () => unclassifiedFieldFilters.group,
+  getTransactions: () => unclassifiedTransactions,
+  getAllTransactions: () => state.availableTransactions,
+  getRevision: () => unclassifiedRevision,
+  render: () => renderUnclassifiedTransactions(),
+  onSaved: updateUnclassifiedTransactions,
+}) : null;
+
+function updateUnclassifiedTransactions(payload) {
+  unclassifiedRevision = payload.revision;
+  state.availableTransactions = payload.transactions;
+  state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+  unclassifiedTransactions = payload.transactions.filter((row) => !row.subcategory);
+  configureUnclassifiedFilters(unclassifiedFieldFilters);
+}
+
+const classificationBulk = elements.previewList ? window.LedgerTransactionBulk.create({
+  container: elements.previewList, staged: true,
+  getGroupFilter: () => classificationPreviewGroup,
+  getTransactions: () => pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [],
+  getAllTransactions: () => [...state.availableTransactions, ...(pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [])],
+  getRevision: () => pendingClassificationPreview?.revision,
+  render: () => renderClassificationPreviewChanges(),
+  onStage: (ids, proposed) => {
+    const replacements = new Map(proposed.map((row) => [row._id, row]));
+    pendingClassificationPreview.changes.forEach((entry) => {
+      if (replacements.has(entry._id)) {
+        entry.transaction = replacements.get(entry._id);
+        entry.bulkEdited = true;
+      }
+      entry.changedFields = window.LedgerTransactionBulk.changedFields(entry.beforeTransaction, entry.transaction);
+      entry.before = entry.beforeTransaction;
+      entry.after = entry.transaction;
+    });
+    pendingClassificationPreview.changed = pendingClassificationPreview.changes.filter((entry) => entry.changedFields.length).length;
+    const count = pendingClassificationPreview.changed;
+    elements.previewSummary.textContent = `${count} ${count === 1 ? "transaction" : "transactions"} will be modified. Changes are not saved yet.`;
+    elements.confirmPreview.textContent = `Apply changes (${pendingClassificationPreview.changed})`;
+    elements.confirmPreview.disabled = !pendingClassificationPreview.changed;
+  },
+  decorateRow: (row, transaction) => {
+    const entry = pendingClassificationPreview.changes.find((item) => item._id === transaction._id);
+    const details = classificationPreviewRow(entry);
+    const transitions = details.querySelector(".classification-preview-transitions");
+    transitions.classList.add("bulk-classification-transitions");
+    row.append(transitions);
+  },
+}) : null;
+
 function selectSettingsTab(selectedTab, { focus = false, updateHash = true } = {}) {
   for (const tab of elements.tabs) {
     const selected = tab === selectedTab;
@@ -140,6 +303,8 @@ function selectSettingsTab(selectedTab, { focus = false, updateHash = true } = {
   if (selectedTab === document.querySelector("#import-history-settings-tab")) {
     loadImportHistory();
   }
+  if (selectedTab === elements.exportsTab) loadExportTransactions();
+  if (selectedTab === elements.taxonomyTab) loadTaxonomy();
 }
 
 function initializeSettingsTabs() {
@@ -163,10 +328,10 @@ function initializeSettingsTabs() {
   });
 }
 
-function setStatus(message, kind = "success") {
-  elements.backupStatus.textContent = message;
-  elements.backupStatus.className = `settings-status settings-status--${kind}`;
-  elements.backupStatus.hidden = false;
+function setExportStatus(message, kind = "success") {
+  elements.exportStatus.textContent = message;
+  elements.exportStatus.className = `settings-status settings-status--${kind}`;
+  elements.exportStatus.hidden = false;
 }
 
 function setImportHistoryStatus(message, kind = "success") {
@@ -175,16 +340,115 @@ function setImportHistoryStatus(message, kind = "success") {
   elements.importHistoryStatus.hidden = false;
 }
 
-function setBusy(busy) {
-  elements.createBackup.disabled = busy;
-  elements.refreshBackups.disabled = busy;
-  elements.backupList.querySelectorAll("button").forEach((button) => {
-    button.disabled = busy || button.dataset.valid === "false";
-  });
+function exportTransactionsInRange() {
+  const startDate = elements.exportStartDate.value;
+  const endDate = elements.exportEndDate.value;
+  if (!startDate || !endDate || startDate > endDate) return [];
+  return state.exportTransactions.filter(
+    (transaction) => transaction.date >= startDate && transaction.date <= endDate,
+  );
+}
+
+function renderExportSummary() {
+  const startDate = elements.exportStartDate.value;
+  const endDate = elements.exportEndDate.value;
+  const rangeIsValid = Boolean(startDate && endDate && startDate <= endDate);
+  const count = rangeIsValid ? exportTransactionsInRange().length : 0;
+  elements.exportButton.disabled = state.exportBusy || !rangeIsValid || count === 0;
+  if (!rangeIsValid) {
+    elements.exportSummary.textContent = startDate && endDate
+      ? "Start date must be on or before end date."
+      : "Select a start and end date.";
+    return;
+  }
+  elements.exportSummary.textContent = `${count} ${count === 1 ? "transaction" : "transactions"} in this range`;
+}
+
+async function loadExportTransactions() {
+  try {
+    const response = await fetch("/api/transactions", { cache: "no-store" });
+    if (response.status === 404) {
+      state.exportTransactions = [];
+      elements.exportSummary.textContent = "Import transactions before creating an export.";
+      elements.exportButton.disabled = true;
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not load transactions (${response.status}).`);
+    state.exportTransactions = Array.isArray(payload.transactions) ? payload.transactions : [];
+    const dates = state.exportTransactions.map((transaction) => transaction.date).sort();
+    if (dates.length > 0) {
+      if (!elements.exportStartDate.value) elements.exportStartDate.value = dates[0];
+      if (!elements.exportEndDate.value) elements.exportEndDate.value = dates.at(-1);
+    }
+    renderExportSummary();
+  } catch (error) {
+    state.exportTransactions = [];
+    elements.exportButton.disabled = true;
+    setExportStatus(error instanceof Error ? error.message : "Could not load transactions.", "error");
+  }
+}
+
+async function exportTransactions(event) {
+  event.preventDefault();
+  if (state.exportBusy || elements.exportButton.disabled) return;
+  const startDate = elements.exportStartDate.value;
+  const endDate = elements.exportEndDate.value;
+  const suggestedName = `ledger-transactions_${startDate}_to_${endDate}.csv`;
+  state.exportBusy = true;
+  renderExportSummary();
+  elements.exportButton.textContent = "Exporting…";
+  elements.exportStatus.hidden = true;
+  try {
+    const handle = typeof window.showSaveFilePicker === "function"
+      ? await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: "CSV files",
+          accept: { "text/csv": [".csv"] },
+        }],
+      })
+      : null;
+    const query = new URLSearchParams({ startDate, endDate });
+    const response = await fetch(`/api/transactions/export?${query}`, { cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Could not export transactions (${response.status}).`);
+    }
+    const blob = await response.blob();
+    if (handle) {
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } else {
+      const link = document.createElement("a");
+      const objectUrl = URL.createObjectURL(blob);
+      link.href = objectUrl;
+      link.download = suggestedName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    }
+    const count = exportTransactionsInRange().length;
+    setExportStatus(`Exported ${count} ${count === 1 ? "transaction" : "transactions"}.`);
+  } catch (error) {
+    if (error?.name !== "AbortError") {
+      setExportStatus(error instanceof Error ? error.message : "Could not export transactions.", "error");
+    }
+  } finally {
+    state.exportBusy = false;
+    elements.exportButton.textContent = "Export CSV";
+    renderExportSummary();
+  }
 }
 
 function setImportHistoryBusy(busy) {
   elements.refreshImportHistory.disabled = busy;
+  elements.previousImportHistoryPage.disabled = busy || state.importHistoryPage === 0;
+  elements.nextImportHistoryPage.disabled = busy || (
+    state.importHistoryPage + 1 >= Math.ceil(state.importHistoryImports.length / IMPORT_HISTORY_PAGE_SIZE)
+  );
   elements.importHistoryList.querySelectorAll("button").forEach((button) => {
     button.disabled = busy;
   });
@@ -226,14 +490,25 @@ function importHistoryRow(importBatch) {
 }
 
 function renderImportHistory(imports) {
+  state.importHistoryImports = imports;
   if (imports.length === 0) {
+    state.importHistoryPage = 0;
     const empty = document.createElement("p");
     empty.className = "backup-empty";
     empty.textContent = "No tracked imports yet. New imports will appear here after they are committed.";
     elements.importHistoryList.replaceChildren(empty);
+    elements.importHistoryPagination.hidden = true;
     return;
   }
-  elements.importHistoryList.replaceChildren(...imports.map(importHistoryRow));
+  const pageCount = Math.ceil(imports.length / IMPORT_HISTORY_PAGE_SIZE);
+  state.importHistoryPage = Math.min(Math.max(state.importHistoryPage, 0), pageCount - 1);
+  const pageStart = state.importHistoryPage * IMPORT_HISTORY_PAGE_SIZE;
+  const visibleImports = imports.slice(pageStart, pageStart + IMPORT_HISTORY_PAGE_SIZE);
+  elements.importHistoryList.replaceChildren(...visibleImports.map(importHistoryRow));
+  elements.importHistoryPagination.hidden = pageCount <= 1;
+  elements.importHistoryPageIndicator.textContent = `Page ${state.importHistoryPage + 1} of ${pageCount}`;
+  elements.previousImportHistoryPage.disabled = state.importHistoryPage === 0;
+  elements.nextImportHistoryPage.disabled = state.importHistoryPage === pageCount - 1;
 }
 
 async function loadImportHistory() {
@@ -264,28 +539,185 @@ function importHistoryTransactionOptions(transaction) {
   };
 }
 
-function renderImportHistoryTransactions() {
-  const transactions = state.importHistoryTransactions;
-  elements.importHistoryDialogSubtitle.textContent = `${transactions.length} ${
-    transactions.length === 1 ? "transaction" : "transactions"
-  } imported ${backupDateFormatter.format(new Date(state.importHistoryBatch.createdAt))}`;
-  if (transactions.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "empty-transaction-list";
-    empty.textContent = "This import no longer contains any transactions.";
-    elements.importHistoryTransactions.replaceChildren(empty);
-    return;
-  }
-  transactionUi.renderTransactionList(
-    elements.importHistoryTransactions,
-    transactionUi.sortTransactions(transactions, importHistorySort.value()),
-    importHistoryTransactionOptions,
+function importHistoryTags(transaction) {
+  return String(transaction.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function populateImportHistoryFilter(select, values, allLabel, selected = "") {
+  const options = values.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    return option;
+  });
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = allLabel;
+  select.replaceChildren(all, ...options);
+  select.value = values.includes(selected) ? selected : "";
+}
+
+function importHistoryFilterValues(field, transactions = state.importHistoryTransactions) {
+  return [...new Set(transactions.map((transaction) => transaction[field]).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function populateImportHistorySubcategories(category, selected = "") {
+  const matching = category
+    ? state.importHistoryTransactions.filter((transaction) => transaction.category === category)
+    : state.importHistoryTransactions;
+  populateImportHistoryFilter(
+    elements.importHistorySubcategory,
+    importHistoryFilterValues("subcategory", matching),
+    "All subcategories",
+    selected,
   );
 }
 
+function configureImportHistoryFilters(filters = state.importHistoryFilters) {
+  transactionUi.populateGroupFilter(elements.importHistoryGroup, state.importHistoryTransactions, filters.group);
+  const tags = new Map();
+  state.importHistoryTransactions.forEach((transaction) => importHistoryTags(transaction).forEach((tag) => {
+    if (!tags.has(tag.toLocaleLowerCase())) tags.set(tag.toLocaleLowerCase(), tag);
+  }));
+  const tagValues = [...tags.values()].sort((left, right) => left.localeCompare(right));
+  const selectedTag = tagValues.find(
+    (tag) => tag.toLocaleLowerCase() === String(filters.tag || "").toLocaleLowerCase(),
+  ) || "";
+  elements.importHistorySearch.value = filters.description || "";
+  populateImportHistoryFilter(elements.importHistoryCategory, importHistoryFilterValues("category"), "All categories", filters.category);
+  populateImportHistorySubcategories(elements.importHistoryCategory.value, filters.subcategory);
+  populateImportHistoryFilter(elements.importHistoryTag, tagValues, "All tags", selectedTag);
+  populateImportHistoryFilter(elements.importHistoryAccount, importHistoryFilterValues("accountName"), "All accounts", filters.accountName);
+  populateImportHistoryFilter(elements.importHistoryProvider, importHistoryFilterValues("provider"), "All providers", filters.provider);
+  state.importHistoryFilters = {
+    description: elements.importHistorySearch.value.trim(),
+    group: elements.importHistoryGroup.value,
+    category: elements.importHistoryCategory.value,
+    subcategory: elements.importHistorySubcategory.value,
+    tag: elements.importHistoryTag.value,
+    accountName: elements.importHistoryAccount.value,
+    provider: elements.importHistoryProvider.value,
+  };
+  renderImportHistoryFilterChips();
+}
+
+function importHistoryFilterDraft() {
+  return {
+    group: elements.importHistoryGroup.value,
+    category: elements.importHistoryCategory.value,
+    subcategory: elements.importHistorySubcategory.value,
+    tag: elements.importHistoryTag.value,
+    accountName: elements.importHistoryAccount.value,
+    provider: elements.importHistoryProvider.value,
+  };
+}
+
+function renderImportHistoryFilterChips() {
+  const definitions = [
+    ["group", "Group"],
+    ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
+    ["accountName", "Account"], ["provider", "Provider"],
+  ];
+  const active = definitions.filter(([field]) => state.importHistoryFilters[field]);
+  elements.importHistoryFilterCount.textContent = String(active.length);
+  elements.importHistoryFilterCount.hidden = active.length === 0;
+  elements.importHistoryFilterButton.classList.toggle("has-active-filters", active.length > 0);
+  elements.importHistoryActiveFilters.hidden = active.length === 0;
+  elements.importHistoryFilterChips.replaceChildren(...active.map(([field, label]) => {
+    const value = field === "group" ? transactionUi.groupFilterLabel(state.importHistoryFilters[field]) : state.importHistoryFilters[field];
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "transaction-filter-chip";
+    chip.textContent = `${label}: ${value} ×`;
+    chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
+    chip.addEventListener("click", () => {
+      state.importHistoryFilters[field] = "";
+      configureImportHistoryFilters(state.importHistoryFilters);
+      renderImportHistoryTransactions();
+    });
+    return chip;
+  }));
+}
+
+function setImportHistoryFilterPopover(open, restore = true) {
+  if (!open && restore) configureImportHistoryFilters(state.importHistoryFilters);
+  elements.importHistoryFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.importHistoryFilterPopover);
+  elements.importHistoryFilterButton.setAttribute("aria-expanded", String(open));
+}
+
+function renderImportHistoryTransactions() {
+  if (!state.importHistoryBatch) return;
+  const transactions = state.importHistoryTransactions;
+  const review = state.transferReview;
+  const flaggedIds = new Set((review?.alreadyFlagged || []).map((transaction) => transaction._id));
+  elements.transferReviewFilters.hidden = !review;
+  if (review) {
+    elements.transferReviewProposedFilter.textContent = `Proposed changes (${review.changes.length})`;
+    elements.transferReviewFlaggedFilter.textContent = `Already flagged (${review.alreadyFlagged.length})`;
+    elements.transferReviewProposedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.proposed));
+    elements.transferReviewFlaggedFilter.setAttribute("aria-pressed", String(state.transferReviewFilters.flagged));
+  }
+  state.importHistoryFilters.description = elements.importHistorySearch.value.trim();
+  const filters = state.importHistoryFilters;
+  const visible = transactionUi.sortTransactions(transactions.filter((transaction) =>
+    (!review || state.transferReviewFilters[flaggedIds.has(transaction._id) ? "flagged" : "proposed"])
+    && transactionUi.matchesTransactionSearch(transaction, filters.description)
+    && (!filters.category || transaction.category === filters.category)
+    && (!filters.subcategory || transaction.subcategory === filters.subcategory)
+    && (!filters.tag || importHistoryTags(transaction).some(
+      (tag) => tag.toLocaleLowerCase() === filters.tag.toLocaleLowerCase(),
+    ))
+    && (!filters.accountName || transaction.accountName === filters.accountName)
+    && (!filters.provider || transaction.provider === filters.provider)
+  ), importHistorySort.value());
+  const groupFiltered = historyBulk.filter(visible);
+  const filtered = Object.values(filters).some(Boolean) || groupFiltered.length !== transactions.length;
+  const count = filtered ? `${groupFiltered.length} of ${transactions.length}` : String(transactions.length);
+  elements.importHistoryDialogSubtitle.textContent = state.transferReview
+    ? `${review.changes.length} proposed changes · ${review.alreadyFlagged.length} already flagged · ${groupFiltered.length} shown. Changes are saved only when you confirm; visibility filters do not affect saving.`
+    : `${count} ${
+    transactions.length === 1 ? "transaction" : "transactions"
+  } imported ${backupDateFormatter.format(new Date(state.importHistoryBatch.createdAt))}`;
+  renderImportHistoryFilterChips();
+  if (transactions.length === 0) {
+    historyBulk.render([], importHistoryTransactionOptions);
+    const empty = document.createElement("p");
+    empty.className = "empty-transaction-list";
+    empty.textContent = state.transferReview
+      ? "No new transfer pairs found. Existing saved exclusions and manual overrides stay unchanged."
+      : "This import no longer contains any transactions.";
+    elements.importHistoryTransactions.replaceChildren(empty);
+    return;
+  }
+  historyBulk.render(visible, importHistoryTransactionOptions);
+  if (groupFiltered.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-transaction-list";
+    empty.textContent = review && review.changes.length === 0 && !state.transferReviewFilters.flagged
+      ? "No proposed changes. Turn on Already flagged to review your saved internal transfers."
+      : "No transactions match these filters.";
+    elements.importHistoryTransactions.replaceChildren(empty);
+    return;
+  }
+}
+
 async function openImportHistoryBatch(importBatch) {
+  state.transferReview = null;
+  elements.transferReviewFilters.hidden = true;
+  document.querySelector("#transfer-review-footer").hidden = true;
+  elements.importHistoryDialog.querySelector("h2").textContent = "Imported transactions";
+  elements.importHistoryDialog.querySelector(".eyebrow").textContent = "Import history";
+  elements.closeImportHistoryDialog.setAttribute("aria-label", "Close imported transactions");
+  historyBulk.reset();
   state.importHistoryBatch = importBatch;
   state.importHistoryTransactions = [];
+  state.importHistoryFilters = {
+    description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
+  };
+  configureImportHistoryFilters();
+  setImportHistoryFilterPopover(false, false);
   elements.importHistoryDialogError.hidden = true;
   elements.importHistoryDialogError.textContent = "";
   elements.importHistoryDialogSubtitle.textContent = "Loading transactions…";
@@ -304,6 +736,7 @@ async function openImportHistoryBatch(importBatch) {
     state.importHistoryTransactions = payload.transactions.sort(
       (left, right) => right.date.localeCompare(left.date) || right._id - left._id,
     );
+    configureImportHistoryFilters();
     renderImportHistoryTransactions();
   } catch (error) {
     elements.importHistoryDialogSubtitle.textContent = "";
@@ -313,29 +746,162 @@ async function openImportHistoryBatch(importBatch) {
   }
 }
 
+async function refreshTransferReview(proposed = []) {
+  const previous = state.transferReview;
+  const overrides = new Map((previous?.overrides || []).map((row) => [row._id, row]));
+  proposed.forEach((row) => overrides.set(row._id, row));
+  state.transferReviewBusy = true;
+  const confirm = document.querySelector("#confirm-transfer-review");
+  confirm.disabled = true;
+  try {
+    const response = await fetch("/api/internal-transfers/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides: [...overrides.values()] }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || (response.status === 404
+      ? "Restart the Ledger Python server to enable transfer reviews, then try again."
+      : "Could not scan internal transfers."));
+    if (!Array.isArray(payload.alreadyFlagged)) {
+      throw new Error("Restart the Ledger Python server to view already flagged transfers, then scan again.");
+    }
+    state.transferReview = { ...payload, overrides: [...overrides.values()] };
+    state.importHistoryRevision = payload.revision;
+    state.importHistoryTransactions = [...payload.transactions, ...payload.alreadyFlagged];
+    state.importHistoryBatch = { transferReview: true };
+    configureImportHistoryFilters();
+    renderImportHistoryTransactions();
+    confirm.textContent = payload.changes.length ? `Save reviewed changes (${payload.changes.length})` : "Finish review";
+  } finally {
+    state.transferReviewBusy = false;
+    confirm.disabled = historyBulk.isActive() || !state.transferReview;
+  }
+}
+
+async function openTransferReview() {
+  if (state.transferReviewBusy) return;
+  historyBulk.reset();
+  state.transferReview = null;
+  state.transferReviewFilters = { proposed: true, flagged: false };
+  elements.transferReviewFilters.hidden = true;
+  state.importHistoryFilters = { description: "", category: "", subcategory: "", tag: "", group: "", accountName: "", provider: "" };
+  elements.importHistorySearch.value = "";
+  setImportHistoryFilterPopover(false, false);
+  elements.importHistoryDialog.querySelector("h2").textContent = "Review internal transfers";
+  elements.importHistoryDialog.querySelector(".eyebrow").textContent = "Proposed changes";
+  elements.closeImportHistoryDialog.setAttribute("aria-label", "Cancel transfer review");
+  elements.importHistoryDialogSubtitle.textContent = "Scanning all dates…";
+  elements.importHistoryDialogError.hidden = true;
+  elements.importHistoryTransactions.replaceChildren();
+  document.querySelector("#transfer-review-footer").hidden = false;
+  if (!elements.importHistoryDialog.open) elements.importHistoryDialog.showModal();
+  try { await refreshTransferReview(); }
+  catch (error) {
+    elements.importHistoryDialogError.textContent = error.message;
+    elements.importHistoryDialogError.hidden = false;
+  }
+}
+
+async function confirmTransferReview() {
+  if (!state.transferReview || state.transferReviewBusy || historyBulk.isActive()) return;
+  const review = state.transferReview;
+  const button = document.querySelector("#confirm-transfer-review");
+  state.transferReviewBusy = true;
+  button.disabled = true;
+  elements.closeImportHistoryDialog.disabled = true;
+  document.querySelector("#cancel-transfer-review").disabled = true;
+  elements.importHistoryDialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = true; });
+  try {
+    const response = await fetch("/api/internal-transfers/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision: review.revision, plan: review.plan, overrides: review.overrides, confirm: true }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Could not save the transfer review.");
+    const status = document.querySelector("#transfer-review-status");
+    status.textContent = `${payload.changed} transactions updated · ${payload.transferPairs} transfer pairs saved. ` +
+      (payload.changed ? "A safety backup was created. " : "") + "Your dashboards now use saved transfer flags.";
+    status.hidden = false;
+    state.availableTransactions = payload.transactions;
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    state.transferReviewBusy = false;
+    closeImportHistoryDialog();
+  } catch (error) {
+    elements.importHistoryDialogError.textContent = error.message;
+    elements.importHistoryDialogError.hidden = false;
+  } finally {
+    state.transferReviewBusy = false;
+    elements.importHistoryDialog.querySelectorAll("button, input, select").forEach((control) => { control.disabled = false; });
+    button.disabled = false;
+    elements.closeImportHistoryDialog.disabled = false;
+    document.querySelector("#cancel-transfer-review").disabled = false;
+  }
+}
+
+document.querySelector("#find-internal-transfers")?.addEventListener("click", openTransferReview);
+document.querySelector("#cancel-transfer-review")?.addEventListener("click", closeImportHistoryDialog);
+document.querySelector("#confirm-transfer-review")?.addEventListener("click", confirmTransferReview);
+
+for (const [button, filter] of [
+  [elements.transferReviewProposedFilter, "proposed"],
+  [elements.transferReviewFlaggedFilter, "flagged"],
+]) {
+  button?.addEventListener("click", () => {
+    if (!state.transferReview || state.transferReviewBusy) return;
+    state.transferReviewFilters[filter] = !state.transferReviewFilters[filter];
+    renderImportHistoryTransactions();
+  });
+}
+
 function closeImportHistoryDialog() {
+  if (state.transferReviewBusy) return;
+  state.transferReview = null;
+  elements.transferReviewFilters.hidden = true;
+  document.querySelector("#transfer-review-footer").hidden = true;
+  historyBulk.reset();
   if (elements.importHistoryDialog.open) elements.importHistoryDialog.close();
   state.importHistoryBatch = null;
   state.importHistoryTransactions = [];
 }
 
-function openImportHistoryTransactionEditor(transaction) {
-  state.editingImportTransactionId = transaction._id;
+// One editor/save path for history, staged transfer reviews and unclassified rows.
+function openImportHistoryTransactionEditor(transaction, source = "history") {
+  const unclassified = source === "unclassified";
+  const staged = !unclassified && Boolean(state.transferReview);
+  const returnDialog = unclassified ? elements.unclassifiedDialog : elements.importHistoryDialog;
+  state.transactionEdit = {
+    source, staged, returnDialog, transaction: { ...transaction },
+    revision: unclassified ? unclassifiedRevision : state.importHistoryRevision,
+  };
   elements.importHistoryEditError.hidden = true;
   elements.importHistoryEditError.textContent = "";
-  transactionUi.populateTransactionEditor(elements.importHistoryEditForm, transaction);
-  if (elements.importHistoryDialog.open) elements.importHistoryDialog.close();
+  transactionUi.configureTransactionTagPicker(
+    elements.importHistoryEditForm,
+    transactionUi.tagsFromTransactions(state.availableTransactions),
+  );
+  transactionUi.populateTransactionEditor(elements.importHistoryEditForm, transaction, {}, {
+    transactions: [...state.availableTransactions, ...state.importHistoryTransactions],
+  });
+  elements.importHistoryEditForm.querySelector(".dialog-subtitle").textContent = staged
+    ? "Changes remain staged until you confirm the transfer review."
+    : "Changes are saved directly to the master CSV.";
+  elements.importHistoryEditForm.querySelector(".eyebrow").textContent = unclassified
+    ? "Unclassified transactions" : staged ? "Internal transfers" : "Import history";
+  if (returnDialog.open) returnDialog.close();
   elements.importHistoryEditDialog.showModal();
   elements.importHistoryEditForm.elements.namedItem("description").focus();
 }
 
 function closeImportHistoryTransactionEditor() {
   if (state.importHistoryEditBusy) return;
+  finishTransactionEdit();
+}
+
+function finishTransactionEdit() {
+  const returnDialog = state.transactionEdit?.returnDialog;
   if (elements.importHistoryEditDialog.open) elements.importHistoryEditDialog.close();
-  state.editingImportTransactionId = null;
-  if (state.importHistoryBatch && !elements.importHistoryDialog.open) {
-    elements.importHistoryDialog.showModal();
-  }
+  state.transactionEdit = null;
+  if (returnDialog && !returnDialog.open) returnDialog.showModal();
 }
 
 function setImportHistoryEditBusy(busy) {
@@ -343,36 +909,50 @@ function setImportHistoryEditBusy(busy) {
   elements.importHistoryEditForm.querySelectorAll("button, input, select, textarea").forEach((control) => {
     control.disabled = busy;
   });
+  if (!busy) transactionUi.refreshTransactionTagPicker(elements.importHistoryEditForm);
   elements.saveImportHistoryEdit.textContent = busy ? "Saving…" : "Save transaction";
 }
 
 async function saveImportHistoryTransaction(event) {
   event.preventDefault();
-  const transaction = state.importHistoryTransactions.find(
-    (candidate) => candidate._id === state.editingImportTransactionId,
-  );
-  if (!transaction) return;
+  const edit = state.transactionEdit;
+  if (!edit || state.importHistoryEditBusy) return;
+  const { transaction } = edit;
   elements.importHistoryEditError.hidden = true;
   setImportHistoryEditBusy(true);
   try {
+    if (edit.staged) {
+      await refreshTransferReview([{
+        ...transaction,
+        ...transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
+      }]);
+      finishTransactionEdit();
+      return;
+    }
     const response = await fetch(`/api/transactions/${transaction._id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        revision: state.importHistoryRevision,
+        revision: edit.revision,
         transaction: transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
       }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not save transaction (${response.status}).`);
-    state.importHistoryRevision = payload.revision;
-    state.importHistoryTransactions = payload.transactions
-      .filter((candidate) => candidate.createdAt === state.importHistoryBatch.createdAt)
-      .sort((left, right) => right.date.localeCompare(left.date) || right._id - left._id);
-    renderImportHistoryTransactions();
-    elements.importHistoryEditDialog.close();
-    state.editingImportTransactionId = null;
-    elements.importHistoryDialog.showModal();
+    state.availableTransactions = payload.transactions;
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    if (edit.source === "unclassified") {
+      updateUnclassifiedTransactions(payload);
+      renderUnclassifiedTransactions();
+    } else {
+      state.importHistoryRevision = payload.revision;
+      state.importHistoryTransactions = payload.transactions
+        .filter((candidate) => candidate.createdAt === state.importHistoryBatch.createdAt)
+        .sort((left, right) => right.date.localeCompare(left.date) || right._id - left._id);
+      configureImportHistoryFilters(state.importHistoryFilters);
+      renderImportHistoryTransactions();
+    }
+    finishTransactionEdit();
   } catch (error) {
     elements.importHistoryEditError.textContent =
       error instanceof Error ? error.message : "Could not save transaction.";
@@ -419,172 +999,6 @@ async function removeImportBatch(importBatch) {
   }
 }
 
-function backupRow(backup) {
-  const row = document.createElement("article");
-  row.className = "backup-row";
-  if (!backup.valid) row.classList.add("backup-row--invalid");
-
-  const details = document.createElement("div");
-  const date = document.createElement("strong");
-  const parsedDate = new Date(backup.modifiedAt);
-  date.textContent = Number.isNaN(parsedDate.getTime())
-    ? backup.name
-    : backupDateFormatter.format(parsedDate);
-  const metadata = document.createElement("span");
-  metadata.textContent = backup.valid
-    ? `${backup.transactionCount} ${backup.transactionCount === 1 ? "transaction" : "transactions"} · ${backup.name}`
-    : `Unavailable · ${backup.name}`;
-  details.append(date, metadata);
-
-  const restore = document.createElement("button");
-  restore.className = "secondary-button";
-  restore.type = "button";
-  restore.textContent = "Restore";
-  restore.dataset.valid = String(Boolean(backup.valid));
-  restore.disabled = !backup.valid;
-  if (!backup.valid) restore.title = backup.error || "This backup is not valid.";
-  restore.addEventListener("click", () => restoreBackup(backup));
-
-  const actions = document.createElement("div");
-  actions.className = "backup-actions";
-  const rename = document.createElement("button");
-  rename.className = "secondary-button";
-  rename.type = "button";
-  rename.textContent = "Rename";
-  rename.setAttribute("aria-label", `Rename ${backup.name}`);
-  rename.addEventListener("click", () => renameBackup(backup));
-  const remove = document.createElement("button");
-  remove.className = "danger-button backup-delete-button";
-  remove.type = "button";
-  remove.textContent = "Delete";
-  remove.addEventListener("click", () => deleteBackup(backup));
-  actions.append(restore, rename, remove);
-
-  row.append(details, actions);
-  return row;
-}
-
-function renderBackups(backups) {
-  if (backups.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "backup-empty";
-    empty.textContent = "No backups yet. Create one to protect your current transaction data.";
-    elements.backupList.replaceChildren(empty);
-    return;
-  }
-  elements.backupList.replaceChildren(...backups.map(backupRow));
-}
-
-async function loadBackups() {
-  setBusy(true);
-  try {
-    const response = await fetch("/api/backups", { cache: "no-store" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Could not load backups (${response.status}).`);
-    state.backupRevision = payload.revision;
-    renderBackups(Array.isArray(payload.backups) ? payload.backups : []);
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Could not load backups.", "error");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function createBackup() {
-  setBusy(true);
-  elements.createBackup.textContent = "Creating…";
-  try {
-    const response = await fetch("/api/backups", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Could not create backup (${response.status}).`);
-    setStatus(`Backup created with ${payload.backup.transactionCount} transactions.`);
-    if (elements.backupList) await loadBackups();
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Could not create backup.", "error");
-  } finally {
-    elements.createBackup.textContent = "Create backup";
-    setBusy(false);
-  }
-}
-
-async function restoreBackup(backup) {
-  const confirmed = window.confirm(
-    `Restore the backup last modified ${backupDateFormatter.format(new Date(backup.modifiedAt))}?\n\n` +
-      `This will completely replace transactions.csv with its ${backup.transactionCount} transactions. ` +
-      "Ledger will create a safety backup of the current file first.",
-  );
-  if (!confirmed) return;
-
-  setBusy(true);
-  try {
-    const response = await fetch(`/api/backups/${encodeURIComponent(backup.name)}/restore`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: true, revision: state.backupRevision }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Could not restore backup (${response.status}).`);
-    setStatus(`Backup restored. transactions.csv now contains ${payload.transactionCount} transactions.`);
-    await loadBackups();
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Could not restore backup.", "error");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function renameBackup(backup) {
-  const requestedName = window.prompt("Rename this backup:", backup.name);
-  if (requestedName === null) return;
-  const newName = requestedName.trim();
-  if (!newName || newName === backup.name) return;
-
-  setBusy(true);
-  try {
-    const response = await fetch(`/api/backups/${encodeURIComponent(backup.name)}/rename`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ newName }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Could not rename backup (${response.status}).`);
-    setStatus(`Backup renamed to ${payload.backup.name}.`);
-    await loadBackups();
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Could not rename backup.", "error");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function deleteBackup(backup) {
-  const confirmed = window.confirm(
-    `Permanently delete ${backup.name}?\n\nThis backup cannot be recovered after deletion.`,
-  );
-  if (!confirmed) return;
-
-  setBusy(true);
-  try {
-    const response = await fetch(`/api/backups/${encodeURIComponent(backup.name)}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: true }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Could not delete backup (${response.status}).`);
-    setStatus(`Backup deleted: ${backup.name}.`);
-    await loadBackups();
-  } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Could not delete backup.", "error");
-  } finally {
-    setBusy(false);
-  }
-}
-
 function setClassificationStatus(message, kind = "success") {
   elements.classificationStatus.textContent = message;
   elements.classificationStatus.className = `settings-status settings-status--${kind}`;
@@ -610,7 +1024,21 @@ function unclassifiedTags(transaction) {
   return String(transaction.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
 }
 
+async function loadAvailableTransactionTags() {
+  try {
+    const response = await fetch("/api/transactions", { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.availableTransactionTags = transactionUi.tagsFromTransactions(payload.transactions);
+    state.availableTransactions = payload.transactions;
+    transactionUi.setAvailableGroups(transactionUi.groupsFromTransactions(payload.transactions));
+  } catch {
+    // Settings remains usable before a transaction database exists.
+  }
+}
+
 function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
+  transactionUi.populateGroupFilter(elements.unclassifiedGroup, unclassifiedTransactions, filters.group);
   const unique = (field) => [...new Set(
     unclassifiedTransactions.map((transaction) => transaction[field]).filter(Boolean),
   )].sort((left, right) => left.localeCompare(right));
@@ -647,6 +1075,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
     : "";
   unclassifiedFieldFilters = {
     description: elements.unclassifiedSearch.value.trim(),
+    group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
     subcategory: elements.unclassifiedSubcategory.value,
     tag: elements.unclassifiedTag.value,
@@ -658,6 +1087,7 @@ function configureUnclassifiedFilters(filters = unclassifiedFieldFilters) {
 
 function unclassifiedFilterDraft() {
   return {
+    group: elements.unclassifiedGroup.value,
     category: elements.unclassifiedCategory.value,
     subcategory: elements.unclassifiedSubcategory.value,
     tag: elements.unclassifiedTag.value,
@@ -668,6 +1098,7 @@ function unclassifiedFilterDraft() {
 
 function renderUnclassifiedFilterChips() {
   const definitions = [
+    ["group", "Group"],
     ["category", "Category"], ["subcategory", "Subcategory"], ["tag", "Tag"],
     ["accountName", "Account"], ["provider", "Provider"],
   ];
@@ -680,7 +1111,7 @@ function renderUnclassifiedFilterChips() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "transaction-filter-chip";
-    const value = field === "subcategory" ? "Unclassified" : unclassifiedFieldFilters[field];
+    const value = field === "subcategory" ? "Unclassified" : field === "group" ? transactionUi.groupFilterLabel(unclassifiedFieldFilters[field]) : unclassifiedFieldFilters[field];
     chip.textContent = `${label}: ${value} ×`;
     chip.setAttribute("aria-label", `Remove ${label.toLocaleLowerCase()} filter ${value}`);
     chip.addEventListener("click", () => {
@@ -695,15 +1126,16 @@ function renderUnclassifiedFilterChips() {
 function setUnclassifiedFilterPopover(open, restore = true) {
   if (!open && restore) configureUnclassifiedFilters(unclassifiedFieldFilters);
   elements.unclassifiedFilterPopover.hidden = !open;
+  if (open) transactionUi.fitTransactionFilterPopover(elements.unclassifiedFilterPopover);
   elements.unclassifiedFilterButton.setAttribute("aria-expanded", String(open));
 }
 
 function renderUnclassifiedTransactions() {
   unclassifiedFieldFilters.description = elements.unclassifiedSearch.value.trim();
-  const description = unclassifiedFieldFilters.description.toLocaleLowerCase();
   const visible = transactionUi.sortTransactions(
     unclassifiedTransactions.filter((transaction) =>
-      (!description || transaction.description.toLocaleLowerCase().includes(description))
+      (showUnclassifiedInternalTransfers || !transactionUi.isInternalTransfer(transaction))
+      && transactionUi.matchesTransactionSearch(transaction, unclassifiedFieldFilters.description)
       && (!unclassifiedFieldFilters.category || transaction.category === unclassifiedFieldFilters.category)
       && (!unclassifiedFieldFilters.subcategory || !transaction.subcategory)
       && (!unclassifiedFieldFilters.tag || unclassifiedTags(transaction).some(
@@ -714,12 +1146,20 @@ function renderUnclassifiedTransactions() {
     ),
     unclassifiedSort.value(),
   );
-  const filtered = Object.values(unclassifiedFieldFilters).some(Boolean);
+  const groupFiltered = unclassifiedBulk.filter(visible);
+  const filtered = !showUnclassifiedInternalTransfers
+    || groupFiltered.length !== unclassifiedTransactions.length
+    || Object.values(unclassifiedFieldFilters).some(Boolean);
   elements.unclassifiedSummary.textContent = filtered
-    ? `${visible.length} of ${unclassifiedTransactions.length} transactions`
+    ? `${groupFiltered.length} of ${unclassifiedTransactions.length} transactions`
     : `${unclassifiedTransactions.length} ${unclassifiedTransactions.length === 1 ? "transaction" : "transactions"}`;
   renderUnclassifiedFilterChips();
-  if (visible.length === 0) {
+  unclassifiedBulk.render(visible, (transaction) => ({
+    currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
+    needsClassification: !transactionUi.isInternalTransfer(transaction),
+    onEdit: () => openImportHistoryTransactionEditor(transaction, "unclassified"),
+  }));
+  if (groupFiltered.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-transaction-list";
     empty.textContent = unclassifiedTransactions.length
@@ -728,20 +1168,10 @@ function renderUnclassifiedTransactions() {
     elements.unclassifiedList.replaceChildren(empty);
     return;
   }
-  transactionUi.renderTransactionList(
-    elements.unclassifiedList,
-    visible,
-    (transaction) => ({
-      currency: currencyFormatter,
-      shortMonthFormatter: unclassifiedMonthFormatter,
-      needsClassification: !transactionUi.isInternalTransfer(transaction),
-      showEdit: false,
-      onEdit: () => {},
-    }),
-  );
 }
 
 async function openUnclassifiedDialog() {
+  unclassifiedBulk.reset();
   elements.unclassifiedError.hidden = true;
   elements.unclassifiedError.textContent = "";
   elements.unclassifiedSummary.textContent = "Loading transactions…";
@@ -752,6 +1182,8 @@ async function openUnclassifiedDialog() {
     const response = await fetch("/api/transactions", { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Could not load transactions (${response.status}).`);
+    state.availableTransactions = payload.transactions;
+    unclassifiedRevision = payload.revision;
     unclassifiedTransactions = payload.transactions
       .filter((transaction) => !transaction.subcategory)
       .sort((left, right) => right.date.localeCompare(left.date)
@@ -759,6 +1191,8 @@ async function openUnclassifiedDialog() {
     unclassifiedFieldFilters = {
       description: "", category: "", subcategory: "", tag: "", accountName: "", provider: "",
     };
+    showUnclassifiedInternalTransfers = false;
+    elements.unclassifiedInternalTransferFilter.setAttribute("aria-pressed", "false");
     configureUnclassifiedFilters(unclassifiedFieldFilters);
     setUnclassifiedFilterPopover(false);
     renderUnclassifiedTransactions();
@@ -771,6 +1205,7 @@ async function openUnclassifiedDialog() {
 }
 
 function closeUnclassifiedDialog() {
+  unclassifiedBulk.reset();
   setUnclassifiedFilterPopover(false);
   elements.unclassifiedDialog.close();
 }
@@ -1521,14 +1956,24 @@ function classificationPreviewRow(change) {
 function renderClassificationPreviewChanges() {
   if (!pendingClassificationPreview) return;
   const changes = transactionUi.sortTransactions(
-    pendingClassificationPreview.changes,
+    pendingClassificationPreview.changes.map((entry) => entry.transaction),
     classificationPreviewSort.value(),
   );
-  elements.previewList.replaceChildren(...changes.map(classificationPreviewRow));
+  transactionUi.populateGroupFilter(elements.previewGroupFilter, changes, classificationPreviewGroup);
+  elements.previewFilterCount.textContent = "1";
+  elements.previewFilterCount.hidden = !classificationPreviewGroup;
+  elements.previewFilters.querySelector("summary").classList.toggle("has-active-filters", !!classificationPreviewGroup);
+  classificationBulk.render(changes, (transaction) => ({
+    currency: currencyFormatter, shortMonthFormatter: unclassifiedMonthFormatter,
+    showEdit: false, onEdit: () => {},
+  }));
 }
 
 function closeClassificationPreview() {
   if (classificationsBusy) return;
+  classificationBulk.reset();
+  classificationPreviewGroup = "";
+  elements.previewFilters.open = false;
   pendingClassificationPreview = null;
   elements.previewDialog.close();
 }
@@ -1568,6 +2013,9 @@ async function previewClassificationsForExisting() {
       return;
     }
     pendingClassificationPreview = { ...preview, document };
+    classificationPreviewGroup = "";
+    elements.previewFilters.open = false;
+    classificationBulk.reset();
     const matched = preview.matched || preview.changed;
     const unchangedMatches = Math.max(0, matched - preview.changed);
     elements.previewSummary.textContent =
@@ -1605,6 +2053,8 @@ async function confirmClassificationPreview() {
         confirm: true,
         revision: pendingClassificationPreview.revision,
         document: pendingClassificationPreview.document,
+        overrides: pendingClassificationPreview.changes.filter((entry) => entry.bulkEdited)
+          .map((entry) => ({ _id: entry._id, transaction: entry.transaction })),
       }),
     });
     const result = await response.json().catch(() => ({}));
@@ -1617,7 +2067,6 @@ async function confirmClassificationPreview() {
     setClassificationStatus(
       `Updated ${result.changed} of ${result.total} transactions. A safety backup was created.`,
     );
-    if (elements.backupList) await loadBackups();
   } catch (error) {
     showPreviewError(error instanceof Error ? error.message : "Could not apply classifications.");
   } finally {
@@ -1633,10 +2082,429 @@ async function confirmClassificationPreview() {
   }
 }
 
-if (elements.createBackup) {
-  elements.createBackup.addEventListener("click", createBackup);
-  elements.refreshBackups.addEventListener("click", loadBackups);
+function taxonomyPlural(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function setTaxonomyStatus(message, kind = "success") {
+  elements.taxonomyStatus.textContent = message;
+  elements.taxonomyStatus.className = `settings-status settings-status--${kind}`;
+  elements.taxonomyStatus.hidden = false;
+}
+
+function taxonomyDocument() {
+  return {
+    version: 1,
+    categories: state.taxonomy.categories.map((category) => ({
+      name: category.name,
+      subcategories: category.subcategories.map((subcategory) => subcategory.name),
+    })),
+  };
+}
+
+function createTaxonomyInlineForm(mode, parentCategory = "") {
+  const addingCategory = mode === "category";
+  const form = document.createElement("form");
+  form.className = addingCategory
+    ? "taxonomy-category-card taxonomy-category-card--create"
+    : "taxonomy-inline-create taxonomy-inline-create--subcategory";
+  form.setAttribute(
+    "aria-label",
+    addingCategory ? "Add category" : `Add a subcategory under ${parentCategory}`,
+  );
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 500;
+  input.autocomplete = "off";
+  input.required = true;
+  const inputLabel = addingCategory ? "Category name" : "Subcategory name";
+  input.setAttribute("placeholder", inputLabel);
+  input.setAttribute("aria-label", inputLabel);
+  input.disabled = state.taxonomyBusy;
+
+  const button = document.createElement("button");
+  button.type = "submit";
+  button.textContent = "+";
+  button.setAttribute(
+    "aria-label",
+    addingCategory ? "Add category" : `Add subcategory under ${parentCategory}`,
+  );
+  button.disabled = true;
+  input.addEventListener("input", () => {
+    input.setCustomValidity("");
+    button.disabled = state.taxonomyBusy || !input.value.trim();
+  });
+  form.append(input, button);
+  form.addEventListener("submit", (event) => (
+    saveTaxonomyEntry(event, mode, parentCategory, input, button)
+  ));
+  return form;
+}
+
+function renderTaxonomy() {
+  if (!elements.taxonomyTree) return;
+  const query = elements.taxonomySearch.value.trim().toLocaleLowerCase();
+  const cards = [];
+  let visibleSubcategoryCount = 0;
+  for (const category of state.taxonomy.categories) {
+    if (
+      state.hideTaxonomyCategoriesWithoutSubcategories
+      && category.subcategories.length === 0
+    ) continue;
+    const categoryMatches = category.name.toLocaleLowerCase().includes(query);
+    const subcategories = category.subcategories.filter(
+      (subcategory) => !query || categoryMatches || subcategory.name.toLocaleLowerCase().includes(query),
+    );
+    if (query && !categoryMatches && subcategories.length === 0) continue;
+    visibleSubcategoryCount += subcategories.length;
+
+    const card = document.createElement("article");
+    card.className = "taxonomy-category-card";
+    card.dataset.category = category.name;
+
+    const header = document.createElement("header");
+    const heading = document.createElement("div");
+    const name = document.createElement("h3");
+    name.textContent = category.name;
+    const count = document.createElement("span");
+    count.textContent = taxonomyPlural(category.transactionCount, "transaction");
+    heading.append(name, count);
+    const deleteCategory = document.createElement("button");
+    deleteCategory.className = "taxonomy-delete-button taxonomy-delete-category";
+    deleteCategory.type = "button";
+    deleteCategory.textContent = "Delete";
+    deleteCategory.setAttribute("aria-label", `Delete category ${category.name}`);
+    deleteCategory.disabled = state.taxonomyBusy || category.transactionCount > 0;
+    deleteCategory.title = category.transactionCount > 0
+      ? `${taxonomyPlural(category.transactionCount, "transaction")} must be reclassified before this category can be deleted.`
+      : `Delete ${category.name}`;
+    deleteCategory.addEventListener("click", () => deleteTaxonomyEntry("category", category.name));
+    header.append(heading, deleteCategory);
+
+    const list = document.createElement("div");
+    list.className = "taxonomy-subcategory-list";
+    if (subcategories.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "taxonomy-subcategory-empty";
+      empty.textContent = query ? "No matching subcategories." : "No subcategories yet.";
+      list.append(empty);
+    } else {
+      for (const subcategory of subcategories) {
+        const chip = document.createElement("div");
+        chip.className = "taxonomy-subcategory";
+        const subcategoryName = document.createElement("span");
+        subcategoryName.textContent = subcategory.name;
+        const subcategoryCount = document.createElement("small");
+        subcategoryCount.textContent = String(subcategory.transactionCount);
+        subcategoryCount.title = taxonomyPlural(subcategory.transactionCount, "transaction");
+        const deleteSubcategory = document.createElement("button");
+        deleteSubcategory.className = "taxonomy-delete-button taxonomy-delete-subcategory";
+        deleteSubcategory.type = "button";
+        deleteSubcategory.textContent = "×";
+        deleteSubcategory.setAttribute(
+          "aria-label",
+          `Delete subcategory ${subcategory.name} from ${category.name}`,
+        );
+        deleteSubcategory.disabled = state.taxonomyBusy || subcategory.transactionCount > 0;
+        deleteSubcategory.title = subcategory.transactionCount > 0
+          ? `${taxonomyPlural(subcategory.transactionCount, "transaction")} must be reclassified before this subcategory can be deleted.`
+          : `Delete ${subcategory.name}`;
+        deleteSubcategory.addEventListener("click", () => (
+          deleteTaxonomyEntry("subcategory", subcategory.name, category.name)
+        ));
+        chip.append(subcategoryName, subcategoryCount, deleteSubcategory);
+        list.append(chip);
+      }
+    }
+    list.append(createTaxonomyInlineForm("subcategory", category.name));
+    card.append(header, list);
+    cards.push(card);
+  }
+
+  const totalSubcategories = state.taxonomy.categories.reduce(
+    (total, category) => total + category.subcategories.length,
+    0,
+  );
+  elements.taxonomySummary.textContent = query
+    ? `${taxonomyPlural(cards.length, "category", "categories")} · ${taxonomyPlural(visibleSubcategoryCount, "subcategory", "subcategories")} shown`
+    : state.hideTaxonomyCategoriesWithoutSubcategories
+      ? `${taxonomyPlural(cards.length, "category", "categories")} shown · ${taxonomyPlural(totalSubcategories, "subcategory", "subcategories")}`
+      : `${taxonomyPlural(state.taxonomy.categories.length, "category", "categories")} · ${taxonomyPlural(totalSubcategories, "subcategory", "subcategories")}`;
+  if (cards.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "backup-empty taxonomy-empty";
+    empty.textContent = query
+      ? "No categories or subcategories match your search."
+      : "No categories yet. Add one here or import transactions with a category.";
+    cards.push(empty);
+  }
+  cards.push(createTaxonomyInlineForm("category"));
+  elements.taxonomyTree.replaceChildren(...cards);
+  elements.taxonomySubcategoryFilter.setAttribute(
+    "aria-pressed",
+    String(state.hideTaxonomyCategoriesWithoutSubcategories),
+  );
+}
+
+async function loadTaxonomy() {
+  if (!elements.taxonomyTree || state.taxonomyBusy) return;
+  state.taxonomyBusy = true;
+  renderTaxonomy();
+  try {
+    const response = await fetch("/api/taxonomy", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not load taxonomy (${response.status}).`);
+    state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
+    state.taxonomyRevision = payload.revision;
+  } catch (error) {
+    setTaxonomyStatus(error instanceof Error ? error.message : "Could not load taxonomy.", "error");
+  } finally {
+    state.taxonomyBusy = false;
+    renderTaxonomy();
+  }
+}
+
+async function saveTaxonomyEntry(event, mode, parentCategory, input, button) {
+  event.preventDefault();
+  if (state.taxonomyBusy) return;
+  const name = input.value.replace(/\s+/g, " ").trim();
+  if (!name) {
+    input.setCustomValidity("Enter a name.");
+    input.reportValidity();
+    return;
+  }
+
+  const document = taxonomyDocument();
+  if (mode === "category") {
+    if (document.categories.some((category) => category.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      input.setCustomValidity(`The category “${name}” already exists.`);
+      input.reportValidity();
+      return;
+    }
+    document.categories.push({ name, subcategories: [] });
+  } else {
+    const category = document.categories.find(
+      (candidate) => candidate.name.toLocaleLowerCase() === parentCategory.toLocaleLowerCase(),
+    );
+    if (!category) {
+      input.setCustomValidity("That category is no longer available. Refresh and try again.");
+      input.reportValidity();
+      return;
+    }
+    if (category.subcategories.some((subcategory) => subcategory.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      input.setCustomValidity(`The subcategory “${name}” already exists under ${category.name}.`);
+      input.reportValidity();
+      return;
+    }
+    category.subcategories.push(name);
+  }
+
+  state.taxonomyBusy = true;
+  input.disabled = true;
+  button.disabled = true;
+  let saved = false;
+  try {
+    const response = await fetch("/api/taxonomy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...document, revision: state.taxonomyRevision }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not save taxonomy (${response.status}).`);
+    state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
+    state.taxonomyRevision = payload.revision;
+    elements.taxonomySearch.value = "";
+    if (mode === "category") state.hideTaxonomyCategoriesWithoutSubcategories = false;
+    setTaxonomyStatus(
+      mode === "category"
+        ? `Added category “${name}”.`
+        : `Added subcategory “${name}” under ${parentCategory}.`,
+    );
+    saved = true;
+  } catch (error) {
+    setTaxonomyStatus(error instanceof Error ? error.message : "Could not save taxonomy.", "error");
+  } finally {
+    state.taxonomyBusy = false;
+    if (saved) {
+      renderTaxonomy();
+    } else {
+      input.disabled = false;
+      button.disabled = !input.value.trim();
+      input.focus();
+    }
+  }
+}
+
+async function deleteTaxonomyEntry(mode, name, parentCategory = "") {
+  if (state.taxonomyBusy) return;
+  const category = state.taxonomy.categories.find((candidate) => (
+    candidate.name.toLocaleLowerCase() === (mode === "category" ? name : parentCategory).toLocaleLowerCase()
+  ));
+  if (!category) {
+    setTaxonomyStatus("That taxonomy value is no longer available. Refresh and try again.", "error");
+    return;
+  }
+
+  const subcategory = mode === "subcategory"
+    ? category.subcategories.find((candidate) => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+    : null;
+  const transactionCount = mode === "category"
+    ? category.transactionCount
+    : subcategory?.transactionCount;
+  if (typeof transactionCount !== "number") {
+    setTaxonomyStatus("That taxonomy value is no longer available. Refresh and try again.", "error");
+    return;
+  }
+  if (transactionCount > 0) {
+    setTaxonomyStatus(
+      `${taxonomyPlural(transactionCount, "transaction")} must be reclassified before “${name}” can be deleted.`,
+      "error",
+    );
+    return;
+  }
+
+  const childCount = mode === "category" ? category.subcategories.length : 0;
+  const confirmed = window.confirm(
+    mode === "category"
+      ? `Delete category “${name}”${childCount ? ` and its ${taxonomyPlural(childCount, "subcategory", "subcategories")}` : ""}?\n\nThis removes the saved taxonomy value and cannot be undone. Transactions are not changed.`
+      : `Delete subcategory “${name}” from ${parentCategory}?\n\nThis removes the saved taxonomy value and cannot be undone. Transactions are not changed.`,
+  );
+  if (!confirmed) return;
+
+  const document = taxonomyDocument();
+  if (mode === "category") {
+    document.categories = document.categories.filter(
+      (candidate) => candidate.name.toLocaleLowerCase() !== name.toLocaleLowerCase(),
+    );
+  } else {
+    const documentCategory = document.categories.find(
+      (candidate) => candidate.name.toLocaleLowerCase() === parentCategory.toLocaleLowerCase(),
+    );
+    if (!documentCategory) {
+      setTaxonomyStatus("That category is no longer available. Refresh and try again.", "error");
+      return;
+    }
+    documentCategory.subcategories = documentCategory.subcategories.filter(
+      (candidate) => candidate.toLocaleLowerCase() !== name.toLocaleLowerCase(),
+    );
+  }
+
+  state.taxonomyBusy = true;
+  renderTaxonomy();
+  try {
+    const response = await fetch("/api/taxonomy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...document, revision: state.taxonomyRevision }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `Could not delete taxonomy value (${response.status}).`);
+    state.taxonomy = { version: payload.version, categories: payload.categories };
+    transactionUi.setEditorTaxonomy(payload.categories);
+    state.taxonomyRevision = payload.revision;
+    setTaxonomyStatus(
+      mode === "category"
+        ? `Deleted category “${name}”.`
+        : `Deleted subcategory “${name}” from ${parentCategory}.`,
+    );
+  } catch (error) {
+    setTaxonomyStatus(error instanceof Error ? error.message : "Could not delete taxonomy value.", "error");
+  } finally {
+    state.taxonomyBusy = false;
+    renderTaxonomy();
+  }
+}
+
+if (elements.exportForm) {
+  if (elements.darkModeToggle && window.LedgerTheme) {
+    elements.darkModeToggle.checked = window.LedgerTheme.isDark();
+    elements.darkModeToggle.addEventListener("change", () => {
+      window.LedgerTheme.setDark(elements.darkModeToggle.checked);
+    });
+    window.addEventListener("ledger-theme-change", (event) => {
+      elements.darkModeToggle.checked = event.detail.theme === "dark";
+    });
+  }
+  if (elements.numberAbbreviationThreshold && window.LedgerPreferences) {
+    renderNumberAbbreviationPreference(window.LedgerPreferences.numberAbbreviation());
+    elements.numberAbbreviationThreshold.addEventListener("input", () => {
+      const option = NUMBER_ABBREVIATION_OPTIONS[Number(elements.numberAbbreviationThreshold.value)];
+      renderNumberAbbreviationPreference(window.LedgerPreferences.setNumberAbbreviation(option?.value));
+    });
+    window.addEventListener("ledger-number-abbreviation-change", (event) => {
+      renderNumberAbbreviationPreference(event.detail.value);
+    });
+  }
+  elements.exportForm.addEventListener("submit", exportTransactions);
+  elements.exportStartDate.addEventListener("change", renderExportSummary);
+  elements.exportEndDate.addEventListener("change", renderExportSummary);
   elements.refreshImportHistory.addEventListener("click", loadImportHistory);
+  elements.importHistorySearch.addEventListener("input", () => {
+    state.importHistoryFilters.description = elements.importHistorySearch.value.trim();
+    renderImportHistoryTransactions();
+  });
+  elements.importHistoryFilterButton.addEventListener("click", () => {
+    const open = elements.importHistoryFilterButton.getAttribute("aria-expanded") !== "true";
+    setImportHistoryFilterPopover(open);
+    if (open) elements.importHistoryCategory.focus();
+  });
+  elements.importHistoryCategory.addEventListener("change", () => {
+    populateImportHistorySubcategories(
+      elements.importHistoryCategory.value,
+      elements.importHistorySubcategory.value,
+    );
+  });
+  elements.resetImportHistoryFilters.addEventListener("click", () => {
+    elements.importHistoryGroup.value = "";
+    elements.importHistoryCategory.value = "";
+    populateImportHistorySubcategories("");
+    elements.importHistoryTag.value = "";
+    elements.importHistoryAccount.value = "";
+    elements.importHistoryProvider.value = "";
+    elements.importHistoryCategory.focus();
+  });
+  transactionUi.bindLiveTransactionFilters(elements.importHistoryFilterPopover, () => {
+    state.importHistoryFilters = { ...state.importHistoryFilters, ...importHistoryFilterDraft() };
+    renderImportHistoryTransactions();
+  }, elements.resetImportHistoryFilters);
+  elements.clearImportHistoryFilters.addEventListener("click", () => {
+    state.importHistoryFilters = {
+      ...state.importHistoryFilters,
+      group: "",
+      category: "", subcategory: "", tag: "", accountName: "", provider: "",
+    };
+    configureImportHistoryFilters(state.importHistoryFilters);
+    renderImportHistoryTransactions();
+    elements.importHistoryFilterButton.focus();
+  });
+  document.addEventListener("click", (event) => {
+    if (
+      elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true"
+      && !event.target.closest(".transaction-filter-menu")
+    ) setImportHistoryFilterPopover(false);
+  });
+  elements.importHistoryDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.importHistoryFilterButton.getAttribute("aria-expanded") === "true") {
+      event.preventDefault();
+      event.stopPropagation();
+      setImportHistoryFilterPopover(false);
+      elements.importHistoryFilterButton.focus();
+    }
+  });
+  elements.previousImportHistoryPage.addEventListener("click", () => {
+    if (state.importHistoryPage === 0) return;
+    state.importHistoryPage -= 1;
+    renderImportHistory(state.importHistoryImports);
+  });
+  elements.nextImportHistoryPage.addEventListener("click", () => {
+    const pageCount = Math.ceil(state.importHistoryImports.length / IMPORT_HISTORY_PAGE_SIZE);
+    if (state.importHistoryPage + 1 >= pageCount) return;
+    state.importHistoryPage += 1;
+    renderImportHistory(state.importHistoryImports);
+  });
   elements.closeImportHistoryDialog.addEventListener("click", closeImportHistoryDialog);
   elements.importHistoryDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
@@ -1645,6 +2513,19 @@ if (elements.createBackup) {
   elements.importHistoryDialog.addEventListener("click", (event) => {
     if (event.target === elements.importHistoryDialog) closeImportHistoryDialog();
   });
+  elements.taxonomySearch.addEventListener("input", renderTaxonomy);
+  elements.taxonomySubcategoryFilter.addEventListener("click", () => {
+    state.hideTaxonomyCategoriesWithoutSubcategories =
+      !state.hideTaxonomyCategoriesWithoutSubcategories;
+    renderTaxonomy();
+  });
+  initializeSettingsTabs();
+  loadExportTransactions();
+  loadAvailableTransactionTags();
+}
+
+// The editor exists on both Settings and Classifications, independently of history.
+if (elements.importHistoryEditForm) {
   elements.importHistoryEditForm.addEventListener("submit", saveImportHistoryTransaction);
   elements.closeImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
   elements.cancelImportHistoryEdit.addEventListener("click", closeImportHistoryTransactionEditor);
@@ -1655,8 +2536,6 @@ if (elements.createBackup) {
   elements.importHistoryEditDialog.addEventListener("click", (event) => {
     if (event.target === elements.importHistoryEditDialog) closeImportHistoryTransactionEditor();
   });
-  initializeSettingsTabs();
-  loadBackups();
 }
 
 async function exportClassifications() {
@@ -1792,6 +2671,7 @@ if (elements.addClassification) {
   if (open) elements.unclassifiedCategory.focus();
   });
   elements.resetUnclassifiedFilters.addEventListener("click", () => {
+  elements.unclassifiedGroup.value = "";
   elements.unclassifiedCategory.value = "";
   elements.unclassifiedSubcategory.value = "";
   elements.unclassifiedTag.value = "";
@@ -1799,20 +2679,27 @@ if (elements.addClassification) {
   elements.unclassifiedProvider.value = "";
   elements.unclassifiedCategory.focus();
   });
-  elements.applyUnclassifiedFilters.addEventListener("click", () => {
+  transactionUi.bindLiveTransactionFilters(elements.unclassifiedFilterPopover, () => {
   unclassifiedFieldFilters = { ...unclassifiedFieldFilters, ...unclassifiedFilterDraft() };
-  setUnclassifiedFilterPopover(false, false);
   renderUnclassifiedTransactions();
-  elements.unclassifiedFilterButton.focus();
-  });
+  }, elements.resetUnclassifiedFilters);
   elements.clearUnclassifiedFilters.addEventListener("click", () => {
   unclassifiedFieldFilters = {
     ...unclassifiedFieldFilters,
+    group: "",
     category: "", subcategory: "", tag: "", accountName: "", provider: "",
   };
   configureUnclassifiedFilters(unclassifiedFieldFilters);
   renderUnclassifiedTransactions();
   elements.unclassifiedFilterButton.focus();
+  });
+  elements.unclassifiedInternalTransferFilter.addEventListener("click", () => {
+  showUnclassifiedInternalTransfers = !showUnclassifiedInternalTransfers;
+  elements.unclassifiedInternalTransferFilter.setAttribute(
+    "aria-pressed",
+    String(showUnclassifiedInternalTransfers),
+  );
+  renderUnclassifiedTransactions();
   });
   document.addEventListener("click", (event) => {
   if (
@@ -1837,6 +2724,28 @@ if (elements.addClassification) {
   if (event.target === elements.unclassifiedDialog) closeUnclassifiedDialog();
   });
   elements.applyClassifications.addEventListener("click", previewClassificationsForExisting);
+  elements.previewFilters.addEventListener("toggle", () => {
+    if (elements.previewFilters.open) transactionUi.fitTransactionFilterPopover(elements.previewFilters.querySelector(".transaction-filter-popover"));
+    transactionUi.populateGroupFilter(elements.previewGroupFilter,
+      pendingClassificationPreview?.changes.map((entry) => entry.transaction) || [], classificationPreviewGroup);
+  });
+  document.querySelector("#reset-classification-preview-filters").addEventListener("click", () => {
+    elements.previewGroupFilter.value = "";
+  });
+  transactionUi.bindLiveTransactionFilters(elements.previewFilters, () => {
+    classificationPreviewGroup = elements.previewGroupFilter.value;
+    renderClassificationPreviewChanges();
+  }, document.querySelector("#reset-classification-preview-filters"));
+  document.addEventListener("click", (event) => {
+    if (elements.previewFilters.open && !elements.previewFilters.contains(event.target)) elements.previewFilters.open = false;
+  });
+  elements.previewDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && elements.previewFilters.open) {
+      event.preventDefault(); event.stopPropagation();
+      elements.previewFilters.open = false;
+      elements.previewFilters.querySelector("summary").focus();
+    }
+  });
   elements.closePreview.addEventListener("click", closeClassificationPreview);
   elements.cancelPreview.addEventListener("click", closeClassificationPreview);
   elements.confirmPreview.addEventListener("click", confirmClassificationPreview);
