@@ -64,6 +64,10 @@ window.addEventListener("message", async (event) => {
     message = { action: "ledgerStartCapitalOneImport", data: event.data.payload };
   } else if (event.data.action === "cancelCapitalOneImport") {
     message = { action: "ledgerCancelCapitalOneImport", data: event.data.payload };
+  } else if (event.data.action === "startAmexImport") {
+    message = { action: "ledgerStartAmexImport", data: event.data.payload };
+  } else if (event.data.action === "cancelAmexImport") {
+    message = { action: "ledgerCancelAmexImport", data: event.data.payload };
   } else if (event.data.action === "startSchwabImport") {
     message = { action: "ledgerStartSchwabImport", data: event.data.payload };
   } else if (event.data.action === "cancelSchwabImport") {
@@ -77,6 +81,13 @@ window.addEventListener("message", async (event) => {
   }
 
   chrome.runtime.sendMessage(message, (response) => {
+    if (event.data.action.includes("Amex")) {
+      if (chrome.runtime.lastError || !response?.success) {
+        sendToPage("amexError", { token: event.data.payload?.token,
+          message: chrome.runtime.lastError?.message || response?.error || "The extension could not start American Express import." });
+      } else sendToPage("amexStarted", { token: event.data.payload?.token });
+      return;
+    }
     const isCreditKarma = event.data.action.includes("CreditKarma");
     const isAliExpress = event.data.action.includes("AliExpress");
     const isVenmo = event.data.action.includes("Venmo");
@@ -99,6 +110,8 @@ window.addEventListener("message", async (event) => {
 });
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.action === "ledgerAmexImportProgress") return sendToPage("amexProgress", message.data);
+  if (message?.action === "ledgerAmexImportError") return sendToPage("amexError", message.data);
   if (message?.action === "ledgerImportProgress") {
     sendToPage("progress", {
       progress: message.data?.percent,

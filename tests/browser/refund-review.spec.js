@@ -10,7 +10,8 @@ const sameBatchCsv = [
 
 async function importFile(page, content) {
   await page.goto('/import');
-  await page.locator('#csv-import-tab').click();
+  await page.locator('#import-source-toggle').click();
+  await page.locator('#csv-import-option').click();
   await page.locator('#csv-import-file').setInputFiles({name:'synthetic-refunds.csv',mimeType:'text/csv',buffer:Buffer.from(content)});
   await page.locator('#csv-import-button').click();
   await expect(page.locator('#import-review-dialog')).toBeVisible();

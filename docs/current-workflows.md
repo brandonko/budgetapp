@@ -183,14 +183,30 @@ excluded credits retain that sign with a strike-through.
 
 ## Import sources and Schwab Checking
 
-The import page has ten tabs: Credit Karma, Amazon, AliExpress, Venmo,
-eBay, Walmart, Apple Card, Capital One, Schwab Checking, and Ledger CSV. Nine
-are website sources handled through the companion extension; Ledger CSV is
-not a website connector. Apple Card and Capital One also have manual CSV
-fallbacks. There is no dedicated manual Schwab CSV picker in the current UI.
+The import page uses a searchable **Import from** selector, grouped by Accounts,
+Purchases, and Files. It includes Credit Karma, Amazon, AliExpress, Venmo,
+eBay, Walmart, Apple Card, Capital One, Schwab Checking, American Express, and
+Ledger CSV. Only one source card is shown; switching preserves its form values,
+selected files, and progress. Search also accepts aliases such as “Amex” and
+import methods such as “CSV”.
+
+Ten sources have website flows through the companion extension. Ledger CSV
+uses file uploads. Amex browser import (extension **0.12.2+**) opens Activity;
+sign in, select the card and click **Use this card** in the Ledger guide.
+Recognizable export forms are assisted; otherwise set the requested range and
+download XLSX or CSV there. Captured exports return to Ledger review without
+manual upload. Account/security selection stays with the user, and file upload
+remains a fallback if capture fails. The exported activity must cover the whole
+requested date range. Amex supports US Activity CSV/XLSX;
+**Include merchant details in Notes** defaults on and can
+be turned off without changing amounts or categories. Apple Card and Capital One
+also have manual CSV fallbacks. There is no dedicated manual Schwab CSV picker.
 
 Schwab Checking requires extension **0.11.0 or newer and the updated backend**.
-The inspected extension manifest is **0.11.1**. Its flow is user-guided:
+The extension manifest is **0.12.2**. Approve the updated download-observation
+permission if prompted after reloading. Amex's extensionless, direct browser
+downloads are supported as well as page-generated files; they still require a
+confirmed Amex card and Ledger review before saving. Schwab's flow is user-guided:
 
 1. Start the Schwab Checking import in Ledger with the intended dates and a
    distinct account name for the checking account.

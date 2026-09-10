@@ -6,13 +6,13 @@
     <script src="/theme.js?v=20260909-import-preferences-1"></script>
     <meta name="description" content="Import CSV, Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, and Apple Card data into Ledger." />
     <title>Import data — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-source-picker-1" />
     <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
     <script src="/navigation.js" defer></script>
     <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
     <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
     <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
-    <script src="/upload.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/upload.js?v=20260909-amex-direct-download" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -75,7 +75,7 @@
               a classification rule you may want to add.
             </p>
             <p>
-              Credit Karma, Apple Card, and Capital One retain their source categories (or use
+              Credit Karma, Apple Card, Capital One, and American Express retain their source categories (or use
               Uncategorized when unavailable). Amazon, AliExpress, eBay, and Walmart start as Shopping,
               while Venmo starts as Venmo. Saved classification rules can
               then assign a matching category and subcategory; otherwise, the initial category is
@@ -97,6 +97,10 @@
               by automatic imports. Apple Card CSV uploads review every row in the selected file, so
               the date fields do not filter a manually uploaded Apple Card CSV. Capital One’s
               date range applies to both its website import and its downloaded-CSV fallback.
+              American Express browser imports use the selected range. Uploaded Amex files include
+              all dates by default; enable their date-range option to limit rows for review.
+              XLSX includes source categories and optional merchant details in Notes.
+              CSV may contain only date, description, and amount.
             </p>
             <p>
               Account name, account type, and provider are labels saved on each imported row—not
@@ -118,7 +122,7 @@
           <span class="extension-dot" id="extension-dot" aria-hidden="true"></span>
           <div>
             <strong id="extension-status">Checking for the companion extension…</strong>
-            <span>Required for website imports; not needed for uploaded CSV files</span>
+            <span>Required for website imports; not needed for uploaded files</span>
           </div>
         </div>
         <details class="extension-help" id="extension-help">
@@ -135,48 +139,49 @@
         </details>
       </aside>
 
-      <div class="importer-tabs" role="tablist" aria-label="Data importers">
-        <button id="creditkarma-import-tab" role="tab" type="button"
-          aria-selected="true" aria-controls="creditkarma-import-panel" tabindex="0">
-          Credit Karma
-        </button>
-        <button id="amazon-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="amazon-import-panel" tabindex="-1">
-          Amazon
-        </button>
-        <button id="aliexpress-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="aliexpress-import-panel" tabindex="-1">
-          AliExpress
-        </button>
-        <button id="venmo-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="venmo-import-panel" tabindex="-1">
-          Venmo
-        </button>
-        <button id="ebay-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="ebay-import-panel" tabindex="-1">
-          eBay
-        </button>
-        <button id="walmart-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="walmart-import-panel" tabindex="-1">
-          Walmart
-        </button>
-        <button id="applecard-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="applecard-import-panel" tabindex="-1">
-          Apple Card
-        </button>
-        <button id="capitalone-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="capitalone-import-panel" tabindex="-1">Capital One</button>
-        <button id="schwab-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="schwab-import-panel" tabindex="-1">Schwab Checking</button>
-        <button id="csv-import-tab" role="tab" type="button"
-          aria-selected="false" aria-controls="csv-import-panel" tabindex="-1">
-          CSV
-        </button>
+      <div class="import-source-toolbar">
+        <details class="import-source-picker" id="import-source-picker">
+          <summary id="import-source-toggle" aria-controls="import-source-menu"
+            aria-labelledby="import-source-label import-source-name">
+            <span class="import-source-heading"><span id="import-source-label">Import from</span>
+              <strong id="import-source-name">Credit Karma</strong></span>
+            <span class="import-source-chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div class="import-source-menu" id="import-source-menu">
+            <label class="import-source-search"><span class="sr-only">Search import sources</span>
+              <input id="import-source-search" type="search" placeholder="Search sources…" autocomplete="off" />
+            </label>
+            <div class="import-source-options">
+              <section data-source-group="Accounts" aria-labelledby="import-accounts-heading">
+                <h3 id="import-accounts-heading">Accounts</h3>
+                <button id="creditkarma-import-option" type="button" data-import-source="creditkarma" aria-pressed="true" aria-controls="creditkarma-import-panel"><span>Credit Karma</span><small>Website import</small></button>
+                <button id="amex-import-option" type="button" data-import-source="amex" aria-pressed="false" aria-controls="amex-import-panel" data-search="american express spreadsheet csv xlsx"><span>American Express</span><small>Website import or file upload</small></button>
+                <button id="applecard-import-option" type="button" data-import-source="applecard" aria-pressed="false" aria-controls="applecard-import-panel"><span>Apple Card</span><small>CSV upload recommended</small></button>
+                <button id="capitalone-import-option" type="button" data-import-source="capitalone" aria-pressed="false" aria-controls="capitalone-import-panel"><span>Capital One</span><small>Website or CSV upload</small></button>
+                <button id="schwab-import-option" type="button" data-import-source="schwab" aria-pressed="false" aria-controls="schwab-import-panel" data-search="charles bank"><span>Schwab Checking</span><small>Website export capture</small></button>
+                <button id="venmo-import-option" type="button" data-import-source="venmo" aria-pressed="false" aria-controls="venmo-import-panel"><span>Venmo</span><small>Website import</small></button>
+              </section>
+              <section data-source-group="Purchases" aria-labelledby="import-purchases-heading">
+                <h3 id="import-purchases-heading">Purchases</h3>
+                <button id="amazon-import-option" type="button" data-import-source="amazon" aria-pressed="false" aria-controls="amazon-import-panel" data-search="orders"><span>Amazon</span><small>Itemized orders</small></button>
+                <button id="aliexpress-import-option" type="button" data-import-source="aliexpress" aria-pressed="false" aria-controls="aliexpress-import-panel" data-search="ali express alipay"><span>AliExpress</span><small>Itemized orders</small></button>
+                <button id="ebay-import-option" type="button" data-import-source="ebay" aria-pressed="false" aria-controls="ebay-import-panel"><span>eBay</span><small>Itemized orders</small></button>
+                <button id="walmart-import-option" type="button" data-import-source="walmart" aria-pressed="false" aria-controls="walmart-import-panel" data-search="walmart+ wal mart"><span>Walmart</span><small>Itemized purchases</small></button>
+              </section>
+              <section data-source-group="Files" aria-labelledby="import-files-heading">
+                <h3 id="import-files-heading">Files</h3>
+                <button id="csv-import-option" type="button" data-import-source="csv" aria-pressed="false" aria-controls="csv-import-panel" data-search="ledger export spreadsheet"><span>Ledger CSV</span><small>Ledger-format upload</small></button>
+              </section>
+              <p class="import-source-empty" id="import-source-empty" role="status" hidden>No sources match. Try a service name or “CSV”.</p>
+            </div>
+          </div>
+        </details>
+        <p class="import-source-method" id="import-source-method">Accounts · Website import</p>
       </div>
 
       <div class="direct-import-stack">
-        <section class="amazon-direct" id="creditkarma-import-panel" role="tabpanel"
-          aria-labelledby="creditkarma-import-tab" tabindex="0">
+        <section class="amazon-direct" id="creditkarma-import-panel" role="region"
+          aria-labelledby="creditkarma-direct-title">
           <div class="amazon-direct-copy">
             <h2 id="creditkarma-direct-title">Credit Karma</h2>
             <p>
@@ -244,8 +249,8 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="amazon-import-panel" role="tabpanel"
-          aria-labelledby="amazon-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="amazon-import-panel" role="region"
+          aria-labelledby="amazon-direct-title" hidden>
           <div class="amazon-direct-copy">
             <h2 id="amazon-direct-title">Amazon orders</h2>
             <p>
@@ -296,8 +301,8 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="aliexpress-import-panel" role="tabpanel"
-          aria-labelledby="aliexpress-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="aliexpress-import-panel" role="region"
+          aria-labelledby="aliexpress-direct-title" hidden>
           <div class="amazon-direct-copy">
             <h2 id="aliexpress-direct-title">AliExpress orders</h2>
             <p>
@@ -348,8 +353,8 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="venmo-import-panel" role="tabpanel"
-          aria-labelledby="venmo-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="venmo-import-panel" role="region"
+          aria-labelledby="venmo-direct-title" hidden>
           <div class="amazon-direct-copy">
             <h2 id="venmo-direct-title">Venmo</h2>
             <p>
@@ -400,10 +405,10 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="applecard-import-panel" role="tabpanel"
-          aria-labelledby="applecard-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="applecard-import-panel" role="region"
+          aria-labelledby="applecard-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>Apple Card</h2>
+            <h2 id="applecard-direct-title">Apple Card</h2>
             <p>
               Automatic importing is currently unavailable. Export a transaction CSV manually from
               card.apple.com, then select it below. Apple Card's categories are retained unless a
@@ -467,10 +472,61 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="capitalone-import-panel" role="tabpanel"
-          aria-labelledby="capitalone-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="amex-import-panel" role="region"
+          aria-labelledby="amex-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>Capital One</h2>
+            <h2 id="amex-direct-title">American Express</h2>
+            <p class="import-source-description">Import directly from Amex Activity. XLSX keeps source categories and optional merchant details in Notes; CSV starts as Uncategorized without a source category. Saved rules can then assign a category and subcategory.</p>
+            <details class="extension-help">
+              <summary>How this import works</summary>
+              <p>Click Import from Amex to open <a href="https://global.americanexpress.com/activity?days=30&amp;inav=myca_statements" target="_blank" rel="noopener noreferrer">Amex Statements &amp; Activity</a>. Sign in, choose your card, and click Use this card in the Ledger guide. The companion extension assists recognizable export controls and captures XLSX (preferred) or CSV in your browser. If prompted, set the requested dates and click Download in Amex; no separate upload is needed when capture succeeds.</p>
+              <p>Requires Ledger Data Importer 0.12.2 or newer. Reload it in chrome://extensions and approve the updated permissions for American Express download detection. After Use this card, wait for Listening for an Amex XLSX or CSV download. If capture fails, expand Capture details in the Amex guide for a privacy-safe status readout, or use Upload a file instead below. Login and security checks stay with you.</p>
+              <p>Supports US card activity exports with Date, Description, and Amount columns. Purchases are positive in the export; payments and refunds are negative. XLSX uses the Transaction Details sheet, not its summary. Merchant name, address, and extended details become editable, searchable notes when enabled below. Account headers and reference-number columns are not saved.</p>
+              <p>Browser imports use the inclusive dates below, initially set by Settings → Preferences. Make sure the Amex export covers that whole range. Uploaded files include all dates unless you enable their range option. Use a distinct account name for each card and reuse it for future imports.</p>
+              <p>Nothing is saved until you confirm the review. Duplicate matching also checks overlapping Credit Karma imports by date, amount, and occurrence count. Import XLSX first to retain its richer details; importing it again does not overwrite existing matches.</p>
+            </details>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields" id="amex-date-range">
+              <label><span>Start date</span><input id="amex-start-date" type="date" /></label>
+              <label><span>End date</span><input id="amex-end-date" type="date" /></label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label><span>Account name</span><input id="amex-account-name" type="text" value="American Express" maxlength="200" required /></label>
+              <label><span>Account type</span><input id="amex-account-type" type="text" value="CREDIT CARD" maxlength="200" required /></label>
+              <label><span>Provider</span><input id="amex-provider" type="text" value="American Express" maxlength="200" required /></label>
+            </fieldset>
+            <fieldset class="import-options" aria-label="American Express import options">
+              <label class="import-checkbox"><input id="amex-include-merchant-details" type="checkbox" checked /><span>Include merchant details in Notes</span></label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="amex-browser-button" type="button" disabled>Import from Amex <span aria-hidden="true">→</span></button>
+              <button class="secondary-button" id="amex-cancel-button" type="button" hidden>Cancel import</button>
+            </div>
+            <p class="apple-card-file-help" id="amex-extension-help">Browser import needs companion extension 0.12.2 or newer.</p>
+            <details class="extension-help">
+              <summary>Upload a file instead</summary>
+            <label class="apple-card-file-field">
+              <span>American Express export</span>
+              <input id="amex-file" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" aria-describedby="amex-file-help" />
+            </label>
+            <p class="apple-card-file-help" id="amex-file-help">XLSX recommended for categories and merchant details. CSV also supported. Maximum 16 MB.</p>
+            <fieldset class="import-options" aria-label="Uploaded file options">
+              <label class="import-checkbox"><input id="amex-filter-date-range" type="checkbox" /><span>Limit uploaded file to the dates above</span></label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="secondary-button" id="amex-import-button" type="button" disabled>Review selected file <span aria-hidden="true">→</span></button>
+            </div>
+            </details>
+            <p class="apple-card-file-help" id="amex-progress" role="status" hidden></p>
+            <p class="upload-error amazon-direct-error" id="amex-error" role="alert" hidden></p>
+          </div>
+        </section>
+
+        <section class="amazon-direct" id="capitalone-import-panel" role="region"
+          aria-labelledby="capitalone-direct-title" hidden>
+          <div class="amazon-direct-copy">
+            <h2 id="capitalone-direct-title">Capital One</h2>
             <p class="import-source-description">Import account transactions from Capital One’s website. Source categories are kept when available; saved classification rules can update them. Purchases count as spending, and credits count as money received.</p>
             <details class="extension-help">
               <summary>How this import works</summary>
@@ -508,10 +564,10 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="schwab-import-panel" role="tabpanel"
-          aria-labelledby="schwab-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="schwab-import-panel" role="region"
+          aria-labelledby="schwab-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>Schwab Checking</h2>
+            <h2 id="schwab-direct-title">Schwab Checking</h2>
             <p class="import-source-description">Import posted transactions from one Schwab checking account. Choose a distinct account name below, then select that checking account in Schwab.</p>
             <details class="extension-help">
               <summary>How this import works</summary>
@@ -543,10 +599,10 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="walmart-import-panel" role="tabpanel"
-          aria-labelledby="walmart-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="walmart-import-panel" role="region"
+          aria-labelledby="walmart-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>Walmart purchases</h2>
+            <h2 id="walmart-direct-title">Walmart purchases</h2>
             <p class="import-source-description">Import completed Walmart.com and Walmart+ purchases from your signed-in purchase history. Creates one row per charged item line and shares the receipt total across items, including tax, fees, tips, and discounts.</p>
             <details class="extension-help">
               <summary>What is included?</summary>
@@ -577,10 +633,10 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="ebay-import-panel" role="tabpanel"
-          aria-labelledby="ebay-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="ebay-import-panel" role="region"
+          aria-labelledby="ebay-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>eBay purchases</h2>
+            <h2 id="ebay-direct-title">eBay purchases</h2>
             <p>
               Creates one transaction per purchased item and reconciles each order's total across
               its items, including shipping, tax, and discounts. Currently supports USD purchases.
@@ -629,10 +685,10 @@
           </div>
         </section>
 
-        <section class="amazon-direct" id="csv-import-panel" role="tabpanel"
-          aria-labelledby="csv-import-tab" tabindex="0" hidden>
+        <section class="amazon-direct" id="csv-import-panel" role="region"
+          aria-labelledby="csv-direct-title" hidden>
           <div class="amazon-direct-copy">
-            <h2>Ledger CSV</h2>
+            <h2 id="csv-direct-title">Ledger CSV</h2>
             <p>
               Imports transactions from Ledger's CSV format. Every valid row is staged for review,
               and invalid rows are counted without preventing other rows from being imported.

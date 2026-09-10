@@ -60,6 +60,7 @@ owning contract. Read related sections when a change crosses their boundaries.
 | <a id="import-deduplication"></a>Import deduplication | [Import review, browser ingestion, and deduplication](docs/contracts/imports.md#import-deduplication) |
 | <a id="capital-one-ingestion"></a>Capital One ingestion | [Source-specific import decisions](docs/contracts/import-sources.md#capital-one-ingestion) |
 | <a id="schwab-checking-ingestion"></a>Schwab checking ingestion | [Source-specific import decisions](docs/contracts/import-sources.md#schwab-checking-ingestion) |
+| <a id="american-express-ingestion"></a>American Express ingestion | [Source-specific import decisions](docs/contracts/import-sources.md#american-express-ingestion) |
 | <a id="known-parser-decisions-still-needing-future-policy"></a>Known parser decisions still needing future policy | [Import review, browser ingestion, and deduplication](docs/contracts/imports.md#known-parser-decisions-still-needing-future-policy) |
 | <a id="visual-preferences"></a>Visual preferences | [Navigation and visual preferences](docs/contracts/navigation-and-appearance.md#visual-preferences) |
 

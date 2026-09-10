@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Ledger Data Importer",
-  "version": "0.11.1",
+  "version": "0.12.2",
   "options_ui": { "page": "shared/options.html", "open_in_tab": true },
   "optional_host_permissions": ["http://*/*", "https://*/*"],
-  "description": "Import Amazon, AliExpress, eBay, Walmart, Credit Karma, Venmo, Apple Card, Capital One, and Schwab checking data into local Ledger.",
+  "description": "Import purchases and account activity into Ledger from Amex, Schwab, Capital One, Amazon, Credit Karma, and more.",
   "default_locale": "en",
   "icons": {
     "16": "shared/icons/icon-16.png",
@@ -13,7 +13,7 @@
     "96": "shared/icons/icon-96.png",
     "128": "shared/icons/icon-128.png"
   },
-  "permissions": ["activeTab", "cookies", "downloads", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "cookies", "downloads", "scripting", "storage", "tabs", "webRequest"],
   "host_permissions": [
     "*://*.amazon.com/*",
     "*://*.amazon.co.uk/*",
@@ -38,6 +38,7 @@
     "https://verified.capitalone.com/*",
     "https://myaccounts.capitalone.com/*",
     "https://client.schwab.com/*",
+    "https://global.americanexpress.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
@@ -53,6 +54,18 @@
     "default_popup": "shared/popup.html"
   },
   "content_scripts": [
+    {
+      "matches": ["https://global.americanexpress.com/*"],
+      "js": ["amex_extension/capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://global.americanexpress.com/*"],
+      "js": ["amex_extension/export.js", "amex_extension/content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
     {
       "matches": ["https://client.schwab.com/*"],
       "js": ["schwab_extension/capture.js"],

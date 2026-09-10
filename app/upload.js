@@ -42,6 +42,8 @@ const state = {
   appleCardPollTimer: null,
   appleCardStartedAt: 0,
   csvImportBusy: false,
+  amexJob: null,
+  amexExtensionReady: false,
   revision: "",
   importedTransactions: [],
   reviewEditedIds: new Set(),
@@ -69,9 +71,10 @@ const state = {
   availableTransactions: [],
 };
 
-const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", walmart: "Walmart", applecard: "Apple Card", capitalone: "Capital One", schwab: "Schwab Checking", csv: "CSV" };
+const sourceLabels = { creditkarma: "Credit Karma", amazon: "Amazon", aliexpress: "AliExpress", venmo: "Venmo", ebay: "eBay", walmart: "Walmart", applecard: "Apple Card", capitalone: "Capital One", schwab: "Schwab Checking", amex: "American Express", csv: "CSV" };
 const MIN_WALMART_EXTENSION_VERSION = "0.9.1";
 const MIN_SCHWAB_EXTENSION_VERSION = "0.11.0";
+const MIN_AMEX_EXTENSION_VERSION = "0.12.2";
 const MIN_CAPITAL_ONE_EXTENSION_VERSION = "0.9.1";
 const MIN_ALIEXPRESS_EXTENSION_VERSION = "0.4.0";
 const MIN_VENMO_EXTENSION_VERSION = "0.5.0";
@@ -85,6 +88,21 @@ const shortMonthFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 const elements = {
+  amexStartDate: document.querySelector("#amex-start-date"),
+  amexEndDate: document.querySelector("#amex-end-date"),
+  amexAccountName: document.querySelector("#amex-account-name"),
+  amexAccountType: document.querySelector("#amex-account-type"),
+  amexProvider: document.querySelector("#amex-provider"),
+  amexFile: document.querySelector("#amex-file"),
+  amexImportButton: document.querySelector("#amex-import-button"),
+  amexBrowserButton: document.querySelector("#amex-browser-button"),
+  amexExtensionHelp: document.querySelector("#amex-extension-help"),
+  amexCancelButton: document.querySelector("#amex-cancel-button"),
+  amexFilterDateRange: document.querySelector("#amex-filter-date-range"),
+  amexIncludeMerchantDetails: document.querySelector("#amex-include-merchant-details"),
+  amexDateRange: document.querySelector("#amex-date-range"),
+  amexProgress: document.querySelector("#amex-progress"),
+  amexError: document.querySelector("#amex-error"),
   capitalOneStartDate: document.querySelector("#capitalone-start-date"),
   capitalOneEndDate: document.querySelector("#capitalone-end-date"),
   capitaloneAccountName: document.querySelector("#capitalone-account-name"),
@@ -197,7 +215,14 @@ const elements = {
   csvApplyClassifications: document.querySelector("#csv-apply-classifications"),
   csvImportButton: document.querySelector("#csv-import-button"),
   csvImportError: document.querySelector("#csv-import-error"),
-  importerTabs: [...document.querySelectorAll('[role="tab"][aria-controls]')],
+  sourcePicker: document.querySelector("#import-source-picker"),
+  sourceToggle: document.querySelector("#import-source-toggle"),
+  sourceName: document.querySelector("#import-source-name"),
+  sourceMethod: document.querySelector("#import-source-method"),
+  sourceSearch: document.querySelector("#import-source-search"),
+  sourceEmpty: document.querySelector("#import-source-empty"),
+  sourceOptions: [...document.querySelectorAll("[data-import-source]")],
+  sourceGroups: [...document.querySelectorAll("[data-source-group]")],
   reviewDialog: document.querySelector("#import-review-dialog"),
   reviewEyebrow: document.querySelector("#import-review-eyebrow"),
   reviewTitle: document.querySelector("#import-review-title"),
@@ -361,40 +386,100 @@ function importAccountIdentity(source) {
   return Object.values(identity).every(Boolean) ? identity : null;
 }
 
-function selectImporterTab(selectedTab, { focus = false } = {}) {
-  for (const tab of elements.importerTabs) {
-    const selected = tab === selectedTab;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    const panel = document.getElementById(tab.getAttribute("aria-controls"));
+function selectImportSource(selectedOption) {
+  if (!elements.sourceOptions.includes(selectedOption)) return;
+  for (const option of elements.sourceOptions) {
+    const selected = option === selectedOption;
+    option.setAttribute("aria-pressed", String(selected));
+    const panel = document.getElementById(option.getAttribute("aria-controls"));
     if (panel) panel.hidden = !selected;
   }
-  if (focus) selectedTab.focus();
+  elements.sourceName.textContent = selectedOption.querySelector("span").textContent;
+  const group = selectedOption.closest("[data-source-group]").dataset.sourceGroup;
+  elements.sourceMethod.textContent = `${group} · ${selectedOption.querySelector("small").textContent}`;
 }
 
-function initializeImporterTabs() {
-  elements.importerTabs.forEach((tab, index) => {
-    tab.addEventListener("click", () => selectImporterTab(tab));
-    tab.addEventListener("keydown", (event) => {
-      let nextIndex = null;
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-        nextIndex = (index + 1) % elements.importerTabs.length;
-      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-        nextIndex = (index - 1 + elements.importerTabs.length) % elements.importerTabs.length;
-      } else if (event.key === "Home") {
-        nextIndex = 0;
-      } else if (event.key === "End") {
-        nextIndex = elements.importerTabs.length - 1;
-      }
-      if (nextIndex === null) return;
-      event.preventDefault();
-      selectImporterTab(elements.importerTabs[nextIndex], { focus: true });
-    });
+function filterImportSources() {
+  const terms = elements.sourceSearch.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  for (const option of elements.sourceOptions) {
+    const text = [option.textContent, option.dataset.importSource, option.dataset.search || "",
+      option.closest("[data-source-group]").dataset.sourceGroup].join(" ").toLocaleLowerCase();
+    option.hidden = !terms.every((term) => text.includes(term));
+  }
+  for (const group of elements.sourceGroups) {
+    group.hidden = ![...group.querySelectorAll("[data-import-source]")].some((option) => !option.hidden);
+  }
+  elements.sourceEmpty.hidden = elements.sourceOptions.some((option) => !option.hidden);
+}
+
+function closeImportSourcePicker({ focus = false } = {}) {
+  elements.sourcePicker.open = false;
+  if (focus) elements.sourceToggle.focus();
+}
+
+function positionImportSourceMenu() {
+  const menu = document.querySelector("#import-source-menu");
+  const bounds = elements.sourceToggle.getBoundingClientRect();
+  const below = (window.innerHeight || 800) - bounds.bottom - 20;
+  const above = bounds.top - 100; // Leave room for the fixed site header.
+  const opensUp = below < 280 && above > below;
+  menu.classList.toggle("opens-up", opensUp);
+  menu.style.maxHeight = `${Math.max(160, Math.min(520, opensUp ? above : below))}px`;
+}
+
+function initializeImportSourcePicker() {
+  elements.sourcePicker.addEventListener("toggle", () => {
+    if (!elements.sourcePicker.open) return;
+    elements.sourceSearch.value = "";
+    filterImportSources();
+    positionImportSourceMenu();
+    elements.sourceSearch.focus();
   });
-  const initiallySelected =
-    elements.importerTabs.find((tab) => tab.getAttribute("aria-selected") === "true") ||
-    elements.importerTabs[0];
-  if (initiallySelected) selectImporterTab(initiallySelected);
+  window.addEventListener("resize", () => {
+    if (elements.sourcePicker.open) positionImportSourceMenu();
+  });
+  elements.sourceSearch.addEventListener("input", filterImportSources);
+  elements.sourceOptions.forEach((option) => option.addEventListener("click", () => {
+    // Only visibility changes: never rebuild forms or cancel another source's job.
+    selectImportSource(option);
+    closeImportSourcePicker({ focus: true });
+  }));
+  elements.sourcePicker.addEventListener("keydown", (event) => {
+    if (!elements.sourcePicker.open || event.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault(); event.stopPropagation();
+      closeImportSourcePicker({ focus: true });
+      return;
+    }
+    const visible = elements.sourceOptions.filter((option) => !option.hidden);
+    const current = visible.indexOf(event.target);
+    const fromSearch = event.target === elements.sourceSearch;
+    if (!fromSearch && current < 0) return;
+    let next = null;
+    if (event.key === "ArrowDown") next = current + 1;
+    else if (event.key === "ArrowUp") next = current < 0 ? visible.length - 1 : current - 1;
+    else if (!fromSearch && event.key === "Home") next = 0;
+    else if (!fromSearch && event.key === "End") next = visible.length - 1;
+    else if (fromSearch && event.key === "Enter") {
+      event.preventDefault();
+      if (visible.length === 1) visible[0].click();
+      else visible[0]?.focus();
+      return;
+    }
+    if (next === null) return;
+    event.preventDefault();
+    if (!visible.length) return;
+    const option = visible[(next + visible.length) % visible.length];
+    option.focus(); option.scrollIntoView({ block: "nearest" });
+  });
+  elements.sourcePicker.addEventListener("focusout", (event) => {
+    if (event.relatedTarget && !elements.sourcePicker.contains(event.relatedTarget)) closeImportSourcePicker();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.sourcePicker.open && !elements.sourcePicker.contains(event.target)) closeImportSourcePicker();
+  });
+  selectImportSource(elements.sourceOptions.find((option) => option.getAttribute("aria-pressed") === "true")
+    || elements.sourceOptions[0]);
 }
 
 function localIsoDate(value) {
@@ -438,6 +523,12 @@ function versionAtLeast(version, minimum) {
 function setExtensionReady(ready, version = "") {
   state.extensionReady = ready;
   state.extensionVersion = ready ? version : "";
+  state.amexExtensionReady = ready && versionAtLeast(version, MIN_AMEX_EXTENSION_VERSION);
+  elements.amexExtensionHelp.hidden = state.amexExtensionReady;
+  elements.amexExtensionHelp.textContent = ready && !state.amexExtensionReady
+    ? `Reload Ledger Data Importer ${MIN_AMEX_EXTENSION_VERSION} or newer in chrome://extensions, then refresh this page to enable Amex browser imports.`
+    : `Browser import needs companion extension ${MIN_AMEX_EXTENSION_VERSION} or newer. You can still upload a file below.`;
+  updateAmexControls();
   state.aliExpressExtensionReady =
     ready && versionAtLeast(version, MIN_ALIEXPRESS_EXTENSION_VERSION);
   state.venmoExtensionReady = ready && versionAtLeast(version, MIN_VENMO_EXTENSION_VERSION);
@@ -1683,6 +1774,152 @@ async function importAppleCardFile() {
   }
 }
 
+function updateAmexControls() {
+  const busy = Boolean(state.amexJob);
+  elements.amexImportButton.disabled = busy || !elements.amexFile.files?.length;
+  elements.amexBrowserButton.disabled = busy || !state.amexExtensionReady;
+  elements.amexCancelButton.hidden = !busy;
+  for (const field of [elements.amexFile, elements.amexFilterDateRange, elements.amexIncludeMerchantDetails,
+    elements.amexAccountName, elements.amexAccountType, elements.amexProvider]) field.disabled = busy;
+  elements.amexStartDate.disabled = elements.amexEndDate.disabled = busy;
+}
+
+async function amexRequest(path, payload) {
+  const response = await fetch(`/api/amex-import-sessions${path}`, payload === undefined ? { cache: "no-store" } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || (response.status === 404
+    ? "Restart the Ledger server to enable American Express imports."
+    : `American Express import failed (${response.status}).`));
+  return result;
+}
+
+async function startAmexImport() {
+  if (state.amexJob) return;
+  const job = { token: "", cancelled: false, browser: true, timer: null, started: Date.now() };
+  elements.amexError.hidden = true;
+  try {
+    if (!state.amexExtensionReady) throw new Error(`Reload companion extension ${MIN_AMEX_EXTENSION_VERSION} or newer, then refresh this page.`);
+    const identity = importAccountIdentity("amex");
+    const startDate = elements.amexStartDate.value, endDate = elements.amexEndDate.value;
+    if (!identity) throw new Error("Complete all three account fields.");
+    if (!startDate || !endDate || startDate > endDate) throw new Error("Choose a valid start and end date.");
+    const includeMerchantDetails = elements.amexIncludeMerchantDetails.checked;
+    state.amexJob = job; updateAmexControls();
+    elements.amexProgress.hidden = false;
+    elements.amexProgress.textContent = "Opening a secure American Express import session…";
+    const session = await amexRequest("", { startDate, endDate, ...identity, browserImport: true,
+      filterDateRange: true, includeMerchantDetails, matchRefunds: suggestRefundMatches() });
+    job.token = session.token;
+    if (state.amexJob !== job) { await amexRequest(`/${encodeURIComponent(job.token)}/cancel`, {}); return; }
+    window.postMessage({ source: "ledger-web-app", action: "startAmexImport", payload: {
+      token: job.token, startDate, endDate, includeMerchantDetails, ledgerOrigin: window.location.origin,
+    } }, window.location.origin);
+    void pollAmexSession(job);
+  } catch (error) {
+    if (job.cancelled || (state.amexJob && state.amexJob !== job)) return;
+    if (state.amexJob === job) await cancelAmexImport();
+    elements.amexError.textContent = error.message || "Could not start American Express import.";
+    elements.amexError.hidden = false;
+  }
+}
+
+async function pollAmexSession(job) {
+  if (state.amexJob !== job) return;
+  try {
+    const result = await amexRequest(`/${encodeURIComponent(job.token)}`);
+    if (state.amexJob !== job) return;
+    if (Date.now() - job.started > 30 * 60 * 1000 || (result.status === "waiting_for_extension" && Date.now() - job.started > 15000)) {
+      throw new Error("American Express import did not respond. Reload the companion extension, refresh Ledger, and retry.");
+    }
+    elements.amexProgress.textContent = result.message;
+    if (result.status === "review") {
+      renderResult(result.import, "amex", job.token);
+      state.amexJob = null; updateAmexControls();
+    } else if (result.status === "error") throw new Error(result.message);
+    else if (["cancelled", "complete"].includes(result.status)) { state.amexJob = null; updateAmexControls(); }
+    else job.timer = window.setTimeout(() => pollAmexSession(job), 1200);
+  } catch (error) {
+    if (state.amexJob !== job) return;
+    await cancelAmexImport();
+    // A user may already have started another import while cancellation awaited.
+    if (state.amexJob) return;
+    elements.amexError.textContent = error.message || "American Express import status is unavailable.";
+    elements.amexError.hidden = false;
+  }
+}
+
+async function importAmexFile() {
+  if (state.amexJob) return;
+  elements.amexError.hidden = true;
+  elements.amexProgress.hidden = true;
+  const job = { token: "", cancelled: false };
+  try {
+    const file = elements.amexFile.files?.[0];
+    const fileFormat = file?.name.split(".").pop().toLowerCase();
+    if (!file || !["csv", "xlsx"].includes(fileFormat)) throw new Error("Choose an American Express CSV or XLSX activity export.");
+    if (file.size > 16 * 1024 * 1024) throw new Error("American Express files cannot exceed 16 MB.");
+    const identity = importAccountIdentity("amex");
+    if (!identity) throw new Error("Complete all three account fields.");
+    const startDate = elements.amexStartDate.value, endDate = elements.amexEndDate.value;
+    const filterDateRange = elements.amexFilterDateRange.checked;
+    const includeMerchantDetails = elements.amexIncludeMerchantDetails.checked;
+    if (!startDate || !endDate || (filterDateRange && startDate > endDate)) throw new Error("Choose a valid start and end date.");
+    state.amexJob = job;
+    updateAmexControls();
+    elements.amexProgress.textContent = "Reading American Express export…";
+    elements.amexProgress.hidden = false;
+    let content;
+    if (fileFormat === "csv") content = await file.text();
+    else {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const chunks = [];
+      for (let i = 0; i < bytes.length; i += 8192) chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+      content = btoa(chunks.join(""));
+    }
+    if (state.amexJob !== job) return;
+    const session = await amexRequest("", { startDate, endDate: filterDateRange ? endDate : startDate,
+      filterDateRange, includeMerchantDetails, ...identity, matchRefunds: suggestRefundMatches() });
+    job.token = session.token;
+    if (state.amexJob !== job) {
+      await amexRequest(`/${encodeURIComponent(job.token)}/cancel`, {});
+      return;
+    }
+    elements.amexProgress.textContent = "Validating transactions…";
+    const result = await amexRequest(`/${encodeURIComponent(job.token)}/complete`, { content, fileFormat });
+    if (state.amexJob !== job) return;
+    if (result.status !== "review") throw new Error(result.message || "American Express export is not ready to review.");
+    renderResult(result.import, "amex", job.token);
+    elements.amexProgress.textContent = `${result.import.parsed} American Express transactions ready for review.`;
+  } catch (error) {
+    if (job.cancelled || (state.amexJob && state.amexJob !== job)) return;
+    if (job.token) await amexRequest(`/${encodeURIComponent(job.token)}/cancel`, {}).catch(() => {});
+    if (state.amexJob === job || !job.token) {
+      elements.amexError.textContent = error.message || "Could not read the American Express export.";
+      elements.amexError.hidden = false;
+      elements.amexProgress.hidden = true;
+    }
+  } finally {
+    if (state.amexJob === job) state.amexJob = null;
+    updateAmexControls();
+  }
+}
+
+async function cancelAmexImport() {
+  const job = state.amexJob;
+  if (job) job.cancelled = true;
+  if (job?.timer) window.clearTimeout(job.timer);
+  state.amexJob = null;
+  updateAmexControls();
+  elements.amexProgress.hidden = false;
+  elements.amexProgress.textContent = "American Express import cancelled.";
+  if (job?.token) {
+    if (job.browser) window.postMessage({ source: "ledger-web-app", action: "cancelAmexImport", payload: { token: job.token } }, window.location.origin);
+    await amexRequest(`/${encodeURIComponent(job.token)}/cancel`, {}).catch(() => {});
+  }
+}
+
 function updateCsvImportButton() {
   elements.csvImportButton.disabled =
     state.csvImportBusy || !elements.csvImportFile.files?.length;
@@ -2197,7 +2434,7 @@ function renderResult(result, source, token) {
       + (result.warnings || []).slice(0, 3).join(" ")
       + (result.skippedOrders > 3 ? ` (${result.skippedOrders - 3} more skipped orders.)` : "");
   }
-  if (source === "schwab" && result.warnings?.length) {
+  if (["schwab", "amex"].includes(source) && result.warnings?.length) {
     elements.reviewInvalidNote.hidden = false;
     elements.reviewInvalidNote.textContent = result.warnings.join(" ");
   }
@@ -2358,6 +2595,12 @@ async function confirmImportReview() {
 }
 
 elements.amazonImportButton.addEventListener("click", startAmazonImport);
+elements.amexFile.addEventListener("change", updateAmexControls);
+elements.amexFilterDateRange.addEventListener("change", updateAmexControls);
+elements.amexImportButton.addEventListener("click", importAmexFile);
+elements.amexBrowserButton.addEventListener("click", startAmexImport);
+elements.amexCancelButton.addEventListener("click", cancelAmexImport);
+updateAmexControls();
 elements.amazonCancelButton.addEventListener("click", cancelAmazonImport);
 elements.creditKarmaImportButton.addEventListener("click", startCreditKarmaImport);
 elements.creditKarmaCancelButton.addEventListener("click", cancelCreditKarmaImport);
@@ -2473,6 +2716,17 @@ window.addEventListener("message", (event) => {
     && (!event.data.payload?.token || event.data.payload.token === state.capitalOneSessionToken)) {
     const message = event.data.payload?.message || "Capital One import failed.";
     void cancelCapitalOneImport().then(() => showCapitalOneError(message));
+  } else if (event.data.action === "amexProgress" && state.amexJob?.browser
+    && event.data.payload?.token === state.amexJob.token) {
+    elements.amexProgress.textContent = event.data.payload.message;
+  } else if (event.data.action === "amexError" && state.amexJob?.browser
+    && event.data.payload?.token === state.amexJob.token) {
+    const message = event.data.payload?.message || "American Express import failed.";
+    void cancelAmexImport().then(() => {
+      if (state.amexJob) return;
+      elements.amexError.textContent = message;
+      elements.amexError.hidden = false;
+    });
   } else if (event.data.action === "schwabProgress" && state.schwabSessionToken
     && event.data.payload?.token === state.schwabSessionToken) {
     renderSchwabProgress(event.data.payload.progress, event.data.payload.message);
@@ -2572,7 +2826,7 @@ window.addEventListener("message", (event) => {
   }
 });
 
-initializeImporterTabs();
+initializeImportSourcePicker();
 initializeDirectImportDates();
 window.addEventListener("ledger-import-preferences-change", () => initializeDirectImportDates({ preserveEdits: true }));
 loadAvailableTransactionTags();

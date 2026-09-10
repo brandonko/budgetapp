@@ -1573,7 +1573,7 @@ async function reviewPageFixture(page, handler) {
     confirm: () => false,
     history: { replaceState() {} }, addEventListener() {}, setTimeout() {}, clearTimeout() {}, postMessage() {} };
   const context = { document, window, localStorage: { getItem() { return null; }, setItem() {} },
-    HTMLInputElement: Input, HTMLSelectElement: Select, URLSearchParams,
+    HTMLInputElement: Input, HTMLSelectElement: Select, URLSearchParams, btoa,
     Option: function Option(text, value) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; },
     fetch: async (url, options = {}) => {
       requests.push({ url, ...options });
@@ -1588,7 +1588,91 @@ async function reviewPageFixture(page, handler) {
   return { document, window, requests, el: (id) => document.getElementById(id), run: (code) => vm.runInContext(code, context) };
 }
 
-test("Walmart tab gates old extensions, preserves account/date inputs and stages shared review", async () => {
+test("import source selector keeps one card visible without resetting forms, files, or running jobs", async () => {
+  const app = await reviewPageFixture("upload", () => null);
+  const options = app.document.querySelectorAll("[data-import-source]");
+  const panels = options.map(option=>app.el(option.getAttribute("aria-controls")));
+  assert.equal(options.length, 11);
+  assert.equal(app.el("import-source-picker").open, false);
+  assert.equal(app.el("import-source-name").textContent, "Credit Karma");
+  app.el("amazon-start-date").value = "2025-01-01";
+  app.el("amazon-account-name").value = "My card";
+  app.el("amex-include-merchant-details").checked = false;
+  const file = {name:"activity.xlsx",size:42};
+  app.el("amex-file").files = [file];
+  app.run('state.amazonSessionToken="running-session"; state.amazonPollTimer=123');
+  const before = app.requests.length;
+  for (const option of options) {
+    option.click();
+    assert.equal(panels.filter(panel=>!panel.hidden).length, 1);
+    assert.equal(app.el(option.getAttribute("aria-controls")).hidden, false);
+    assert.equal(options.filter(item=>item.getAttribute("aria-pressed")==="true").length, 1);
+    assert.equal(app.el("import-source-name").textContent, option.querySelector("span").textContent);
+    assert.equal(app.el("import-source-picker").open, false);
+    assert.equal(app.document.activeElement, app.el("import-source-toggle"));
+  }
+  assert.equal(app.el("amazon-start-date").value, "2025-01-01");
+  assert.equal(app.el("amazon-account-name").value, "My card");
+  assert.equal(app.el("amex-file").files[0], file);
+  assert.equal(app.el("amex-include-merchant-details").checked, false);
+  assert.equal(app.run("state.amazonSessionToken"), "running-session");
+  assert.equal(app.run("state.amazonPollTimer"), 123);
+  assert.equal(app.requests.length, before, "Selecting a source never starts, cancels, or saves an import");
+});
+
+test("import source search matches aliases and methods, hides empty groups, and handles no matches", async () => {
+  const app = await reviewPageFixture("upload", () => null);
+  const picker = app.el("import-source-picker"), search = app.el("import-source-search");
+  picker.open = true; picker.dispatch("toggle");
+  assert.equal(app.document.activeElement, search);
+  const visible = () => app.document.querySelectorAll("[data-import-source]").filter(option=>!option.hidden).map(option=>option.dataset.importSource);
+  search.value = "  AMEX  xlsx  "; search.dispatch("input");
+  assert.deepEqual(visible(), ["amex"]);
+  assert.equal(app.el("creditkarma-import-panel").hidden, false, "Searching does not change the selected source");
+  assert.equal(app.document.querySelector('[data-source-group="Purchases"]').hidden, true);
+  search.dispatch("keydown", {key:"Enter"});
+  assert.equal(app.el("amex-import-panel").hidden, false);
+  assert.equal(picker.open, false);
+  picker.open = true; picker.dispatch("toggle");
+  assert.equal(search.value, "");
+  assert.equal(visible().length, 11);
+  search.value = "alipay"; search.dispatch("input");
+  assert.deepEqual(visible(), ["aliexpress"]);
+  search.value = "CSV"; search.dispatch("input");
+  assert.deepEqual(visible(), ["amex", "applecard", "capitalone", "csv"]);
+  search.value = "[nonexistent.*]"; search.dispatch("input");
+  assert.deepEqual(visible(), []);
+  assert.equal(app.el("import-source-empty").hidden, false);
+  search.dispatch("keydown", {key:"Enter"}); search.dispatch("keydown", {key:"ArrowDown"});
+  assert.equal(picker.open, true);
+  assert.equal(app.el("amex-import-panel").hidden, false);
+  search.dispatch("keydown", {key:"Escape"});
+  assert.equal(picker.open, false);
+  assert.equal(app.document.activeElement, app.el("import-source-toggle"));
+});
+
+test("source selector keyboard, outside click, and focus dismissal do not change the active importer", async () => {
+  const app = await reviewPageFixture("upload", () => null);
+  const picker = app.el("import-source-picker"), search = app.el("import-source-search");
+  picker.open = true; picker.dispatch("toggle");
+  search.dispatch("keydown", {key:"ArrowDown"});
+  assert.equal(app.document.activeElement, app.el("creditkarma-import-option"));
+  app.document.activeElement.dispatch("keydown", {key:"End"});
+  assert.equal(app.document.activeElement, app.el("csv-import-option"));
+  app.document.activeElement.dispatch("keydown", {key:"Home"});
+  assert.equal(app.document.activeElement, app.el("creditkarma-import-option"));
+  app.document.activeElement.dispatch("keydown", {key:"ArrowUp"});
+  assert.equal(app.document.activeElement, app.el("csv-import-option"));
+  assert.equal(app.el("creditkarma-import-panel").hidden, false);
+  app.document.body.dispatch("pointerdown");
+  assert.equal(picker.open, false);
+  picker.open = true; picker.dispatch("toggle");
+  picker.dispatch("focusout", {relatedTarget: app.el("creditkarma-start-date")});
+  assert.equal(picker.open, false);
+  assert.equal(app.el("creditkarma-import-panel").hidden, false);
+});
+
+test("Walmart selector gates old extensions, preserves account/date inputs and stages shared review", async () => {
   const rows = [tx({_stagedId:0,_isDuplicate:false,description:"Synthetic Walmart item"})];
   const app = await reviewPageFixture("upload", (url, options) => {
     if (url === "/api/walmart-import-sessions") return {token:"walmart-session"};
@@ -1603,7 +1687,7 @@ test("Walmart tab gates old extensions, preserves account/date inputs and stages
   assert.match(app.el("walmart-error").textContent,/0.9.1/);
   app.run('setExtensionReady(true,"0.9.1")');
   assert.equal(app.el("walmart-import-button").disabled,false);
-  app.el("walmart-import-tab").click();
+  app.el("walmart-import-option").click();
   assert.equal(app.el("walmart-import-panel").hidden,false);
   assert.equal(app.el("creditkarma-import-panel").hidden,true);
   app.el("walmart-start-date").value="2026-08-01"; app.el("walmart-end-date").value="2026-08-31";
@@ -1636,7 +1720,7 @@ test("Capital One gates old extensions, keeps account metadata, and uses shared 
   assert.match(app.el("capitalone-error").textContent, /0.9.1/);
   app.run('setExtensionReady(true,"0.9.1")');
   assert.equal(app.el("capitalone-import-button").disabled, false);
-  app.el("capitalone-import-tab").click();
+  app.el("capitalone-import-option").click();
   assert.equal(app.el("capitalone-import-panel").hidden, false);
   assert.equal(app.el("creditkarma-import-panel").hidden, true);
   app.el("capitalone-start-date").value = "2026-08-01";
@@ -2246,7 +2330,7 @@ test("every importer sends the global refund preference and shares default dates
     app.window.LedgerPreferences = {imports: () => ({matchRefunds:enabled}), importStartDate: () => new Date(2026, 0, 15)};
     app.run('setExtensionReady(true,"99.0.0"); initializeDirectImportDates()');
     const starts = app.document.querySelectorAll('input').filter(field => field.id.endsWith("-start-date"));
-    assert.equal(starts.length, 9);
+    assert.equal(starts.length, 10);
     assert(starts.every(field => field.value === "2026-01-15"));
     app.el("amazon-start-date").value = "2025-02-01";
     app.window.LedgerPreferences.importStartDate = () => new Date(2026, 1, 15);
@@ -2260,6 +2344,150 @@ test("every importer sends the global refund preference and shares default dates
       assert.ok(request, source);
       assert.equal(JSON.parse(request.body).matchRefunds, enabled, source);
     }
+  }
+});
+
+test("Amex browser imports require the new companion and stage through the same review with no upload", async () => {
+  const rows = [tx({_stagedId:0,description:"Synthetic Amex",_selected:true})];
+  const app = await reviewPageFixture("upload", url => url === "/api/amex-import-sessions" ? {token:"amex-browser"}
+    : url.endsWith("/amex-browser") ? {status:"review",message:"Ready",import:{parsed:1,new:1,duplicates:0,revision:"r1",transferPlan:"p",transactions:rows}} : null);
+  const messages = []; app.window.postMessage = (value) => messages.push(value);
+  app.run('setExtensionReady(true,"0.11.1")');
+  assert.equal(app.el("amex-browser-button").disabled, true);
+  assert.match(app.el("amex-extension-help").textContent, /0.12.2/);
+  app.run('setExtensionReady(true,"0.12.2")');
+  assert.equal(app.el("amex-browser-button").disabled, false);
+  assert.equal(app.el("amex-import-button").disabled, true, "File fallback still requires a file");
+  app.el("amex-include-merchant-details").checked = false;
+  app.el("amex-account-name").value = "Gold";
+  app.el("amex-start-date").value = "2026-01-01";
+  app.el("amex-end-date").value = "2026-08-31";
+  await app.run("startAmexImport()"); await flush();
+  const data = JSON.parse(app.requests.find((r) => r.url === "/api/amex-import-sessions").body);
+  assert.equal(data.browserImport, true); assert.equal(data.filterDateRange, true);
+  assert.equal(data.includeMerchantDetails, false); assert.equal(data.accountName, "Gold");
+  assert.equal(data.endDate, "2026-08-31");
+  assert.equal(messages[0].action, "startAmexImport");
+  assert.equal(messages[0].payload.includeMerchantDetails, false);
+  assert.equal(app.el("import-review-dialog").open, true, app.el("amex-error").textContent);
+  assert.equal(app.el("import-review-eyebrow").textContent, "American Express import");
+  assert.equal(app.requests.some((r) => /\/(complete|commit)$/.test(r.url)), false);
+});
+
+test("Amex browser cancellation during session creation or polling rejects late reviews", async () => {
+  for (const phase of ["create", "poll"]) {
+    let release; const pending = new Promise((resolve) => { release = resolve; });
+    const app = await reviewPageFixture("upload", url => url === "/api/amex-import-sessions"
+      ? phase === "create" ? pending : {token:"amex-browser"}
+      : url.endsWith("/amex-browser") ? pending : {});
+    const messages = []; app.window.postMessage = (value) => messages.push(value);
+    app.run('setExtensionReady(true,"0.12.2")');
+    const started = app.run("startAmexImport()"); await flush();
+    assert.equal(app.el("amex-cancel-button").hidden, false);
+    assert.equal(app.el("amex-import-button").disabled, true);
+    await app.run("cancelAmexImport()");
+    release(phase === "create" ? {token:"amex-browser"} : {status:"review",import:{transactions:[]}});
+    await started; await flush();
+    assert.equal(app.el("import-review-dialog").open, false);
+    assert.equal(app.el("amex-browser-button").disabled, false);
+    assert.equal(app.requests.some((r) => r.url.endsWith("/cancel")), true);
+    if (phase === "create") assert.equal(messages.length, 0, "Never open Amex after cancelled session creation");
+    else assert.equal(messages.at(-1).action, "cancelAmexImport");
+  }
+});
+
+test("Amex file import passes the merchant Notes choice and global preferences into shared review", async () => {
+  for (const include of [true, false]) {
+    const rows = [tx({_stagedId:0, notes:include ? "Merchant address: Example Street" : ""})];
+    const app = await reviewPageFixture("upload", url => url.endsWith("/complete") ? {status:"review", import:{
+      parsed:1,new:1,duplicates:0,revision:"r1",transferPlan:"p",transactions:rows,
+      warnings:["Skipped 1 pending American Express transactions; import them after they post."],
+    }} : url === "/api/amex-import-sessions" ? {token:"amex-session"} : null);
+    app.window.LedgerPreferences = {imports:() => ({matchRefunds:include})};
+    assert.equal(app.el("amex-import-button").disabled, true);
+    assert.equal(app.el("amex-include-merchant-details").checked, true);
+    assert.equal(app.el("amex-date-range").hidden, false, "Browser imports always show their date range");
+    app.el("amex-import-option").click();
+    assert.equal(app.el("amex-import-panel").hidden, false);
+    const content = "Date,Description,Amount\n08/20/2026,Test,12.34\n";
+    app.el("amex-file").files = [{name:"activity.csv", size:content.length, text:async()=>content}];
+    app.el("amex-file").dispatch("change");
+    assert.equal(app.el("amex-import-button").disabled, false, "Manual import needs no extension");
+    app.el("amex-include-merchant-details").checked = include;
+    app.el("amex-account-name").value = "Gold";
+    await app.run("importAmexFile()");
+    const request = app.requests.find(r=>r.url === "/api/amex-import-sessions");
+    const options = JSON.parse(request.body);
+    assert.equal(options.includeMerchantDetails, include);
+    assert.equal(options.matchRefunds, include);
+    assert.equal(options.filterDateRange, false);
+    assert.equal(options.accountName, "Gold");
+    assert.deepEqual(JSON.parse(app.requests.find(r=>r.url.endsWith("/complete")).body), {content,fileFormat:"csv"});
+    assert.equal(app.el("import-review-dialog").open, true, app.el("amex-error")?.textContent);
+    assert.equal(app.el("import-review-eyebrow").textContent, "American Express import");
+    assert.match(app.el("import-review-invalid-note").textContent, /1 pending/);
+    assert.equal(app.el("import-review-list").querySelectorAll(".edit-button").length, 1);
+    assert.equal(app.run("state.importedTransactions[0].notes"), rows[0].notes);
+    assert.equal(app.requests.some(r=>r.url.endsWith("/commit")), false);
+    app.window.confirm = () => true;
+    app.el("cancel-import-review").click(); await flush();
+    assert.equal(app.el("import-review-dialog").open, false);
+    assert.equal(app.requests.some(r=>r.url.endsWith("/cancel")), true);
+    assert.equal(app.requests.some(r=>r.url.endsWith("/commit")), false);
+  }
+});
+
+test("Amex XLSX is sent as base64 with optional dates and bounded inputs", async () => {
+  const app = await reviewPageFixture("upload", url => url.endsWith("/complete") ? {status:"review", import:{
+    parsed:0,new:0,duplicates:0,revision:"r1",transferPlan:"p",transactions:[],
+  }} : url === "/api/amex-import-sessions" ? {token:"amex-session"} : null);
+  app.el("amex-file").files = [{name:"activity.XLSX",size:4,arrayBuffer:async()=>new Uint8Array([0,80,255,75]).buffer}];
+  app.el("amex-filter-date-range").checked = true;
+  app.el("amex-filter-date-range").dispatch("change");
+  assert.equal(app.el("amex-date-range").hidden, false);
+  assert.equal(app.el("amex-start-date").disabled, false);
+  app.el("amex-start-date").value = "2026-01-01";
+  app.el("amex-end-date").value = "2026-12-31";
+  await app.run("importAmexFile()");
+  const options = JSON.parse(app.requests.find(r=>r.url === "/api/amex-import-sessions").body);
+  assert.equal(options.filterDateRange, true);
+  assert.equal(options.startDate, "2026-01-01");
+  assert.equal(options.endDate, "2026-12-31");
+  const uploaded = JSON.parse(app.requests.find(r=>r.url.endsWith("/complete")).body);
+  assert.equal(uploaded.fileFormat, "xlsx");
+  assert.equal(uploaded.content, Buffer.from([0,80,255,75]).toString("base64"));
+  const previousRequests = app.requests.length;
+  app.el("amex-file").files = [{name:"huge.xlsx",size:17*1024*1024}];
+  await app.run("importAmexFile()");
+  assert.match(app.el("amex-error").textContent, /16 MB/);
+  app.el("amex-file").files = [{name:"wrong.pdf",size:10}];
+  await app.run("importAmexFile()");
+  assert.match(app.el("amex-error").textContent, /CSV or XLSX/);
+  assert.equal(app.requests.length, previousRequests);
+});
+
+test("Amex cancellation during reading or session creation cannot reopen a review", async () => {
+  for (const phase of ["read", "create", "complete", "read-error"]) {
+    let release, reject;
+    const pending = new Promise((resolve, fail)=>{release=resolve;reject=fail;});
+    const app = await reviewPageFixture("upload", url => {
+      if (url === "/api/amex-import-sessions") return phase === "create" ? pending : {token:"amex-session"};
+      if (url.endsWith("/complete") && phase === "complete") return pending;
+      return {};
+    });
+    app.el("amex-file").files = [{name:"activity.csv",size:10,text:()=>phase.startsWith("read") ? pending : Promise.resolve("data")}];
+    const importing = app.run("importAmexFile()"); await flush();
+    assert.equal(app.el("amex-import-button").disabled, true);
+    assert.equal(app.el("amex-include-merchant-details").disabled, true);
+    await app.run("cancelAmexImport()");
+    if (phase === "read-error") reject(new Error("Late read error"));
+    else release(phase === "create" ? {token:"amex-session"} : phase === "complete" ? {status:"review",import:{transactions:[]}} : "data");
+    await importing;
+    assert.equal(app.el("import-review-dialog").open, false, phase);
+    assert.equal(app.el("amex-error").hidden, true, phase);
+    assert.equal(app.el("amex-include-merchant-details").disabled, false);
+    assert.equal(app.requests.some(r=>r.url.endsWith("/commit")), false);
+    if (phase === "create") assert.equal(app.requests.some(r=>r.url.endsWith("/cancel")), true);
   }
 });
 

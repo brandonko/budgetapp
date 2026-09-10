@@ -2,7 +2,7 @@
 
 Ledger is a dependency-free personal budget dashboard backed by a master CSV.
 It imports account transactions from Credit Karma, Venmo, Apple Card, Capital
-One, and Schwab Checking; order history from Amazon, AliExpress, eBay, and
+One, Schwab Checking, and American Express; order history from Amazon, AliExpress, eBay, and
 Walmart; and Ledger-format CSV files. It avoids duplicate imports and provides monthly and annual summaries
 with editable transaction details.
 
@@ -25,8 +25,9 @@ The dashboard includes:
 - A shared navigation menu for the dashboard, transactions, data imports, classifications, and settings
 - Manual transaction creation, editing, multi-tag labeling, refund flags, permanent deletion, and freeform notes
 - Import history with batch-level rollback and automatic safety backups
-- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, Capital One, and Schwab Checking through a companion Chrome extension
+- Website imports for Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, Apple Card, Capital One, Schwab Checking, and American Express through a companion Chrome extension
 - Manual Apple Card and Capital One CSV fallbacks with editable account details
+- American Express browser-assisted CSV/XLSX export capture, with optional merchant details in Notes and file-upload fallback
 - Linked refunds and repayments that retain original transactions while adjusting spending
 - A Reconcile workspace for reviewing transfer and refund suggestions before saving
 - Follow-up flags, a Flagged only filter, and bulk flag actions across transaction lists
@@ -125,8 +126,14 @@ Raw financial data is private and must not be committed to Git. This
 repository's `.gitignore` excludes both `raw_data_files/` and `data/`.
 
 With Ledger running, open <http://127.0.0.1:8000/import> or select **Import
-data** from the dashboard. The page presents ten sources as tabs so only one
-importer is visible at a time:
+data** from the dashboard. Use the compact **Import from** selector to search
+sources, grouped into **Accounts**, **Purchases**, and **Files**. Each option
+shows its import method. Only the chosen card is visible; switching sources
+preserves dates, account details, selected files, and running import progress.
+Typing narrows the choices without changing sources. Choose a result to switch,
+or press Escape/click outside to close the selector.
+
+Supported sources:
 
 - **Credit Karma** converts debits to positive expenses and credits to negative
   amounts. Its five default-enabled filters omit Amazon, AliExpress/Alipay,
@@ -200,6 +207,36 @@ importer is visible at a time:
   Interest-adjustment entries with both amount cells blank are also skipped
   with a warning; Ledger never infers an amount from the running balance.
   Brokerage and retirement activity are not supported.
+- **American Express** opens [Amex Activity](https://global.americanexpress.com/activity?days=30&inav=myca_statements)
+  with **Import from Amex** (companion **0.12.2+**). Sign in, select your card,
+  and click **Use this card** in the Ledger guide. The extension assists
+  recognizable export controls and captures **XLSX** (preferred) or **CSV** in
+  the browser. If the form is unfamiliar, choose the requested dates and click
+  Download in Amex; captured exports return to Ledger review without an upload.
+  Wait for **Listening for an Amex XLSX or CSV download** before downloading.
+  Version 0.12.2 also captures Amex's direct browser downloads. Reload the
+  extension and approve its updated download-observation permission if prompted,
+  then refresh Ledger and start a fresh import. The original download continues.
+  If capture stalls, **Capture details** in the Amex guide shows a privacy-safe
+  readout you can share without account or transaction data.
+  The export must cover the full requested range; Ledger applies the inclusive
+  dates again when staging. Login/security checks are never automated.
+  **Upload a file instead** remains available without the extension if capture
+  fails. XLSX includes source categories and merchant details;
+  basic three-column CSVs start as `Uncategorized`. Saved classification rules
+  then apply to both. Editable account defaults are `American Express`,
+  `CREDIT CARD`, and `American Express`; use a distinct name for each card.
+  **Include merchant details in Notes** is checked by default. Uncheck it to omit
+  merchant address, statement name, and extended details without changing the
+  transaction's category, amount, or description. Account-header information and
+  reference columns are not retained. This option does not clear existing Notes.
+  An uploaded file is reviewed in full by default; enable **Limit uploaded file to the dates above** to
+  apply inclusive transaction dates. Files are limited to 16 MB. Charges keep
+  positive amounts and payments/refunds keep negative amounts in storage.
+  Review and confirm before anything is saved. Re-imports use the same
+  occurrence-aware date/amount matching, even if you switch CSV/XLSX or change
+  the Notes option. Import XLSX first when you want its richer details: existing
+  matches are not overwritten or enriched automatically.
 - **CSV** accepts Ledger's transaction schema without the system-managed
   `createdAt` column. Each row requires `date`, `description`, and `amount`; all
   other columns must be present but may contain blank values. Rows are validated
@@ -212,11 +249,13 @@ is **2 weeks**, ending today. Calendar months clamp to the last valid day when
 necessary. Dates remain editable; changing the preference does not replace
 custom dates on an already-open import page. Ledger-format and Apple Card CSV
 uploads still read the entire file rather than applying this default window.
+American Express also reads the entire file unless its date-range option is enabled.
 
 **Suggest refund matches** controls suggestions for credits from all sources,
 including uploaded CSVs. Each new import snapshots this preference; changing it
 does not alter an import already in review. Matching uses an exact-price saved
-purchase from the preceding 90 days and always requires explicit review and
+purchase or selected new purchase from the same import within the preceding
+90 days and always requires explicit review and
 confirmation. When off, no importer suggests refunds. Credits otherwise remain
 normal transactions, except Credit Karma restores its selected merchant exclusions.
 These preferences are saved in the current browser, like the theme preference.
@@ -860,6 +899,7 @@ edited or deleted.
 ```text
 app/server.py       Local HTTP server and atomic CSV persistence API
 app/importers.py    Bank/account and merchant-order source parsers
+app/amex.py         Bounded, dependency-free American Express US CSV/XLSX parser
 app/reconciliation.py
                     Durable transaction IDs, link validation, and effective budget amounts
 app/refunds.py      Refund suggestions and legacy receipt deduplication helpers
@@ -892,6 +932,7 @@ ledger_data_importer_extension/
   capitalone_extension/ Capital One CSV capture and export-form assistance
   walmart_extension/ Walmart purchase-history and receipt collector
   schwab_extension/ Schwab Checking user-guided CSV capture and normalization
+  amex_extension/   Amex activity export assistance, in-browser XLSX/CSV normalization and capture
   shared/           Ledger toolbar popup, connection settings, icons, bridge, and coordinator
 tests/              Isolated standard-library regression tests
 docs/current-workflows.md

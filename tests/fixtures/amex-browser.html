@@ -1,0 +1,47 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Amex browser regression fixture</title>
+<style>body{font:16px system-ui;margin:30px;max-width:850px}dialog{position:static;margin:20px 0;padding:24px;border:1px solid #aaa}label{display:block;margin:12px 0}pre{white-space:pre-wrap;border:1px solid #aaa;padding:15px}button{padding:12px;margin:5px}</style>
+<h1>American Express synthetic export test</h1><p>No real account or Ledger database is used.</p>
+<button id="open">Download activity</button>
+<button id="cancel">Cancel simulated job</button>
+<dialog id="export-form"><h2>Download activity</h2>
+<label>Start date<input type="date" id="start"></label><label>End date<input type="date" id="end"></label>
+<label>File format<select><option value="csv">CSV</option><option value="xlsx">Excel XLSX</option></select></label>
+<button id="download">Download</button></dialog>
+<h2>Capture result</h2><pre id="result">Waiting for card confirmation</pre><p id="count">0 exports captured</p>
+<script>
+const fixtureBytes = Uint8Array.from(atob("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"), v=>v.charCodeAt(0)).buffer;
+let cancelListener, completed = 0;
+// Build before capture.js loads to exercise downloads that do not create a new
+// Blob URL while capture is armed. Prevent the fixture from saving local files.
+const precreatedBlob = URL.createObjectURL(new Blob([fixtureBytes]));
+const result = document.getElementById("result");
+window.chrome = {runtime:{onMessage:{addListener(fn){cancelListener=fn;}},sendMessage:async message=>{
+ if(message.action==="ledgerAmexReady") return {success:true,nonce:"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",startDate:"2026-08-20",endDate:"2026-08-21",includeMerchantDetails: !location.search.includes("notes=off")};
+ if(message.action==="ledgerAmexComplete"){result.textContent=message.data.content; document.getElementById("count").textContent=(++completed)+" export captured";}
+ if(message.action==="ledgerAmexError")result.textContent="ERROR: "+message.data.message;
+ return {success:true};
+}}};
+document.getElementById("open").onclick=()=>document.getElementById("export-form").show();
+document.getElementById("download").onclick=()=>{
+ if(location.search.includes("download=document")) {
+   const format=location.search.includes("format=csv") ? "csv" : "excel";
+   const url=location.origin+"/api/servicing/v1/financials/documents?file_format="+format+"&account_key=SYNTHETIC&start_date=2026-08-20&end_date=2026-08-21";
+   if(location.search.includes("via=navigation")) {
+     // Emulate only the worker-to-owned-document message; coordinator tests
+     // exercise real ownership/trust/nonce checks around the browser event.
+     cancelListener({action:"ledgerAmexDownload",nonce:"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",url},{},()=>{});
+     const frame=document.createElement("iframe"); frame.hidden=true; document.body.append(frame); frame.src=url;
+   } else window.open(url,"_blank","noopener");
+   return;
+ }
+ if(location.search.includes("download=link")) {
+   const anchor=document.createElement("a"); anchor.download="activity.xlsx";
+   anchor.href=location.search.includes("encoding=blob") ? precreatedBlob : "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,"+btoa(String.fromCharCode(...new Uint8Array(fixtureBytes)));
+   anchor.addEventListener("click",event=>event.preventDefault());
+   anchor.dispatchEvent(new MouseEvent("click")); return;
+ }
+ const blob=new Blob([fixtureBytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+ const link=URL.createObjectURL(blob); URL.revokeObjectURL(link);
+};
+document.getElementById("cancel").onclick=()=>{cancelListener({action:"ledgerCancelAmex"},{},()=>{});result.textContent="Cancelled";};
+</script><script src="/capture.js"></script><script src="/export.js"></script><script src="/content.js"></script></html>

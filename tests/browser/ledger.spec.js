@@ -9,7 +9,8 @@ const importCsv = [
 
 async function openImport(page) {
   await page.goto('/import');
-  await page.locator('#csv-import-tab').click();
+  await page.locator('#import-source-toggle').click();
+  await page.locator('#csv-import-option').click();
   await page.locator('#csv-import-file').setInputFiles({
     name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(importCsv),
   });

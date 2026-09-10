@@ -17,11 +17,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 import { exportAliExpressOrders } from "../aliexpress_extension/importer.js";
 import { registerWalmartImporter } from "../walmart_extension/coordinator.js";
 import { registerSchwabImporter } from "../schwab_extension/coordinator.js";
+import { registerAmexImporter } from "../amex_extension/coordinator.js";
 import { registerCapitalOneImporter } from "../capitalone_extension/coordinator.js";
 
 registerWalmartImporter({ validateRequest, broadcast });
 registerCapitalOneImporter({ validateRequest, broadcast });
 registerSchwabImporter({ validateRequest, broadcast });
+registerAmexImporter({ validateRequest, broadcast });
 
 // Shared service worker that coordinates source tabs with Ledger import sessions.
 

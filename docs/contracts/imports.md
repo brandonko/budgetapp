@@ -11,10 +11,20 @@ The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Import data** page at `/import`.
 
 - Show one import card per supported source: `Credit Karma`, `Amazon`, `AliExpress`,
-  `Venmo`, `eBay`, `Walmart`, `Apple Card`, `Capital One`, `Schwab Checking`, and generic `CSV`.
-- Present importer cards as accessible tabs with only one card visible at a time.
-  Keep Credit Karma selected initially, support arrow/Home/End keyboard navigation,
-  and preserve every importer's form and progress state while switching tabs.
+  `Venmo`, `eBay`, `Walmart`, `Apple Card`, `Capital One`, `Schwab Checking`,
+  `American Express`, and generic `CSV`.
+- Present a compact **Import from** searchable disclosure selector, not a growing
+  horizontal tab strip. Group source choices into Accounts, Purchases, and Files;
+  show each source's method (website, CSV/XLSX, or itemized orders). Keep Credit
+  Karma selected initially and one labeled source region visible at a time.
+- Search names, aliases such as Amex/Alipay, groups, and methods case-insensitively.
+  Hide empty groups and show a no-results message. Typing and keyboard navigation
+  do not change the source until a choice is activated. Support arrows, Home/End
+  on choices, Enter, Escape, normal tab navigation, and outside-click dismissal.
+  Restore focus on selection/Escape. Use theme tokens and a viewport-bounded menu.
+- Switching sources changes visibility only. Preserve all form controls, selected
+  files, checkboxes, dates, account labels, and running import state. Never start,
+  cancel, or commit an import just because its card was selected or hidden.
 - Do not show manual JSON file pickers or a shared exported-files section.
   Apple Card and Capital One have deliberate source-specific CSV fallbacks.
   Apple Card's manual CSV ignores date selectors; Capital One's manual CSV
@@ -30,7 +40,7 @@ ingestion belongs in the **Import data** page at `/import`.
   When it is off, bypass classification entirely and preserve supplied CSV values;
   intentionally bypassed rows must not be presented as **No rule matched**.
 - Keep source parsing and validation on the server boundary.
-- Amazon, AliExpress, eBay, Venmo, and Apple Card import tabs must expose editable `accountName`,
+- Amazon, AliExpress, eBay, Venmo, and Apple Card import cards must expose editable `accountName`,
   `accountType`, and `provider` fields. Store their trimmed values in the
   source-scoped import session and apply them server-side to every resulting row.
 - Prefill Amazon with `Prime VISA`, `CREDIT CARD`, `chase`; AliExpress with
@@ -137,7 +147,7 @@ ingestion belongs in the **Import data** page at `/import`.
   manifest root because Chrome requires that location.
 
 - Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart,
-  Venmo, Apple Card, Capital One, and Schwab Checking access in the companion
+  Venmo, Apple Card, Capital One, Schwab Checking, and American Express access in the companion
   Chrome extension; the localhost application must never request, store, or
   transmit site passwords, access tokens, or cookies.
 - The Import data page owns date selection, progress, cancellation, results,

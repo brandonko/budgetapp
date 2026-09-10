@@ -43,7 +43,8 @@ test('Reconcile uses the same staged refund in both editors; cancel writes nothi
   // Establish a saved, unmatched credit through the actual import UI. All
   // no-write assertions below start AFTER this deliberate setup mutation.
   await page.goto('/import');
-  await page.locator('#csv-import-tab').click();
+  await page.locator('#import-source-toggle').click();
+  await page.locator('#csv-import-option').click();
   await page.locator('#csv-apply-classifications').uncheck();
   await page.locator('#csv-import-file').setInputFiles({
     name: 'synthetic-reconcile-refund.csv', mimeType: 'text/csv', buffer: Buffer.from(csv),

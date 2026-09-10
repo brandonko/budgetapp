@@ -8,27 +8,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class UploadTabsTests(unittest.TestCase):
-    def test_each_importer_has_an_accessible_tab_and_panel(self) -> None:
+class ImportSourcePickerTests(unittest.TestCase):
+    def test_each_importer_has_an_accessible_option_and_labeled_panel(self) -> None:
         html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
-        tabs = re.findall(
-            r'<button id="([^"]+-import-tab)" role="tab"[^>]*aria-selected="(true|false)"'
+        options = re.findall(
+            r'<button id="([^"]+-import-option)"[^>]*aria-pressed="(true|false)"'
             r'[^>]*aria-controls="([^"]+)"[^>]*>',
             html,
         )
-        self.assertEqual(len(tabs), 10)
-        self.assertEqual(sum(selected == "true" for _tab, selected, _panel in tabs), 1)
-        for tab_id, _selected, panel_id in tabs:
-            with self.subTest(tab_id=tab_id):
+        self.assertEqual(len(options), 11)
+        self.assertEqual(sum(selected == "true" for _option, selected, _panel in options), 1)
+        self.assertNotIn('role="tablist"', html)
+        self.assertIn('<details class="import-source-picker"', html)
+        self.assertIn('aria-labelledby="import-source-label import-source-name"', html)
+        self.assertIn('id="import-source-search" type="search"', html)
+        for group in ("Accounts", "Purchases", "Files"):
+            self.assertIn(f'data-source-group="{group}"', html)
+        for option_id, _selected, panel_id in options:
+            source = option_id.removesuffix("-import-option")
+            with self.subTest(option_id=option_id):
                 self.assertRegex(
                     html,
-                    rf'<section class="amazon-direct" id="{re.escape(panel_id)}" role="tabpanel"\s+'
-                    rf'aria-labelledby="{re.escape(tab_id)}"',
+                    rf'<section class="amazon-direct" id="{re.escape(panel_id)}" role="region"\s+'
+                    rf'aria-labelledby="{source}-direct-title"',
                 )
+                self.assertIn(f'<h2 id="{source}-direct-title">', html)
 
     def test_keyboard_navigation_is_supported(self) -> None:
         javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
-        for key in ("ArrowRight", "ArrowLeft", "Home", "End"):
+        for key in ("ArrowDown", "ArrowUp", "Home", "End", "Escape", "Enter"):
             self.assertIn(f'event.key === "{key}"', javascript)
 
     def test_credit_karma_warns_about_disconnected_accounts(self) -> None:
@@ -78,8 +86,8 @@ class UploadTabsTests(unittest.TestCase):
     def test_ledger_csv_import_uses_staged_review_and_reports_invalid_rows(self) -> None:
         html = (ROOT / "app" / "upload.html").read_text(encoding="utf-8")
         javascript = (ROOT / "app" / "upload.js").read_text(encoding="utf-8")
-        self.assertIn('id="csv-import-tab" role="tab"', html)
-        self.assertIn('id="csv-import-panel" role="tabpanel"', html)
+        self.assertIn('id="csv-import-option" type="button"', html)
+        self.assertIn('id="csv-import-panel" role="region"', html)
         self.assertIn('id="csv-import-file" type="file" accept=".csv,text/csv"', html)
         self.assertIn('id="csv-import-button" type="button" disabled', html)
         self.assertIn('id="csv-apply-classifications" type="checkbox" checked', html)
@@ -99,7 +107,7 @@ class UploadTabsTests(unittest.TestCase):
         self.assertIn("usernames or credentials", html)
         self.assertIn("automatic importing is currently broken", html)
         self.assertIn("Amazon, AliExpress, eBay, and Walmart start as Shopping", html)
-        self.assertIn("Credit Karma, Apple Card, and Capital One retain their source categories", html)
+        self.assertIn("Credit Karma, Apple Card, Capital One, and American Express retain their source categories", html)
         self.assertIn("saved classification rule", html)
 
     def test_importers_without_account_metadata_have_editable_defaults(self) -> None:
@@ -112,6 +120,7 @@ class UploadTabsTests(unittest.TestCase):
             "applecard": ("Apple Card", "CREDIT CARD", "Goldman Sachs"),
             "capitalone": ("Capital One", "CREDIT CARD", "Capital One"),
             "schwab": ("Schwab Checking", "BANK", "Charles Schwab"),
+            "amex": ("American Express", "CREDIT CARD", "American Express"),
         }
         for source, values in expected.items():
             for field, value in zip(("account-name", "account-type", "provider"), values):
