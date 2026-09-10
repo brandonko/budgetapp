@@ -1,0 +1,24 @@
+[Unit]
+Description=Ledger personal budget app
+After=network.target
+
+[Service]
+Type=simple
+User=ledger
+Group=ledger
+WorkingDirectory=/opt/ledger/current
+ExecStart=/usr/bin/python3 -B /opt/ledger/current/app/server.py --host 0.0.0.0 --port 8000 --csv /var/lib/ledger/transactions.csv
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+StateDirectory=ledger
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

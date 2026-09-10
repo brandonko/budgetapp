@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ledger connection settings</title>
+  <link rel="icon" type="image/png" href="icons/icon-32.png">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Ledger connection settings</h1>
+    <p>Localhost works automatically. Add your Ledger server here to connect from your home network or another trusted address.</p>
+    <form id="server-form">
+      <label for="server-address">Ledger server address</label>
+      <input id="server-address" type="url" required>
+      <p>Use the address and port only, without /import. Only add a server you trust with your imported financial data.</p>
+      <button type="submit">Trust server</button>
+    </form>
+    <p id="status" role="status"></p>
+    <h2>Trusted servers</h2>
+    <p>Already added your server? Use Reconnect below; you do not need to enter it again.</p>
+    <ul id="servers"></ul>
+    <p>After adding a server, refresh its Ledger Import data page. Removing a server stops new connections; cancel any active import before removing it.</p>
+  </main>
+  <script src="trusted_origins.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

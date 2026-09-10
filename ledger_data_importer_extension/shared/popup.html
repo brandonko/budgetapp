@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ledger Data Importer</title>
+  <link rel="icon" type="image/png" href="icons/icon-32.png">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <img src="icons/ledger.svg" alt="" width="40" height="40">
+      <div>
+        <h1>Ledger</h1>
+        <p>Data importer</p>
+      </div>
+      <span id="version" class="version"></span>
+    </header>
+
+    <section class="launch" aria-label="Import data">
+      <p>Choose a source and date range in Ledger, then review your transactions before saving.</p>
+      <form id="open-ledger-form">
+        <label for="ledger-server">Ledger server</label>
+        <select id="ledger-server" aria-describedby="server-help" disabled>
+          <option>Loading servers…</option>
+        </select>
+        <p id="server-help" class="hint">Keep Ledger running at this address.</p>
+        <button id="open-ledger" type="submit" class="primary" disabled>
+          Open Import data <span aria-hidden="true">→</span>
+        </button>
+      </form>
+      <p id="status" class="status" role="status" hidden></p>
+      <button id="connection-settings" type="button" class="text-button">Ledger connection settings</button>
+    </section>
+
+    <section class="sources" aria-labelledby="sources-heading">
+      <h2 id="sources-heading">Supported sources</h2>
+      <ul>
+        <li>Credit Karma</li><li>Amazon</li><li>AliExpress</li><li>Venmo</li>
+        <li>eBay</li><li>Walmart</li><li>Apple Card</li><li>Capital One</li><li>Schwab Checking</li>
+      </ul>
+      <p class="hint">CSV uploads, including Apple Card, need no extension.</p>
+    </section>
+
+    <footer>
+      <p>Your site sign-ins stay in Chrome.</p>
+      <a href="https://github.com/brandonko/budgetapp" target="_blank" rel="noopener noreferrer">About Ledger <span aria-hidden="true">↗</span></a>
+    </footer>
+  </main>
+  <script src="trusted_origins.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

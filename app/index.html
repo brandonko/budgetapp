@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <script src="/theme.js?v=20260909-import-preferences-1"></script>
     <meta name="description" content="Clear monthly, annual, and year-over-year views of your money." />
     <title>Ledger — Spending overview</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
-    <script src="/app.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
+    <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/app.js?v=20260909-reconcile-flags-1" defer></script>
   </head>
   <body>
     <header class="site-header site-header--dashboard">
@@ -345,6 +345,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-dialog-body">
+          <div class="transaction-dialog-controls">
+
         <aside class="internal-transfer-info" id="internal-transfer-info" hidden>
           <span class="import-note-icon" aria-hidden="true">i</span>
           <div>
@@ -367,12 +370,16 @@
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="transaction-filter-button" type="button"
-              aria-expanded="false" aria-haspopup="true" aria-controls="transaction-filter-popover">
+              aria-expanded="false" aria-controls="transaction-filter-popover">
               Filters <span id="transaction-filter-count" hidden></span>
             </button>
-            <div class="transaction-filter-popover" id="transaction-filter-popover"
+
+          </div>
+          <div id="transaction-dialog-sort"></div>
+        </div>
+        <div class="transaction-filter-panel" id="transaction-filter-popover"
               role="group" aria-label="Transaction filters" hidden>
-              <div class="transaction-filter-popover-heading">
+              <div class="transaction-filter-panel-heading">
                 <strong>Filter transactions</strong>
                 <span>Choose one or more filters.</span>
               </div>
@@ -416,21 +423,22 @@
                     </select>
                   </label>
                 </div>
+              <label class="transaction-flag-filter"><input id="transaction-flagged-filter" name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
               </fieldset>
-              <div class="transaction-filter-popover-actions">
+
+              <div class="transaction-filter-panel-actions">
                 <button class="text-button" id="reset-transaction-filters" type="button">Reset</button>
               </div>
             </div>
-          </div>
-          <div id="transaction-dialog-sort"></div>
-        </div>
         <div class="transaction-active-filters" id="transaction-active-filters" hidden>
           <div class="transaction-filter-chips" id="transaction-filter-chips"></div>
           <button class="text-button" id="clear-transaction-filters" type="button">Clear all</button>
         </div>
         <div class="subcategory-summary" id="subcategory-summary" hidden></div>
+          </div>
         <div class="transaction-list" id="transaction-list"></div>
-      </div>
+        </div>
+        </div>
     </dialog>
 
     <dialog class="transaction-form-dialog" id="transaction-form-dialog">

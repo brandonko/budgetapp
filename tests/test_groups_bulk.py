@@ -93,13 +93,48 @@ class GroupSchemaTests(unittest.TestCase):
         self.assertEqual(result["tags"], "tools, apparel, BIKE")
         self.assertEqual(set(result["flags"].split(",")), {"custom", "include-in-budget"})
         for field in set(COLUMNS) - {"tags", "flags"}:
-            self.assertEqual(result[field], original[field])
+            self.assertEqual(result.get(field, ""), original.get(field, ""))
         self.assertEqual(apply_bulk_changes(result, {"tags": {"mode": "remove", "value": "TOOLS"}})["tags"], "apparel, BIKE")
         self.assertEqual(apply_bulk_changes(result, {"tags": {"mode": "replace", "value": "bike"}})["tags"], "bike")
         self.assertEqual(apply_bulk_changes(result, {"tags": {"mode": "clear", "value": ""}})["tags"], "")
 
 
 class BulkApiTests(unittest.TestCase):
+    def test_follow_up_flags_persist_without_changing_money_or_other_fields(self):
+        original = row(flags="custom,refunded,internal-transfer,refund-receipt-2026-08-22-5000")
+        write_transactions_atomic(self.path, [original])
+        revision = read_transaction_state(self.path)[1]
+        before = self.path.read_bytes()
+        status, result = self.request("/api/transactions/bulk", {
+            "revision": revision, "ids": [0], "changes": {"flagged": True}, "confirm": True})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["changed"], 1)
+        self.assertEqual(next((self.path.parent / "backups").glob("*.csv")).read_bytes(), before)
+        [saved], _ = read_transaction_state(self.path)
+        self.assertEqual(set(saved["flags"].split(",")), set(original["flags"].split(",")) | {"flagged"})
+        self.assertEqual({key: value for key, value in saved.items() if key != "flags"},
+                         {key: value for key, value in original.items() if key != "flags"})
+        exported, _ = transaction_export_csv([saved], "2026-01-01", "2026-12-31")
+        self.assertIn("flagged", parse_ledger_import_csv(exported.decode("utf-8-sig"))[0][0]["flags"])
+        status, cleared = self.request("/api/transactions/bulk", {
+            "revision": result["revision"], "ids": [0], "changes": {"flagged": False}, "confirm": True})
+        self.assertEqual(status, 200, cleared)
+        self.assertEqual(read_transaction_state(self.path)[0], [original])
+
+    def test_flags_reject_stale_revisions_invalid_values_and_missing_confirmation(self):
+        before = self.path.read_bytes()
+        for changes, revision, confirm, expected in [
+            ({"flagged": "true"}, self.revision, True, 400),
+            ({"flagged": 1}, self.revision, True, 400),
+            ({"flagged": True}, "stale", True, 409),
+            ({"flagged": True}, self.revision, False, 400),
+        ]:
+            status, _ = self.request("/api/transactions/bulk", {
+                "revision": revision, "ids": [0], "changes": changes, "confirm": confirm})
+            self.assertEqual(status, expected)
+            self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse((self.path.parent / "backups").exists())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary.name) / "transactions.csv"
@@ -193,6 +228,8 @@ class BulkApiTests(unittest.TestCase):
         before = self.path.read_bytes()
         staged = [dict(self.rows[0], _stagedId=5, _classificationMatched=False, _selected=False),
                   dict(self.rows[0], _stagedId=9, group=" la TRIP ", _classificationMatched=True)]
+        for item in staged:
+            item.pop("id", None)  # Two incoming occurrences are distinct records.
         status, result = self.request("/api/transactions/staged-preview", {"revision": self.revision, "transactions": staged})
         self.assertEqual((status, result["new"], result["duplicates"]), (200, 1, 1))
         self.assertEqual({item["_stagedId"] for item in result["transactions"]}, {5, 9})

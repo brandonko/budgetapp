@@ -14,6 +14,7 @@ from server import (LEDGER_IMPORT_COLUMNS, read_transaction_state, write_transac
                     transfer_review_path, transfer_plan, public_state,
                     INTERNAL_TRANSFER_DESCRIPTION_PATTERN, BILL_PAYMENT_WINDOW_DAYS)
 import transfers
+import reconciliation
 
 
 def pair():
@@ -103,12 +104,13 @@ class PersistedTransferTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         saved, revision = read_transaction_state(self.path)
         for old, new in zip(original, saved):
-            self.assertEqual({key: value for key, value in new.items() if key != "flags"},
-                             {key: value for key, value in old.items() if key != "flags"})
+            self.assertEqual({key: value for key, value in new.items() if key not in {"flags", "links"}},
+                             {key: value for key, value in old.items() if key not in {"flags", "links"}})
+        self.assertEqual(reconciliation.links(saved[0]), [{"transactionId": saved[1]["id"], "type": "transfer"}])
         tokens = [transfers.flags(item) - {"internal-transfer"} for item in saved]
         self.assertEqual(tokens[0], tokens[1])
         self.assertTrue(tokens[0])
-        self.assertTrue(all(item["_internalTransferSource"] == "automatic" for item in result["transactions"]))
+        self.assertTrue(all(item["_internalTransferSource"] == "linked" for item in result["transactions"]))
         self.assertEqual(next((self.path.parent / "backups").glob("*.csv")).read_bytes(), before)
         self.assertEqual(self.confirm(preview)[0], 409)
         repeat = self.scan()
@@ -221,7 +223,9 @@ class PersistedTransferTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         self.assertEqual(result["import"]["existingTransfersUpdated"], 1)
         old = next(item for item in read_transaction_state(self.path)[0] if item["amount"] == 100)
-        self.assertEqual({k: v for k, v in old.items() if k != "flags"}, {k: v for k, v in original.items() if k != "flags"})
+        self.assertEqual({k: v for k, v in old.items() if k not in {"flags", "links"}},
+                         {k: v for k, v in original.items() if k not in {"flags", "links"}})
+        self.assertEqual(reconciliation.links(old)[0]["type"], "transfer")
         self.assertEqual(next((self.path.parent / "backups").glob("*.csv")).read_bytes(), before)
 
     def test_deselection_and_edits_invalidate_old_plan_and_do_not_flag_missing_side(self):
@@ -264,12 +268,14 @@ class PersistedTransferTests(unittest.TestCase):
         self.assertEqual(self.commit(token, refreshed, selected)[0], 200)
         self.assertEqual(sum("internal-transfer" in transfers.flags(item) for item in read_transaction_state(self.path)[0]), 2)
 
-    def test_saved_pair_survives_description_edits_and_deleted_counterpart(self):
+    def test_saved_pair_survives_description_edits_but_deletion_unlinks_counterpart(self):
         saved, _, _ = transfer_plan(pair(), "baseline")
         saved[0]["description"] = "Renamed"
-        result = public_state(saved[:1], "new revision")["transactions"][0]
+        result = public_state(saved, "new revision")["transactions"][0]
         self.assertTrue(result["_isInternalTransfer"])
         self.assertEqual(transfers.find_pairs(saved + [pair()[1]], INTERNAL_TRANSFER_DESCRIPTION_PATTERN), [])
+        remaining = reconciliation.unlink_deleted(saved, saved[:1])
+        self.assertFalse(public_state(remaining, "new revision")["transactions"][0]["_isInternalTransfer"])
 
     def test_empty_preview_does_not_create_database(self):
         preview = self.scan()

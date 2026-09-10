@@ -16,7 +16,7 @@ class UploadTabsTests(unittest.TestCase):
             r'[^>]*aria-controls="([^"]+)"[^>]*>',
             html,
         )
-        self.assertEqual(len(tabs), 9)
+        self.assertEqual(len(tabs), 10)
         self.assertEqual(sum(selected == "true" for _tab, selected, _panel in tabs), 1)
         for tab_id, _selected, panel_id in tabs:
             with self.subTest(tab_id=tab_id):
@@ -111,6 +111,7 @@ class UploadTabsTests(unittest.TestCase):
             "ebay": ("eBay", "CREDIT CARD", "eBay"),
             "applecard": ("Apple Card", "CREDIT CARD", "Goldman Sachs"),
             "capitalone": ("Capital One", "CREDIT CARD", "Capital One"),
+            "schwab": ("Schwab Checking", "BANK", "Charles Schwab"),
         }
         for source, values in expected.items():
             for field, value in zip(("account-name", "account-type", "provider"), values):
@@ -158,7 +159,7 @@ class UploadTabsTests(unittest.TestCase):
         self.assertIn('${unmatched} no rule matched, ${internalTransfers} internal transfers', javascript)
         self.assertIn('.import-review-filter[aria-pressed="true"]', css)
         self.assertIn('checkbox.checked = transaction._selected', javascript)
-        self.assertIn("state.reviewValidationFailed || selected === 0", javascript)
+        self.assertIn("state.reviewValidationFailed || (selected === 0 && matched === 0)", javascript)
         self.assertIn("state.reviewCommitting || state.reviewRefreshing", javascript)
         self.assertIn(
             '_selected: !transaction._isDuplicate && Number(transaction.amount) !== 0',

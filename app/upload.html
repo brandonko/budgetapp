@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script src="/theme.js?v=20260905-display-preferences-1"></script>
+    <script src="/theme.js?v=20260909-import-preferences-1"></script>
     <meta name="description" content="Import CSV, Credit Karma, Amazon, AliExpress, eBay, Walmart, Venmo, and Apple Card data into Ledger." />
     <title>Import data — Ledger</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-import-review-1" />
-    <link rel="stylesheet" href="/transaction-tools.css?v=20260907-value-dropdowns-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260909-reconcile-flags-1" />
+    <link rel="stylesheet" href="/transaction-tools.css?v=20260909-transaction-cards-1" />
     <script src="/navigation.js" defer></script>
-    <script src="/transactions-model.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-ui.js?v=20260907-notes-search-1" defer></script>
-    <script src="/transaction-bulk.js?v=20260907-subcategory-parent-1" defer></script>
-    <script src="/upload.js?v=20260907-notes-search-1" defer></script>
+    <script src="/transactions-model.js?v=20260909-inline-filters-1" defer></script>
+    <script src="/transaction-ui.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/transaction-bulk.js?v=20260909-reconcile-flags-1" defer></script>
+    <script src="/upload.js?v=20260909-reconcile-flags-1" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -86,6 +86,13 @@
           <section>
             <h2>Dates and account details</h2>
             <p>
+              <a href="/settings#preferences">Settings → Preferences</a> controls the default
+              lookback for every importer (2 weeks initially) and <strong>Suggest refund matches</strong>.
+              Refund suggestions are enabled by default for all sources, including CSVs. They look
+              for saved purchases at the exact same price in the previous 90 days; you must choose
+              and confirm a match during review. Turning this off disables suggestions everywhere.
+            </p>
+            <p>
               Start and end dates are inclusive and limit the transaction or order dates requested
               by automatic imports. Apple Card CSV uploads review every row in the selected file, so
               the date fields do not filter a manually uploaded Apple Card CSV. Capital One’s
@@ -115,12 +122,16 @@
           </div>
         </div>
         <details class="extension-help" id="extension-help">
-          <summary>Companion extension not installed?</summary>
+          <summary>Connect the companion extension</summary>
           <p>
             Open <code>chrome://extensions</code>, enable Developer mode, choose
             <strong>Load unpacked</strong>, and select this repository's
             <code>ledger_data_importer_extension</code> folder. Reload this page afterward.
           </p>
+          <p>Using a network address? Open the extension's <strong>Ledger connection settings</strong>,
+            add this server's address and port, allow site access, then refresh this page.
+            If it is already listed, click <strong>Reconnect</strong> beside that server.
+            Localhost connects automatically.</p>
         </details>
       </aside>
 
@@ -155,6 +166,8 @@
         </button>
         <button id="capitalone-import-tab" role="tab" type="button"
           aria-selected="false" aria-controls="capitalone-import-panel" tabindex="-1">Capital One</button>
+        <button id="schwab-import-tab" role="tab" type="button"
+          aria-selected="false" aria-controls="schwab-import-panel" tabindex="-1">Schwab Checking</button>
         <button id="csv-import-tab" role="tab" type="button"
           aria-selected="false" aria-controls="csv-import-panel" tabindex="-1">
           CSV
@@ -211,7 +224,7 @@
                 <input id="creditkarma-ignore-walmart" type="checkbox" checked />
                 <span>Ignore Walmart transactions <small>(description contains “walmart”, “wal-mart”, “wal mart”, or “wm supercenter”)</small></span>
               </label>
-              <p class="apple-card-file-help">Turn off Walmart exclusion to include account charges such as membership fees, refunds, or purchases not covered by itemized imports.</p>
+              <p class="apple-card-file-help">Turn off Walmart exclusion to include account charges such as membership fees or purchases not covered by itemized imports.</p>
             </fieldset>
             <div class="amazon-direct-actions">
               <button class="primary-button" id="creditkarma-import-button" type="button" disabled>
@@ -495,6 +508,41 @@
           </div>
         </section>
 
+        <section class="amazon-direct" id="schwab-import-panel" role="tabpanel"
+          aria-labelledby="schwab-import-tab" tabindex="0" hidden>
+          <div class="amazon-direct-copy">
+            <h2>Schwab Checking</h2>
+            <p class="import-source-description">Import posted transactions from one Schwab checking account. Choose a distinct account name below, then select that checking account in Schwab.</p>
+            <details class="extension-help">
+              <summary>How this import works</summary>
+              <p>Start the import, sign in to Schwab, and select your checking account. Open its transaction history, choose a range covering the dates below, and export CSV. Keep that tab open; Ledger captures the export and opens a review here.</p>
+              <p>Import one checking account at a time. Use the same Ledger account name on later imports. Withdrawals are spending; deposits are credits, with classification rules determining their category. Pending transactions are skipped. Brokerage and retirement activity are not supported.</p>
+              <p>The selected dates include both endpoints. Review duplicates carefully when importing another account or overlapping Credit Karma data: Ledger compares date and amount across accounts. You can select a legitimate transaction marked as a duplicate.</p>
+              <p>Nothing is saved until you confirm the review. Export account headers, balances, and check-number columns stay in the browser. Ledger receives transaction descriptions but never passwords or cookies. If the export is not captured, cancel and report the issue so the collector can be updated.</p>
+            </details>
+          </div>
+          <div class="amazon-direct-controls">
+            <div class="date-range-fields">
+              <label><span>Start date</span><input id="schwab-start-date" type="date" required /></label>
+              <label><span>End date</span><input id="schwab-end-date" type="date" required /></label>
+            </div>
+            <fieldset class="import-account-fields">
+              <label><span>Account name</span><input id="schwab-account-name" type="text" value="Schwab Checking" maxlength="200" required /></label>
+              <label><span>Account type</span><input id="schwab-account-type" type="text" value="BANK" maxlength="200" required /></label>
+              <label><span>Provider</span><input id="schwab-provider" type="text" value="Charles Schwab" maxlength="200" required /></label>
+            </fieldset>
+            <div class="amazon-direct-actions">
+              <button class="primary-button" id="schwab-import-button" type="button" disabled>Import Schwab checking <span aria-hidden="true">→</span></button>
+              <button class="secondary-button" id="schwab-cancel-button" type="button" hidden>Cancel import</button>
+            </div>
+            <div class="amazon-progress" id="schwab-progress" aria-live="polite" hidden>
+              <div class="amazon-progress-track"><span id="schwab-progress-bar"></span></div>
+              <p id="schwab-progress-message"></p>
+            </div>
+            <p class="upload-error amazon-direct-error" id="schwab-error" role="alert" hidden></p>
+          </div>
+        </section>
+
         <section class="amazon-direct" id="walmart-import-panel" role="tabpanel"
           aria-labelledby="walmart-import-tab" tabindex="0" hidden>
           <div class="amazon-direct-copy">
@@ -591,9 +639,10 @@
             </p>
             <p class="csv-import-schema">
               Use this header, without <code>createdAt</code>:<br />
-              <code>date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags</code>
+              <code>date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,id,links</code>
             </p>
-            <p>Older Ledger CSV exports without the group column are also supported.</p>
+            <p>Older Ledger CSV exports without group, id, or links are also supported. Leave id and links blank for new, unlinked rows; Ledger assigns unique IDs.</p>
+            <p>Exports include linked counterparts, even outside the chosen dates. Import the entire linked set to preserve its net cost.</p>
             <p>Every row requires a date, description, and amount. All other values may be blank.</p>
           </div>
           <div class="amazon-direct-controls">
@@ -633,6 +682,9 @@
             </svg>
           </button>
         </header>
+        <div class="transaction-dialog-body">
+          <div class="transaction-dialog-controls">
+
         <div class="transaction-toolbar">
           <label class="transaction-search-field">
             <span>Search</span>
@@ -641,12 +693,16 @@
           </label>
           <div class="transaction-filter-menu">
             <button class="transaction-filter-button" id="import-review-filter-button" type="button"
-              aria-expanded="false" aria-haspopup="true" aria-controls="import-review-filter-popover">
+              aria-expanded="false" aria-controls="import-review-filter-popover">
               Filters <span id="import-review-filter-count" hidden></span>
             </button>
-            <div class="transaction-filter-popover" id="import-review-filter-popover"
+
+          </div>
+          <div id="import-review-sort"></div>
+        </div>
+        <div class="transaction-filter-panel" id="import-review-filter-popover"
               role="group" aria-label="Imported transaction filters" hidden>
-              <div class="transaction-filter-popover-heading">
+              <div class="transaction-filter-panel-heading">
                 <strong>Filter transactions</strong>
                 <span>Choose one or more filters.</span>
               </div>
@@ -665,14 +721,13 @@
                   <label><span>Account name</span><select id="import-review-account-filter"><option value="">All accounts</option></select></label>
                   <label><span>Provider</span><select id="import-review-provider-filter"><option value="">All providers</option></select></label>
                 </div>
+              <label class="transaction-flag-filter"><input id="import-review-flagged-filter" name="flagged" type="checkbox" role="switch" /><span>Flagged only</span></label>
               </fieldset>
-              <div class="transaction-filter-popover-actions">
+
+              <div class="transaction-filter-panel-actions">
                 <button class="text-button" id="reset-import-review-filters" type="button">Reset</button>
               </div>
             </div>
-          </div>
-          <div id="import-review-sort"></div>
-        </div>
         <div class="transaction-active-filters" id="import-review-active-filters" hidden>
           <div class="transaction-filter-chips" id="import-review-filter-chips"></div>
           <button class="text-button" id="clear-import-review-field-filters" type="button">Clear all</button>
@@ -688,7 +743,9 @@
         </div>
         <aside class="import-invalid-note" id="import-review-invalid-note" hidden></aside>
         <p class="upload-error import-review-error" id="import-review-error" hidden></p>
+          </div>
         <div class="transaction-list" id="import-review-list"></div>
+        </div>
         <footer class="import-review-actions">
           <button class="secondary-button" id="cancel-import-review" type="button">Cancel</button>
           <button class="primary-button" id="confirm-import-review" type="button" disabled>Import selected (0)</button>

@@ -3,6 +3,11 @@
 This document records the product and implementation preferences that should
 guide future work on Ledger. Update it whenever a decision changes.
 
+For a user-facing explanation of the current linked-transaction schema,
+Reconcile workflow, import preferences, and extension connections, see
+[Current workflows](docs/current-workflows.md). Keep that guide and the main
+README synchronized with the implementation and the invariants below.
+
 ## Product direction
 
 Ledger is a local-first personal budgeting application. It should remain simple,
@@ -29,19 +34,25 @@ third-party Python dependency unless a future requirement clearly justifies it.
   rows the user explicitly selected.
 - Writes must be validated, revision-checked, serialized within the server, and
   performed using atomic file replacement.
-- The thirteen persisted columns, in order, are:
+- The fifteen persisted columns, in order, are:
 
   ```text
-  date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt
+  date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,createdAt,id,links
   ```
 
 - `flags` contains normalized, comma-separated identifiers. `refunded`,
   `internal-transfer`, and `include-in-budget` are supported budget-treatment
-  flags. `refunded` is the
-  first supported flag. Internal UI identifiers and derived properties such as
+  flags. `flagged` is a follow-up marker only. Internal UI identifiers and derived properties such as
   `_id` and `_isBillPayment` must not be written as extra CSV columns.
 - `createdAt` is an immutable UTC ISO 8601 timestamp shared by every row from
   one committed import. It is blank for manual and legacy transactions.
+- `id` is a durable, unique, immutable transaction identifier, distinct from the
+  revision-local integer `_id` used by existing editor endpoints. Use IDs in
+  links, never row positions. Legacy IDs are assigned during a backed-up atomic
+  migration; reads may derive temporary deterministic IDs but never write.
+- `links` is a compact JSON array on the original positive-amount purchase,
+  containing `{ "transactionId": "durable-credit-id", "type": "refund" }` entries.
+  Allowed types are refund, transfer, repayment. See reconciliation invariants below.
 - `tags` is an optional comma-separated list of user-defined labels. Trim each
   label, discard blanks, and deduplicate case-insensitively while preserving the
   first spelling and order. A comma is therefore the tag delimiter and is not
@@ -151,6 +162,16 @@ third-party Python dependency unless a future requirement clearly justifies it.
   current category, subcategory, description, account name, and provider. Ignore
   blank matchers. All populated matchers in
   one rule must match; multiple rules within a classification are alternatives.
+  Reject backreferences and repeated groups containing another repetition or
+  alternation to block known high-risk backtracking structures. This is a
+  conservative structural policy, not a linear-time regex engine.
+  Interpret verbose flags, comments, escapes, and literal leading brackets
+  consistently with Python regex syntax; client-side JavaScript must not reject
+  valid Python patterns. GET and Export preserve older rejected matchers for
+  repair and report field-level errors without executing them or rewriting the
+  saved file. All save, preview, import, and matching paths remain strict. A
+  library containing multiple rejected matchers can be exported, corrected, and
+  explicitly re-imported as a complete valid replacement.
 - Each rule may include optional freeform notes documenting its rationale. Keep
   the notes editor visually separate from regex matchers and explicitly explain
   that notes do not participate in matching. In read-only mode, show a saved note
@@ -210,6 +231,12 @@ third-party Python dependency unless a future requirement clearly justifies it.
 - Test mutations against an isolated copy or synthetic database, never the
   canonical master file.
 - Bind the server to `127.0.0.1` by default.
+- The optional `deploy/` workflow runs a LAN-only service in a separate Debian
+  VM, explicitly binding port 8000 on all interfaces. Keep its persistent data
+  in `/var/lib/ledger`, outside versioned code. Deploy the latest `main` only
+  after regression tests, stop the app before a full data snapshot, and check
+  startup. Failed startup must not silently restore data; preserve its backup
+  and stop for operator review. This workflow does not add internet authentication.
 
 ## Amount conventions
 
@@ -223,14 +250,18 @@ Keep this backend convention because import, reconciliation, and CSV logic rely
 on it. Translate it for people in the interface:
 
 - Income is always displayed as a positive amount.
-- Income category cards, income transactions, and income modal totals should use
-  positive presentation and green styling.
+- Income summary/category cards can use green styling. Transaction rows instead
+  show an explicit `+` before money received (income, refund, repayment, incoming
+  transfer), e.g. `+$25.00`, without relying on green. Purchases remain `$25.00`.
+  Determine direction from the expense-oriented effective amount, or the source
+  amount for excluded rows; retain their muted strike-through and plus sign.
+  Never change persisted signs or budget math to format a row.
 - Total spent uses a neutral background.
 - Net total is `income - spending`.
 - A positive net is a surplus and uses a light-green background.
 - A negative net means spending exceeded income and uses a light-red background.
-- Refunds outside the `Income` category remain negative and reduce the total for
-  their spending category.
+- Refunds outside the `Income` category stay negative in storage and budget math
+  and reduce their spending category, while rows show the received value with `+`.
 
 ## Dashboard periods
 
@@ -325,12 +356,12 @@ on it. Translate it for people in the interface:
   expenses, credits, and income compare by dollar magnitude.
 - Keep the dashboard transaction toolbar compact: description/notes search and a
   plain-language combined sort menu remain visible; category/subcategory and
-  tag and account/provider live in a Filters popover. Keep category and subcategory
+  tag and account/provider live in an expandable Filters section. Keep category and subcategory
   adjacent, limit subcategory choices to the selected category, show an active
   filter count, and render applied filters as removable chips. Populate the tag
   filter from the distinct tags available in the current transaction list and
   match tag names case-insensitively. On narrow screens,
-  stack each related pair and keep the popover within the modal.
+  stack each related pair and use the modal's full content width.
 - The interface must remain responsive and usable on desktop and mobile.
 - Reserve a stable document scrollbar gutter so navigating between short and
   long pages does not shift centered layouts horizontally.
@@ -366,12 +397,12 @@ on it. Translate it for people in the interface:
   multiple tags with Any/All matching. Combined tag results count each
   transaction exactly once, including when tags overlap.
 - On Transactions, the tag picker and Any/All mode belong inside the existing
-  Filters popover, not a separate toolbar or nested popover. Tags use the same
-  immediate-update behavior as the other filters; closing the popover keeps
+  Filters section, not a separate toolbar or nested popup. Tags use the same
+  immediate-update behavior as the other filters; collapsing the section keeps
   selections. Include tags in the active-filter count and removable
   chips, and display the AND/OR mode beside chips when multiple tags are active.
-  Let tag buttons wrap to their full height; only the outer Filters popover
-  scrolls. Do not add a capped-height or independently scrolling tag list.
+  Let tag buttons wrap to their full height; the page itself scrolls. Do not add
+  a capped-height or independently scrolling tag list or Filters panel.
 - Do not show Refresh or Apply filters buttons on Transactions. Filter selections,
   tag modes, and Reset update results/totals locally and persist immediately,
   without refetching transactions on each change. Keep the last valid date range
@@ -431,11 +462,27 @@ on it. Translate it for people in the interface:
   **Review unclassified**. The full-page Transactions list follows the same core
   contract while adding its all-time query, summaries, and pagination.
 - Keep the core structure and behavior synchronized across those variants:
-  shared transaction rows and badges, description/notes search, the Filters popover,
+  shared transaction rows and badges, description/notes search, the Filters section,
   category/subcategory pairing, tag/account/provider filters, active-filter
   chips, and the combined sort control. Reuse helpers from
   `app/transaction-ui.js` instead of independently recreating row or sort
   behavior.
+- Every top-level transaction row is a rounded rectangular card, including plain,
+  edited, flagged, duplicate, and unmatched rows. Use equal padding, margins,
+  rounded corners, and all four border edges, including the last row, across
+  all modal variants, all-time Transactions, and bulk-delete review. Plain cards
+  use `--surface-subtle` and the theme's `--line` border, never standalone row
+  separators or hard-coded light colors. State highlighting changes only colors,
+  not geometry. Edited unmatched rows retain their badges but lose the yellow
+  fill, keeping the neutral card. Nested read-only counterparts (refund candidates
+  and saved links) use compact, fully outlined inset cards with matching date,
+  title, metadata, and amount layout. Use a 48px date track and a 64px-tall
+  month/day/year block with a muted year; never squeeze a wider date into a 40px
+  track. Scope description typography to direct children so it cannot restyle
+  dates, amounts, or nested cards. Allow candidate metadata to wrap. Audit mixed
+  states in both themes. Import refund controls are a row-level detail section:
+  align below the description on desktop and use the full card width on mobile,
+  rather than nesting a narrow purchase card inside the description column.
 - All transaction search bars use the same literal, case-insensitive matcher
   from `transactions-model.js`, exposed by `transaction-ui.js`. A row matches
   when either its description or notes contains the query; count it once if
@@ -444,12 +491,29 @@ on it. Translate it for people in the interface:
   notes are empty. Retain the legacy `description` filter-state key for saved
   views; label the UI Search with a descriptions-and-notes placeholder. This
   does not change classification regex matchers or their rule-note semantics.
-- Group belongs inside each list's **Filters** popover, with All groups and No
+- Group belongs inside each list's **Filters** section, with All groups and No
   group choices, live filtering/Reset behavior, and an active-filter indicator. Keep its
   state with the page's other filters so Clear all and returning from edits work.
   Do not introduce a separate group-filter toolbar. Reuse the group helpers in
   `app/transaction-ui.js` for consistent names and matching.
-- All shared transaction filter popovers apply each selection and Reset immediately,
+- Filters expand in normal document flow below the search/sort bar and above
+  the transaction list, never as floating overlays. Use `setTransactionFilterPanel`
+  from `transaction-ui.js` and the shared panel/body CSS. List modals have a
+  definite default height of 88dvh (capped at 960px), with their shell filling
+  that height; do not let the rows collapse to their small flex basis. Expanding
+  or collapsing filters must not resize the modal; only the space available for
+  rows changes. Keep the same viewport margin in both states. This sizing
+  does not apply to transaction editors. `.transaction-dialog-body` is a non-scrolling flex layout:
+  `.transaction-dialog-controls` holds the toolbar, filters, chips and page-specific
+  toggles, separately from the scrolling transaction-list sibling. Scrolling rows
+  must never move the controls. Short screens may scroll controls independently,
+  with a sticky search/sort toolbar inside that region. Preserve a nonzero row
+  viewport, even for empty results, plus accessible header and confirmation footer.
+  Clicking Filters or pressing Escape
+  collapses the section without clearing selections; outside clicks do not.
+  Keep this structure in dashboard, import, history, reconciliation, unclassified,
+  and classification-preview modals; the all-time page uses the same in-flow panel.
+- All shared transaction filter panels apply each selection and Reset immediately,
   without an Apply filter button or closing after a selection. Use the shared
   `bindLiveTransactionFilters` helper after dependency/reset handlers are wired.
   Closing does not revert valid filters. This is read-only view state, entirely
@@ -529,6 +593,16 @@ on it. Translate it for people in the interface:
   name and expanded state synchronized before returning focus on Escape.
 - Use the same menu across pages, clearly mark the current page, close it on an
   outside click or Escape, and return focus to the menu button after Escape.
+- Keep native navigation separate from ARIA menu widgets. Each app HTML page
+  must load the shared deferred navigation script and connect its summary to a
+  unique, named navigation region. Discover pages in regression tests so new
+  destinations cannot silently miss this contract.
+- Preserve link-event propagation so the all-time page can save pending flags
+  before navigation, and remain on the page with its queued changes if saving
+  fails. Closing the disclosure must not bypass that guard.
+- Inline transaction Filters also use an expanded-state toggle with a unique
+  controlled panel, not popup-menu semantics. Check all shared variants without
+  changing legitimate combobox/listbox or native details interactions.
 - Organize Settings as accessible tabs, beginning with Exports. Add future user
   preferences there instead of adding unrelated controls to the dashboard or
   import page.
@@ -539,8 +613,9 @@ Do not exclude the entire `Transfer` category. Venmo, Zelle, and other unmatched
 transfers may be legitimate expenses or incoming money.
 
 Internal-transfer treatment is a durable decision, not a read-time calculation.
-Never run reconciliation from `public_state`, transaction GETs, dashboards, or
-other rendering paths. Imports and an explicit Settings scan propose pairs using:
+Never run heuristic match detection from `public_state`, transaction GETs,
+dashboards, or other rendering paths; those paths only validate/project saved
+links. Imports and an explicit Settings scan propose pairs using:
 
 1. At least one row has category `Transfer`, case-insensitively, or a description
    that looks like a transfer or account payment. The other row may retain any
@@ -556,52 +631,113 @@ other rendering paths. Imports and an explicit Settings scan propose pairs using
    occurrences against each other and existing eligible rows, across month/year
    boundaries. Never rematch already flagged rows or consume one side twice.
 
-An `internal-transfer` flag always excludes a row. An `include-in-budget` flag
+On unlinked legacy records, an `internal-transfer` flag excludes a row. An `include-in-budget` flag
 prevents detection and forces the row to count normally. With neither flag, the
 row counts normally and is eligible for future detection. The shared editor
 exposes Eligible for detection, Internal transfer, and Count normally.
 
-Confirmed automatic pairs also share a reserved `transfer-pair-<digest>` flag
-inside the existing flags column; no new CSV columns are required. This preserves
-automatic provenance and pairing identity across sorting and edits. Manual and
-classification overrides win. Returning a row to an eligible/forced-included
-state removes its pair metadata; its previously paired counterpart remains
-excluded until explicitly corrected. Editing descriptions or deleting a
-counterpart must not silently change an already saved exclusion.
+Confirmed pairs now use explicit `id`/`links` relationships. Legacy exact
+two-member `transfer-pair-*` groups can be upgraded during schema migration or
+restore, with a safety backup; never infer new matches at startup. Preserve
+unpaired old exclusion flags and legacy refund receipts when a source is missing.
+Links take precedence over budget flags. Disable legacy treatment controls while
+linked and reject conflicting bulk/classification changes; unlink the original
+purchase first. Description edits never break links. Explicit deletion removes
+dangling references and restores surviving transactions' remaining net/source
+amount; preserve follow-up flags and unrelated fields. Warn about this in delete
+confirmations and always make a safety backup.
 
-Import proposals must show existing counterpart rows that will be flagged,
+Relationships form disjoint shallow stars: refunds and transfers are one-to-one;
+repayments allow up to 500 negative credits against one positive purchase. A
+credit has one owner and cannot itself own links. Reject missing IDs, duplicate
+IDs, self-links, reused credits, chains, cycles, wrong signs and unbalanced
+transfer pairs. Transfers require different accounts and opposite nonzero amounts.
+Partial refunds and repayments retain the residual cost; overpayments may yield
+a negative net expense. Preserve every original date, amount and createdAt.
+
+Budget calculations use a linear projection of these saved links, NOT detection:
+the purchase contributes the sum of itself and its linked credits, attributed to
+its original date/category/tags/group. Linked credits contribute zero, even if
+categorized Income, but remain visible on their posting dates. Apply this to
+monthly, annual, YoY, tag totals, all-time totals and group comparisons. Shared
+rows display the root's net cost and an expandable full-width section of shared
+read-only source rows. Fully refunded/transfer/linked-credit amounts retain their
+original values with grey strike-through styling. The shared editor's collapsed
+Refunds & repayments section searches credits by description/notes and stages
+links until its own save and any enclosing review confirmation.
+
+Both sides use the shared **Refunds & repayments** editor with an explicit link
+type selector and shared transaction cards for selected records and search results.
+Infer the role from stored signs: positive is the original expense, negative is
+money received. Expense-side repayments allow several credits; credit-side editing
+allows exactly one expense. Refunds/transfers are 1:1; only transfers must balance
+exactly and cross accounts. Enforce these constraints in both UI and backend.
+Support the legacy request-only `repaymentTo` intent and the generalized `linkTo`
+object (`transactionId`, `type`; blank ID unlinks), resolving either atomically
+into purchase-owned `links`, never a second CSV relationship or child-owned link.
+Reject conflicting intents. Preserve other repayments, immutable IDs/createdAt
+and source amounts. An explicit credit-side link edit can change/unlink an existing
+refund or transfer; legacy repayment-only requests must not silently repurpose one.
+Remap reverse targets in forced import copies. Import previews resolve intents without
+writes, bind the canonical proposal to the confirmation digest, and apply only
+selected rows. A canceled or unchecked repayment cannot modify an existing purchase.
+
+CSV exports include the full linked family even outside the selected dates;
+the displayed count must include these counterparts. Accept old headers without
+id/links, and assign fresh IDs to forced imported copies while remapping their
+links. Incomplete linked import selections are rejected clearly, never silently
+converted to unlinked financial records. Occurrence-aware date/amount duplicate
+matching remains independent of durable IDs.
+
+Import proposals must show existing counterpart rows that will be linked,
 not just incoming rows. Recompute proposals after edits, checkbox changes, and
 force-including duplicates. Bind confirmation to both the CSV revision and the
 exact reviewed transfer plan; reject stale/unseen matches. Save selected incoming
-rows and reviewed existing-side flags in one atomic write, with a safety backup
+rows, reviewed links, and affected existing-row flags in one atomic write, with a safety backup
 for an existing database. Keep existing createdAt and all unrelated fields intact.
 All cancel paths write nothing; discard stale asynchronous preview responses.
 
-Settings → Internal transfers provides Find internal transfers and a staged
+Settings → Reconcile provides Find matches and a staged
 review using the same transaction modal, filters, sort and bulk/single editor as
 import history. It displays before/after changes, requires explicit confirmation,
 and makes a safety backup before writing. A no-op scan must not rewrite the CSV.
+The optional **Match nonzero decimal** checkbox (off initially) excludes whole-dollar
+amounts from both transfer and refund suggestions for that scan. It never hides
+saved links or prevents explicit manual linking. Validate the boolean at the API
+boundary and bind it into the review digest; preserve it through edits and confirmation.
 Keep the Settings card compact: explain matching, confirmation, and legacy-data
 reviews in the shared expandable info-panel style used by Import and Classifications.
-The review's type toggles reuse the import filter buttons: Proposed changes on,
-Already flagged off by default. Show unchanged persisted exclusions only when
-Already flagged is enabled; never add them to the write plan just for viewing.
+Also suggest exact-opposite credits matching a purchase within the preceding
+90 days. Refund suggestions require an explicit purchase choice and final review
+confirmation. Multiple price matches must not silently pick the first candidate.
+Expandable refund suggestions display shared, read-only transaction rows with
+an explicit **Link selected purchase** button BELOW the candidates. Radio selection
+only chooses; the button stages a link, and **Save reviewed changes** persists it.
+Show **Refund link staged** and an undo action while pending. Preserve candidate
+choices and disclosure state across flagging, filtering, and successful refreshes;
+reset them on cancel/new review. When edited rows overlap `refundSuggestions`, merge
+their `_refundCandidates` metadata instead of dropping it during deduplication.
+The review's type toggles reuse the import filter buttons: To review on,
+Already reconciled off by default. Show unchanged saved links/exclusions only when
+Already reconciled is enabled; never add them to the write plan just for viewing.
 Editing one moves it into proposed changes with a before/after preview and the
 same staged confirmation/cancel semantics. Type toggles compose with all shared
 search/filter/sort controls, reset on a new review, and stay hidden in import history.
 
 Legacy databases need one explicit full-database review before dashboards show
-totals under the new saved-only policy. Do not silently migrate financial flags
-at startup or on GET. A successful review records version 1 in the CSV-adjacent
+totals under the new saved-only policy. Do not run fresh financial matching at
+startup or on GET. Startup may upgrade exact saved pair metadata through the
+backed-up schema migration; new matches require this explicit review. A
+successful review records version 1 in the CSV-adjacent
 `<stem>.transfer-review.json` marker. Fresh databases created by a confirmed
 staged import are already reviewed. The marker is only upgrade bookkeeping;
-the CSV flags remain the sole source of budget treatment. Historical exports or
+CSV links and legacy flags remain the source of budget treatment. Historical exports or
 restores without saved flags can be scanned again through Settings.
 During the initial upgrade scan only, an already manually excluded row without
 pair metadata can still identify its old automatic counterpart, preserving legacy
 matching. Never reuse a persisted pair or override an explicit Count normally.
-The obsolete `/api/import` upload endpoint rejects proposed transfer matches and
-directs clients to staged import sessions; it must never apply unseen pair changes.
+The retired `/api/import` endpoint always returns HTTP 410 and writes nothing.
+All imports must use staged sessions and explicit confirmation.
 
 Excluded rows do not affect monthly or annual category cards, subcategories,
 charts, breakdown tables, spending, income, or net totals. They must remain
@@ -641,16 +777,18 @@ with a line-through, while continuing to use a $0 budget amount.
   optional freeform text and may safely contain commas or line breaks.
 - Tags are optional user-defined labels stored as a comma-separated list. Edit
   them as compact badges in transaction lists.
-- Users can toggle the `refunded` flag in the transaction editor. A refunded
-  transaction remains visible and retains its original date and amount for
+- Users can toggle the `refunded` flag on unlinked transactions in the editor.
+  Such a row remains visible and retains its original date and amount for
   duplicate detection, but contributes zero to all dashboard calculations.
+  Linked transactions instead use their saved relationship's effective amount;
+  unlink before changing budget treatment.
 - Users can set an internal-transfer treatment from every shared transaction
   editor, including import review and import history. Keep automatic detection
   overridable in both directions.
 - `createdAt` is system-managed and must survive edits unchanged.
-- Migrate compatible older CSVs to the thirteen-column schema
-  atomically by adding missing optional fields; never require users to recreate
-  an existing database.
+- Migrate compatible older CSVs to the fifteen-column schema, with validated
+  IDs and links, through a backed-up atomic migration; never require users to
+  recreate an existing database.
 - When an editor was opened from a monthly or annual transaction-list modal,
   saving, deleting, cancelling, or closing the editor returns to that refreshed
   list modal. Manual Add transaction continues to return to the dashboard.
@@ -668,7 +806,7 @@ The app should not depend on a separate `build_transactions.py` workflow. Data
 ingestion belongs in the **Import data** page at `/import`.
 
 - Show one import card per supported source: `Credit Karma`, `Amazon`, `AliExpress`,
-  `Venmo`, `eBay`, `Walmart`, `Apple Card`, `Capital One`, and generic `CSV`.
+  `Venmo`, `eBay`, `Walmart`, `Apple Card`, `Capital One`, `Schwab Checking`, and generic `CSV`.
 - Present importer cards as accessible tabs with only one card visible at a time.
   Keep Credit Karma selected initially, support arrow/Home/End keyboard navigation,
   and preserve every importer's form and progress state while switching tabs.
@@ -677,8 +815,8 @@ ingestion belongs in the **Import data** page at `/import`.
   Apple Card's manual CSV ignores date selectors; Capital One's manual CSV
   deliberately uses the same inclusive Transaction Date range as its direct import.
 - The generic CSV tab accepts exactly the Ledger schema without `createdAt`:
-  `date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags`.
-  Also accept the previous header without group, defaulting it to blank.
+  `date,description,amount,category,subcategory,accountName,accountType,provider,notes,tags,group,flags,id,links`.
+  Also accept previous headers without id/links or group, defaulting optional fields.
   Require a valid date, nonblank description, and finite numeric amount on each
   row; allow every other value to be blank. Validate rows independently, stage
   every valid row, and report the total invalid-row count in the shared review
@@ -727,6 +865,32 @@ ingestion belongs in the **Import data** page at `/import`.
   changes, and revalidation; reset for a new/discarded review. Cancelled, failed,
   no-op, and automatic changes must not mark a row as edited. Keep existing
   rule-match and duplicate badges, counts, and visibility filters unchanged.
+  Edited unmatched rows keep both **No rule matched** and **Edited** badges,
+  but lose the yellow background. A follow-up flag still takes visual priority.
+- Each shared transaction list has an icon-only follow-up flag to the right of
+  **Edit**, with an accessible label and `aria-pressed`. Store `flagged` in the
+  existing CSV `flags` column; preserve unknown flags and refund receipts. This
+  flag never changes budget treatment, amounts, or import inclusion. Red
+  highlighting wins over yellow/duplicate styling while enabled; clearing it
+  restores the row's underlying state. **Filters → Flagged only** is a two-state
+  switch: on filters to flagged rows; off includes all matching rows. Retire old
+  Not flagged selections to All. Apply across dashboard, all-time, import, import-history,
+  unclassified, classification-preview, and transfer-review lists. Bulk editing
+  also supports setting/clearing this flag. Use the shared list controller;
+  saved rows use revision-checked, backed-up writes, while all proposal/import
+  contexts stage the flag until their existing final confirmation. Do not
+  expose editing/flagging controls on read-only nested refund candidate rows.
+  Row flag toggles are synchronous optimistic updates, not per-click requests.
+  Cache net changes in the shared controller, preserving filters and inclusion.
+  Saved-list X/Escape/backdrop closing awaits a single atomic flag batch with
+  revision protection and a safety backup; failure keeps the list and queue open.
+  Temporarily opening an editor is not closing the review. Keep queued flags
+  across successful editor/bulk writes and row reindexing using durable IDs; do
+  not let unrelated refreshes silently accept a stale revision. On Transactions,
+  flush before in-app navigation and offer Save flags; browser reload/close warns
+  while pending rather than trusting unload writes. Staged imports/reconciliation
+  revalidate cached flags before their own final confirmation; all cancellation
+  paths discard them without database writes.
 - Write only checked rows after explicit confirmation. For an uncommitted review
   with rows, Cancel, the top-right close control, Escape, and backdrop dismissal
   must ask before discarding it. Declining keeps all rows, edits, selections,
@@ -735,14 +899,29 @@ ingestion belongs in the **Import data** page at `/import`.
   prevent dismissal during commit. Temporarily opening an editor is not discard.
 - Bind previews to the CSV revision used for duplicate classification and reject
   confirmation if the database changed during review.
+- Do not expose an alternate direct-upload endpoint that parses and writes in one
+  request. Every supported file and browser import must use the staged session,
+  preview, explicit-confirmation, and revision-check flow.
 - If the database is new and empty, the first valid import populates it.
 
 ### Direct browser ingestion
 
 - Keep companion-extension source integrations isolated under
   `ledger_data_importer_extension/<source>_extension/`.
-- Keep only cross-source orchestration and the localhost page bridge under
+- Keep cross-source UI, branding, connection settings, orchestration, and the page bridge under
   `ledger_data_importer_extension/shared/`.
+- The toolbar action must open the Ledger-owned `shared/popup.html`, never the
+  retained Amazon upstream popup. Show Ledger branding, all supported website
+  sources, the server selector, Open Import data, and Ledger connection settings.
+  This is only a launcher: date selection, source execution, progress, and
+  confirmation remain in the app. Do not start scrapes, read import jobs, request
+  new permissions, or claim a server is connected merely by opening the popup.
+  Offer HTTP loopback or exact trusted origins with current host permission;
+  recheck trust on navigation. Remember only the chosen origin, not full URLs
+  or tokens. Test the actual manifest entry point as well as navigation behavior.
+- Shared extension branding lives in `shared/icons/`: preserve the outlined
+  Ledger SVG master and Chrome PNG sizes, using the app's #3f7659 green,
+  white Georgia L, and asymmetric rounded badge corners.
 - Never register the same JavaScript path in both MAIN and ISOLATED worlds.
   Chrome's static injection deduplicates paths across worlds, leaving the second
   context without its helper. Keep page observers self-contained and parsers in
@@ -752,13 +931,22 @@ ingestion belongs in the **Import data** page at `/import`.
 - The root `_locales/` catalog is Amazon-specific but must remain at the
   manifest root because Chrome requires that location.
 
-- Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Venmo, and Apple Card access in the companion
+- Keep browser-authenticated Credit Karma, Amazon, AliExpress, eBay, Walmart,
+  Venmo, Apple Card, Capital One, and Schwab Checking access in the companion
   Chrome extension; the localhost application must never request, store, or
   transmit site passwords, access tokens, or cookies.
 - The Import data page owns date selection, progress, cancellation, results,
   and extension-install guidance.
-- Default each direct-import date range to a 14-day lookback ending today while
-  keeping both dates editable.
+- **Settings → Preferences** owns browser-local import defaults via
+  `LedgerPreferences` in `theme.js`: lookback choices `1w`, `2w`, `3w`, `1m`, `2m`,
+  `3m`, default `2w`, and `matchRefunds`, default true. Weeks mean 7-day multiples;
+  months mean calendar subtraction clamped at month end. Use local calendar dates.
+  Every importer's date controls use these defaults and remain editable. Preference
+  changes in another tab may update untouched defaults, never overwrite custom
+  dates or change an active import session. Ledger-format and Apple Card CSV
+  imports still read the entire file without date filtering.
+  Use the former Credit Karma refund opt-out when no valid global `matchRefunds`
+  boolean has been saved.
 - Apple Card direct import opens `card.apple.com`, drives Apple's official
   Export Transactions form with the selected range and CSV format, and captures
   the structured response. Keep manual CSV selection as a fallback because the
@@ -766,6 +954,9 @@ ingestion belongs in the **Import data** page at `/import`.
 - Apply the selected date range to automatic Apple Card imports. Manual Apple
   Card CSV imports must stage every valid row in the selected file because the
   export itself already defines its range.
+- Accept only the explicitly supported Apple Card transaction types: purchase
+  and debit as expenses; credit, refund, and payment as negative amounts. Reject
+  blank or unknown types rather than trusting their source amount sign.
 - Keep the manual Apple Card **Import selected CSV** action disabled until the
   user has selected a file.
 - Use random, expiring, source-scoped server-side import sessions. Do not place
@@ -774,8 +965,20 @@ ingestion belongs in the **Import data** page at `/import`.
 - Preserve an active extension request across Manifest V3 background-worker
   suspension. A short-lived extension-local recovery copy is acceptable when
   it is deleted on completion/cancellation and rejected when stale.
-- The extension may communicate only with loopback Ledger origins and must
-  verify that start requests came from that origin's Import data page.
+- The extension supports HTTP localhost/127.0.0.1 automatically and exact
+  user-approved HTTP/HTTPS server origins configured in its connection settings.
+  Request optional host permission only when the user adds or reconnects a server. Check the
+  saved scheme, hostname, and port at detection and import start, and require
+  a top-level Import data page from that same origin. Never trust every LAN host.
+- Treat saved trusted origins and dynamic bridge registrations as separate state.
+  The service worker must synchronize registrations at startup/update, worker
+  wake, and trust/permission changes; missing scripts must not require deleting
+  and re-adding a saved server. Keep this work serialized and ignore origins with
+  revoked permissions. Connection settings show current site access and offer
+  Reconnect for each saved server. Reconnect may inject only the isolated bridge
+  into already-open, exactly trusted top-level Import pages; never start imports,
+  collect source data, or request permissions in the background. Repeated bridge
+  injection reannounces readiness without adding duplicate message listeners.
 - Direct imports classify against the latest CSV state after scraping, then hold
   a revision-bound preview. Only explicit user confirmation appends selected rows
   through the validation, data lock, and atomic write path.
@@ -785,7 +988,8 @@ ingestion belongs in the **Import data** page at `/import`.
   transactions** for the user-selected date range. Only transaction data needed
   by Ledger is required; wealth histories can remain empty.
 - Credit Karma imports expose independent **Ignore Amazon transactions**,
-  **Ignore AliExpress transactions**, and **Ignore Venmo transactions** checkboxes.
+  **Ignore AliExpress transactions**, **Ignore Venmo transactions**,
+  **Ignore eBay transactions**, and **Ignore Walmart transactions** checkboxes.
   All default to enabled, and
   the chosen values belong to that source-scoped import session.
 - Preserve identical same-day transactions. During browser extraction, collapse
@@ -816,6 +1020,47 @@ ingestion belongs in the **Import data** page at `/import`.
 - Read the export's `transactions` array.
 - Convert debit transactions to positive amounts.
 - Convert credit transactions to negative amounts.
+- **Settings → Preferences** exposes **Suggest refund matches**, on by default,
+  remembered per browser and snapshotted/validated as a boolean in every source's
+  session, including generic CSVs. Do not render a Credit Karma-only checkbox.
+  Suggestions use eligible negative parsed credits from every importer when on,
+  and none when off; a completion payload cannot override the session's choice.
+  When on, Credit Karma retains merchant credits despite Amazon/AliExpress/Venmo/eBay/Walmart exclusions;
+  do not infer direction from a raw amount's sign. The legacy standalone parser
+  keeps its default filtering unless `match_refunds=True` is explicitly supplied.
+- Refund proposals use exact opposite cents and saved, positive, non-income,
+  non-refunded, non-internal-transfer purchases within the previous 90 days
+  (inclusive). Rank same-account/provider candidates first, then most recent.
+  Amount alone is not proof: never auto-confirm a suggestion. Partial/combined
+  refunds and purchases still in the incoming batch are not guessed.
+- Show refund proposals as additive detail content in the shared transaction row
+  (`transaction-ui.js`), not a separate list implementation. A compact **Mark as
+  refunded** button with an adjacent chevron keeps the explanation and matched
+  purchase rows collapsed by default. Render candidates with the shared row
+  renderer, read-only. Multiple matches require an explicit radio choice; never
+  silently choose the first. Keep expanded state through review refreshes.
+  **Mark as refunded** stages one explicit purchase choice, disables the credit's
+  inclusion checkbox, and offers **Undo match**. The final import confirmation
+  can save refund-only changes even with zero rows selected; otherwise zero
+  selected remains disabled. Cancel/close/backdrop/Escape never persist changes.
+  Editing a credit discards only its pending refund choice and revalidates it;
+  changing only its follow-up flag preserves the pending refund choice.
+- Keep eligible refund provenance and original credit identity server-owned in
+  the import session. Validate one-to-one staged/purchase IDs, reject duplicate
+  source occurrences and also-imported credits, and bind choices to the reviewed
+  CSV revision and proposal digest. Exclude the chosen purchases from transfer
+  pairing in that import proposal only; do not change other refund/transfer rules.
+- New refund confirmations save the actual source credit plus an explicit refund
+  link on the purchase, atomically with selected additions after a safety backup.
+  Preserve purchase amount/date, notes, tags, group, unrelated flags and createdAt.
+  The linked credit is retained even though its standalone import checkbox is off.
+  Legacy `refund-receipt-YYYY-MM-DD-<positive cents>` flags still contribute omitted
+  credit identities to date/amount deduplication, alongside real credit rows;
+  do not create new receipt flags or fabricate historical missing credit records.
+  Stable staged IDs, not display sort, allocate repeated source occurrences.
+  Show handled credits as unchecked duplicates with **Refund already handled**.
+  Preserve receipts through normalization, edits, export/restore, and manually
+  clearing `refunded`. Deleting the purchase also deletes its receipt.
 - Preserve category and account metadata.
 - When its filter is enabled, ignore descriptions containing `amazon`,
   case-insensitively.
@@ -837,7 +1082,8 @@ ingestion belongs in the **Import data** page at `/import`.
   staged session. Preserve the existing shared review, classifications, transfer
   proposals, occurrence-aware deduplication, revision checks, and confirmation.
 - Dates are inclusive original order dates, including the source calendar date
-  from timezone-bearing timestamps. Default to the usual fourteen-day lookback.
+  from timezone-bearing timestamps. Use the shared browser-local import
+  lookback preference (two weeks by default), leaving dates editable.
 - Use Shopping and blank subcategory before rules; editable account defaults
   are Walmart / CREDIT CARD / Walmart. One row per charged receipt line; quantity
   is already included in lineTotal. Prefer the charged categories tree over the
@@ -927,6 +1173,39 @@ separate import ledger; do not silently change the CSV schema to address them.
   for checking/savings. Reuse the shared transaction review unchanged. Cancel,
   X, Escape, backdrop and late asynchronous responses must never write/reopen it.
 
+### Schwab checking ingestion
+
+- Companion 0.11.0+, isolated in `schwab_extension/`, with only
+  `https://client.schwab.com/*` added as a source host. The user signs in,
+  selects one checking account, chooses the requested history range, and exports
+  CSV. Capture remains passive: no guessed account selectors, private APIs,
+  request replay, or authentication automation. Live site verification remains
+  necessary; synthetic fixtures do not establish current website compatibility.
+- Use editable Schwab Checking / BANK / Charles Schwab defaults. Reuse a distinct
+  account name for each checking account; import accounts in separate runs.
+  Brokerage and retirement activity are outside this importer’s scope.
+- Accept explicit Withdrawal/Deposit columns, including Withdrawal (-) and
+  Deposit (+), with Date, Type and Description. Preserve identical occurrences.
+  Withdrawal means expense-positive; Deposit means negative. No signed-amount
+  guesses, non-USD currency, ambiguous amounts, or silent malformed-row skipping.
+  When Status is supplied, accept Posted and skip/report Pending; reject others.
+- Some current exports include posted INTADJUST rows with both amount cells
+  blank. Skip/report only these known amount-less interest entries, never invent
+  zero or reconstruct amounts from balances. Explicit zero remains a valid row;
+  missing amounts on other types or two nonzero amounts must still fail safely.
+- Default to Uncategorized except TRANSFER (Transfer) and INTADJUST deposits
+  (Income), then apply classifications. Keep rebates as credits. Range-filter
+  inclusively by source Date. Review, transfer proposals, duplicate rules,
+  confirmed backups, revision checks and atomic persistence remain shared.
+- Strip export account titles, balance/check-number columns, and other unneeded
+  fields in the isolated collector before transmission. Preserve descriptions.
+  Credentials stay in Chrome. Only short-lived owned job metadata is stored;
+  source tokens never reach Schwab URLs or logs. Cancel, stale documents, closed
+  tabs and late exports cannot commit or resurrect a discarded review.
+- Keep the existing cross-account date/amount duplicate rule and explain its
+  collision limitation in the Schwab tab. Do not add account identity to the key
+  or introduce persistent account identifiers as part of this source addition.
+
 ## Known parser decisions still needing future policy
 
 - Amazon promotions and per-item discounts
@@ -964,4 +1243,8 @@ that could silently alter financial totals.
 - For reconciliation changes, test exact pairing, duplicate one-to-one pairing,
   cross-month dates, and retention of unmatched Venmo/Zelle transfers.
 - Perform rendered desktop and mobile checks for material UI changes.
+- After each completed and verified batch of app changes, restart the running
+  Ledger backend as requested by the user, preserving the requested port/binding
+  (currently LAN access on `0.0.0.0:8000`). Do not stop unrelated processes.
+  Mention the restart; in-progress, unconfirmed reviews are not persisted.
 - Keep `README.md` and this file current when behavior or preferences change.

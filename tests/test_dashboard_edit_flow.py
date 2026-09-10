@@ -83,7 +83,8 @@ class DashboardEditFlowTests(unittest.TestCase):
     def test_persistent_theme_is_loaded_before_page_styles(self) -> None:
         for page in ["index.html", "transactions.html", "upload.html", "classifications.html", "settings.html"]:
             html = (ROOT / "app" / page).read_text(encoding="utf-8")
-            self.assertEqual(html.count('<script src="/theme.js?v=20260905-display-preferences-1"></script>'), 1)
+            self.assertEqual(html.count('<script src="/theme.js?v='), 1)
+            self.assertRegex(html, r'<script src="/theme\.js\?v=[^"]+"></script>')
             self.assertLess(html.index('/theme.js'), html.index('/styles.css'))
         theme = (ROOT / "app" / "theme.js").read_text(encoding="utf-8")
         css = (ROOT / "app" / "styles.css").read_text(encoding="utf-8")
@@ -139,7 +140,7 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn("closeTransactionForm({ force: true })", javascript)
         self.assertIn("transactionUi.transactionFromEditor", javascript)
         self.assertIn('flags.add("refunded")', shared_javascript)
-        self.assertIn('refunded.checked = hasTransactionFlag(transaction, "refunded")', shared_javascript)
+        self.assertIn('refunded.checked = transaction?._isLinkedRefund === true || hasTransactionFlag(transaction, "refunded")', shared_javascript)
         self.assertIn('flags.add("internal-transfer")', shared_javascript)
         self.assertIn('flags.add("include-in-budget")', shared_javascript)
         self.assertIn("transactionUi.isInternalTransfer(transaction)", javascript)
@@ -458,6 +459,11 @@ class DashboardEditFlowTests(unittest.TestCase):
         self.assertIn('return "m";', preferences)
         self.assertIn("globalObject.LedgerPreferences", preferences)
         self.assertIn('new globalObject.CustomEvent("ledger-number-abbreviation-change"', preferences)
+        setter = preferences.split("function setNumberAbbreviation", 1)[1]
+        self.assertLess(
+            setter.index("numberAbbreviation = normalized;"),
+            setter.index("globalObject.dispatchEvent"),
+        )
         for tier in (
             '{ preference: "t", value: 1e12, suffix: "T" }',
             '{ preference: "b", value: 1e9, suffix: "B" }',

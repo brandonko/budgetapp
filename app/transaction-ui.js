@@ -190,10 +190,19 @@
       : names.find((name) => name.toLocaleLowerCase() === groupName(selected).toLocaleLowerCase()) || "";
   }
 
-  function fitTransactionFilterPopover(popover) {
-    const dialog = popover.closest?.("dialog");
-    const bottom = Math.min(globalObject.innerHeight || 800, dialog?.getBoundingClientRect().bottom ?? Infinity);
-    popover.style.maxHeight = `${Math.max(120, Math.min(560, bottom - popover.getBoundingClientRect().top - 16))}px`;
+  function setTransactionFilterPanel(panel, button, open) {
+    // In-flow disclosure: its height is independent of the filtered row count.
+    // The modal body owns scrolling; never fit controls to the remaining space.
+    panel.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+  }
+
+  function flagFilterValue(control) {
+    return control.checked ? "flagged" : "";
+  }
+
+  function setFlagFilter(control, value) {
+    control.checked = value === "flagged";
   }
 
   // Bind after dependent controls (such as category/subcategory) and Reset
@@ -547,6 +556,10 @@
   }
 
   function refreshTransactionTagPicker(form) {
+    for (const name of ["refunded", "internalTransferTreatment"]) {
+      const field = form.elements.namedItem(name);
+      if (field?.dataset.reconciliationLocked === "true") field.disabled = true;
+    }
     const state = tagPickerStates.get(form);
     if (!state) return;
     state.button.disabled = !state.input.value.trim();
@@ -571,6 +584,7 @@
   }
 
   function isInternalTransfer(transaction) {
+    if (transaction?._linkRole) return transaction._linkType === "transfer";
     const treatment = internalTransferTreatment(transaction);
     if (treatment === "internal-transfer") return true;
     if (treatment === "include-in-budget") return false;
@@ -580,12 +594,12 @@
   function flagsFromEditor(form, transaction) {
     const flags = new Set(transactionFlags(transaction));
     const refunded = form.elements.namedItem("refunded");
-    if (refunded instanceof HTMLInputElement && refunded.type === "checkbox") {
+    if (refunded instanceof HTMLInputElement && refunded.type === "checkbox" && !refunded.disabled) {
       if (refunded.checked) flags.add("refunded");
       else flags.delete("refunded");
     }
     const transferTreatment = form.elements.namedItem("internalTransferTreatment");
-    if (transferTreatment instanceof HTMLSelectElement) {
+    if (transferTreatment instanceof HTMLSelectElement && !transferTreatment.disabled) {
       if (transferTreatment.value !== "internal-transfer") {
         for (const flag of flags) if (flag.startsWith("transfer-pair-")) flags.delete(flag);
       }
@@ -605,13 +619,14 @@
     }
     configureTransactionGroupPicker(form);
     configureTransactionValuePickers(form, options.transactions || []);
+    configureTransactionLinks(form, transaction, options.transactions || []);
     const refunded = form.elements.namedItem("refunded");
     if (refunded instanceof HTMLInputElement && refunded.type === "checkbox") {
-      refunded.checked = hasTransactionFlag(transaction, "refunded");
+      refunded.checked = transaction?._isLinkedRefund === true || hasTransactionFlag(transaction, "refunded");
     }
     const transferTreatment = form.elements.namedItem("internalTransferTreatment");
     if (transferTreatment instanceof HTMLSelectElement) {
-      transferTreatment.value = internalTransferTreatment(transaction);
+      transferTreatment.value = transaction?._linkType === "transfer" ? "internal-transfer" : internalTransferTreatment(transaction);
     }
     const pickerState = tagPickerStates.get(form);
     if (pickerState) {
@@ -632,7 +647,200 @@
         : field?.value ?? "";
     }
     transaction.flags = flagsFromEditor(form, existingTransaction);
+    if (existingTransaction?.id) transaction.id = existingTransaction.id;
+    const linkState = linkEditorStates.get(form);
+    if (linkState?.reverse) {
+      if (linkState.target !== linkState.initial || linkState.type !== linkState.initialType
+          || existingTransaction?.repaymentTo !== undefined || existingTransaction?.linkTo !== undefined) {
+        // Retain the legacy repayment intent for compatible clients; general links
+        // use the same purchase-owned relationship, never a second child-side link.
+        if (linkState.type === "repayment" && linkState.initialType === "repayment") transaction.repaymentTo = linkState.target;
+        else transaction.linkTo = { transactionId: linkState.target, type: linkState.type };
+      }
+    } else if (linkState) transaction.links = linkState.entries.length ? JSON.stringify(linkState.entries) : "";
+    else if (existingTransaction?.links) transaction.links = existingTransaction.links;
     return transaction;
+  }
+
+  const linkEditorStates = new WeakMap();
+  const expandedLinks = new Set();
+  const linkLabels = { refund: "Refund", transfer: "Internal transfer", repayment: "Repayment" };
+
+  function linkTransactionCard(transaction, label, action, disabled = false) {
+    const row = createTransactionRow({ ...transaction, _budgetAmount: Number(transaction.amount) }, {
+      currency: new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }),
+      shortMonthFormatter: new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }),
+      showYear: true, showEdit: false, showLinks: false,
+      amountForDisplay: item => Number(item.amount),
+    });
+    const button = document.createElement("button"); button.type = "button";
+    button.className = "secondary-button transaction-link-action"; button.textContent = label;
+    button.setAttribute("aria-label", `${label} ${transaction.description}`); button.disabled = disabled;
+    button.addEventListener("click", action);
+    row.querySelector(".transaction-actions").append(button);
+    return row;
+  }
+
+  function transactionLinks(transaction) {
+    try { return JSON.parse(transaction?.links || "[]"); } catch { return []; }
+  }
+
+  function configureCreditLinkTarget(form, transaction, available, section, summary, help, lockBudgetFields) {
+    help.textContent = "Money received · choose one original expense. Repayments join any other repayments on that expense. Refunds and internal transfers are one-to-one; transfers must balance exactly. Changes stay staged until you save this editor or confirm the enclosing review.";
+    const unique = new Map(available.filter(row => row.id).map(row => [row.id, row]));
+    const original = transaction._linkedTo;
+    if (original && !unique.has(original.id)) unique.set(original.id, original);
+    const initial = original?.id || "";
+    const initialType = transaction._linkType || "repayment";
+    const state = { reverse: true, initial, initialType, type: transaction.linkTo?.type || initialType,
+      target: transaction.linkTo?.transactionId ?? transaction.repaymentTo ?? initial };
+    linkEditorStates.set(form, state);
+    const type = document.createElement("select"); type.setAttribute("aria-label", "Link type");
+    for (const [value, label] of Object.entries(linkLabels)) {
+      const option = document.createElement("option"); option.value = value; option.textContent = label; type.append(option);
+    }
+    type.value = state.type;
+    const selected = document.createElement("div"); selected.className = "transaction-linked-selections";
+    const search = document.createElement("input"); search.type = "search";
+    search.placeholder = "Search purchases by description or notes";
+    search.setAttribute("aria-label", "Find the original purchase");
+    const choices = document.createElement("div"); choices.className = "transaction-link-choices";
+    const status = document.createElement("p"); status.setAttribute("role", "status");
+    function render() {
+      lockBudgetFields(Boolean(state.target));
+      summary.textContent = state.target ? `${linkLabels[state.type]} · original expense linked` : "Refunds & repayments";
+      selected.replaceChildren();
+      const purchase = unique.get(state.target);
+      if (state.target) {
+        if (purchase) {
+          const card = linkTransactionCard(purchase, "Unlink", () => { state.target = ""; render(); });
+          card.querySelector(".transaction-link-action").setAttribute("aria-label", "Unlink original purchase");
+          selected.append(card);
+        }
+      }
+      status.textContent = state.target ? "Linked to one original expense. This money received will not be counted twice."
+        : "No purchase linked. This transaction will be counted normally.";
+      const eligible = [...unique.values()].filter(row => Number(row.amount) > 0 && row.id !== transaction.id
+        && !row._linkedTo && row.id !== state.target
+        && transactionLinks(row).filter(entry => entry.transactionId !== transaction.id)
+          .every(entry => state.type === "repayment" && entry.type === "repayment")
+        && (!row._linkType || row._linkType === "repayment" || row.id === initial)
+        && (state.type !== "transfer" || (Math.round(Number(row.amount) * 100) === -Math.round(Number(transaction.amount) * 100)
+          && ["accountName", "accountType", "provider"].some(field => String(row[field] || "").trim().toLowerCase() !== String(transaction[field] || "").trim().toLowerCase())))
+        && globalObject.LedgerTransactionsModel.matchesTransactionSearch(row, search.value));
+      choices.replaceChildren();
+      if (!search.value.trim()) return;
+      for (const row of eligible.slice(0, 20)) {
+        choices.append(linkTransactionCard(row, "Link", () => { state.target = row.id; search.value = ""; render(); }, Boolean(state.target)));
+      }
+      if (!eligible.length || eligible.length > 20) {
+        const hint = document.createElement("p");
+        hint.textContent = !eligible.length ? "No available purchases match this search." : "Showing 20 matches. Keep typing to narrow the search.";
+        choices.append(hint);
+      }
+    }
+    search.addEventListener("input", render);
+    type.addEventListener("change", () => {
+      const otherLinks = transactionLinks(unique.get(state.target)).filter(entry => entry.transactionId !== transaction.id);
+      if (type.value !== "repayment" && otherLinks.length) {
+        type.value = state.type; status.textContent = "This expense has other repayments. Unlink this repayment first to choose a one-to-one relationship."; return;
+      }
+      const purchase = unique.get(state.target);
+      if (type.value === "transfer" && purchase && (Math.round(Number(purchase.amount) * 100) !== -Math.round(Number(transaction.amount) * 100)
+          || ["accountName", "accountType", "provider"].every(field => String(purchase[field] || "").trim().toLowerCase() === String(transaction[field] || "").trim().toLowerCase()))) {
+        type.value = state.type; status.textContent = "Internal transfers require equal and opposite amounts in different accounts."; return;
+      }
+      state.type = type.value; render();
+    });
+    search.addEventListener("keydown", event => { if (event.key === "Enter") event.preventDefault(); });
+    section.append(type, selected, search, choices, status); render();
+  }
+
+  function configureTransactionLinks(form, transaction, available) {
+    linkEditorStates.get(form)?.cleanup?.();
+    form.querySelector(".transaction-link-editor")?.remove();
+    linkEditorStates.delete(form);
+    const budgetFields = ["refunded", "internalTransferTreatment"].map(name=>form.elements.namedItem(name)).filter(Boolean);
+    const lockBudgetFields = linked => budgetFields.forEach(field=>{
+      if (!linked && field.dataset.reconciliationLocked === "true") {
+        if (field.name === "refunded") field.checked = hasTransactionFlag(transaction, "refunded");
+        else field.value = internalTransferTreatment(transaction);
+      }
+      field.disabled = linked;
+      field.dataset.reconciliationLocked = String(linked);
+      field.title = linked ? "Budget treatment comes from the linked transactions. Unlink them to use this override." : "";
+    });
+    lockBudgetFields(transaction?._linkRole === "credit");
+    if (!transaction?.id) return;
+    const section = document.createElement("details");
+    section.className = "transaction-link-editor form-field form-field--wide";
+    const summary = document.createElement("summary");
+    summary.textContent = "Refunds & repayments";
+    const help = document.createElement("p");
+    help.textContent = "A zero-dollar transaction cannot be linked. Select a nonzero expense or money received.";
+    section.append(summary, help);
+    (form.querySelector(".form-body") || form.querySelector(".form-grid") || form).append(section);
+    if (Number(transaction.amount) < 0) {
+      configureCreditLinkTarget(form, transaction, available, section, summary, help, lockBudgetFields);
+      return;
+    }
+    if (transaction._linkRole === "credit" || Number(transaction.amount) <= 0) return;
+    help.textContent = "Original expense · link one refund or internal transfer, or multiple repayments received. A credit can belong to only one expense. Refunds may be partial; transfers must balance exactly. Changes stay staged until you save this editor or confirm the enclosing review.";
+    const unique = new Map(available.filter(row=>row.id).map(row=>[row.id,row]));
+    for(const child of transaction._linkedTransactions || []) unique.set(child.id,child);
+    const entries = transactionLinks(transaction).map(entry=>({...entry}));
+    const state = {entries}; linkEditorStates.set(form,state);
+    const type = document.createElement("select");
+    type.setAttribute("aria-label","Link type");
+    for(const [value,label] of Object.entries(linkLabels)) {
+      const option=document.createElement("option"); option.value=value; option.textContent=label;
+      type.append(option);
+    }
+    type.value=entries[0]?.type || "repayment";
+    const selected=document.createElement("div"); selected.className="transaction-linked-selections";
+    const search=document.createElement("input"); search.type="search"; search.placeholder="Search credits by description or notes";
+    search.setAttribute("aria-label","Find a transaction to link");
+    const choices=document.createElement("div"); choices.className="transaction-link-choices";
+    const status=document.createElement("p"); status.setAttribute("role","status");
+    function render() {
+      lockBudgetFields(entries.length > 0);
+      selected.replaceChildren(...entries.map(entry=>{
+        const child=unique.get(entry.transactionId);
+        return child ? linkTransactionCard(child, "Unlink", () => { entries.splice(entries.indexOf(entry),1); render(); })
+          : document.createTextNode("Linked transaction unavailable");
+      }));
+      const net=Number(form.elements.namedItem("amount")?.value || transaction.amount)
+        + entries.reduce((total,entry)=>total+Number(unique.get(entry.transactionId)?.amount || 0),0);
+      summary.textContent=`Refunds & repayments${entries.length ? ` (${entries.length})` : ""}`;
+      status.textContent=`Net cost: ${new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(net)}`;
+      const eligible=[...unique.values()].filter(row=> Number(row.amount)<0 && row.id!==transaction.id
+        && !transactionLinks(row).length && (!row._linkedTo || row._linkedTo.id===transaction.id)
+        && (type.value!=="transfer" || (Math.round(Number(row.amount)*100) === -Math.round(Number(form.elements.namedItem("amount")?.value || transaction.amount)*100)
+          && ["accountName","accountType","provider"].some(field=>String(row[field]||"").toLowerCase() !== String(form.elements.namedItem(field)?.value||"").toLowerCase())))
+        && !entries.some(entry=>entry.transactionId===row.id)
+        && globalObject.LedgerTransactionsModel.matchesTransactionSearch(row,search.value));
+      choices.replaceChildren();
+      if(!search.value.trim()) return;
+      for(const row of eligible.slice(0,20)) {
+        choices.append(linkTransactionCard(row, "Link", () => { entries.push({transactionId:row.id,type:type.value});search.value="";render(); }, type.value!=="repayment" && entries.length>0));
+      }
+      if(!eligible.length) {const empty=document.createElement("p");empty.textContent="No available credits match this search.";choices.append(empty);}
+      if(eligible.length>20) {const more=document.createElement("p");more.textContent="Showing 20 matches. Keep typing to narrow the search.";choices.append(more);}
+    }
+    type.addEventListener("change",()=>{
+      if(type.value!=="repayment" && entries.length>1) {type.value="repayment";status.textContent="Unlink extra credits before choosing a one-to-one match.";return;}
+      if (type.value === "transfer" && entries.some(entry => {
+        const child = unique.get(entry.transactionId);
+        return !child || Math.round(Number(child.amount)*100) !== -Math.round(Number(form.elements.namedItem("amount")?.value || transaction.amount)*100)
+          || ["accountName","accountType","provider"].every(field => String(child[field] || "").trim().toLowerCase() === String(form.elements.namedItem(field)?.value || "").trim().toLowerCase());
+      })) { type.value = entries[0].type; status.textContent = "Internal transfers require equal and opposite amounts in different accounts."; return; }
+      entries.forEach(entry=>entry.type=type.value);render();
+    });
+    search.addEventListener("input",render);
+    search.addEventListener("keydown",event=>{if(event.key==="Enter")event.preventDefault();});
+    form.elements.namedItem("amount")?.addEventListener("input",render);
+    state.cleanup = () => form.elements.namedItem("amount")?.removeEventListener("input",render);
+    section.append(type,selected,search,choices,status);render();
   }
 
   function normalizeTransactionSort(sort = {}) {
@@ -714,36 +922,45 @@
       showEdit = true,
       amountForDisplay = null,
       showYear = false,
+      detailContent = null,
+      detailPlacement = "description",
+      onToggleFlag = null,
+      showLinks = true,
     } = options;
-    const refunded = hasTransactionFlag(transaction, "refunded");
+    const refunded = transaction._linkRole ? transaction._isLinkedRefund === true : hasTransactionFlag(transaction, "refunded");
     const internalTransfer = isInternalTransfer(transaction);
     const income = transaction.category.trim().toLocaleLowerCase() === "income";
     const originalDisplayedAmount = income
       ? Math.abs(Number(transaction.amount))
       : Number(transaction.amount);
-    const displayedAmount = refunded || internalTransfer
+    const displayedAmount = refunded || internalTransfer || transaction._linkRole === "credit"
       ? originalDisplayedAmount
-      : amountForDisplay
+      : transaction._budgetAmount !== undefined ? transaction._budgetAmount : amountForDisplay
         ? amountForDisplay(transaction)
         : originalDisplayedAmount;
 
     const row = document.createElement("article");
     row.className = "transaction-row";
     row.classList.toggle("transaction-row--duplicate", duplicate);
-    row.classList.toggle("transaction-row--needs-classification", needsClassification);
+    row.classList.toggle("transaction-row--needs-classification", needsClassification && !edited);
+    row.classList.toggle("transaction-row--flagged", hasTransactionFlag(transaction, "flagged"));
     row.classList.toggle("transaction-row--refunded", refunded);
     row.classList.toggle("transaction-row--internal-transfer", internalTransfer);
 
     const parsedDate = new Date(`${transaction.date}T12:00:00Z`);
     const dateElement = document.createElement("time");
     dateElement.className = "transaction-date";
+    dateElement.classList.toggle("transaction-date--with-year", showYear);
     dateElement.dateTime = transaction.date;
-    const month = document.createTextNode(shortMonthFormatter.format(parsedDate));
+    const month = document.createElement("span");
+    month.className = "transaction-date-month";
+    month.textContent = shortMonthFormatter.format(parsedDate);
     const day = document.createElement("strong");
     day.textContent = parsedDate.getUTCDate();
     dateElement.append(month, day);
     if (showYear) {
       const year = document.createElement("small");
+      year.className = "transaction-date-year";
       year.textContent = String(parsedDate.getUTCFullYear());
       dateElement.append(year);
     }
@@ -753,6 +970,7 @@
     title.textContent = transaction.description;
     title.title = transaction.description;
     const metadata = document.createElement("span");
+    metadata.className = "transaction-metadata";
     const baseCategory = transaction.category || "Uncategorized";
     const categoryLabel = transaction.subcategory
       ? `${baseCategory} / ${transaction.subcategory}`
@@ -797,6 +1015,12 @@
         : "Marked manually";
       description.append(transferBadge);
     }
+    if (transaction._linkRole === "credit") {
+      row.classList.add("transaction-row--linked-credit");
+      const badge=document.createElement("span");badge.className="transaction-flag";
+      badge.textContent=`Linked ${linkLabels[transaction._linkType]?.toLowerCase() || "credit"}`;
+      description.append(badge);
+    }
     const tags = String(transaction.tags || "")
       .split(",")
       .map((tag) => tag.trim())
@@ -826,13 +1050,32 @@
       notes.textContent = transaction.notes;
       description.append(notes);
     }
+    // Additive source-specific review controls belong inside the shared row.
+    if (detailContent && detailPlacement !== "row") description.append(detailContent);
+    let linkedDetails = null;
+    if(showLinks && (transaction._linkedTransactions?.length || transaction._linkedTo)) {
+      const disclosure=document.createElement("details");disclosure.className="transaction-linked-details";
+      disclosure.open=expandedLinks.has(transaction.id);
+      disclosure.addEventListener("toggle",()=>{if(disclosure.open)expandedLinks.add(transaction.id);else expandedLinks.delete(transaction.id);});
+      const label=document.createElement("summary");
+      const children=transaction._linkedTransactions || [transaction._linkedTo];
+      label.textContent=transaction._linkedTo ? (transaction._linkType === "transfer" ? "Other account" : "Original purchase") : `${linkLabels[transaction._linkType]}${children.length>1?"s":""} (${children.length})`;
+      const note=document.createElement("p");
+      note.textContent=`Original amount: ${currency.format(transaction.amount)}. ${transaction._linkedTo ? "Counted with the original purchase, not again here." : `Net cost: ${currency.format(transaction._netAmount)}. Linked credits reduce this purchase in its original month.`}`;
+      disclosure.append(label,note);
+      for(const child of children) disclosure.append(createTransactionRow(child,{currency,shortMonthFormatter,showYear:true,showEdit:false,showLinks:false}));
+      linkedDetails = disclosure;
+    }
 
     const actions = document.createElement("div");
     actions.className = "transaction-actions";
     const amount = document.createElement("span");
     amount.className = "transaction-amount";
-    amount.classList.toggle("is-credit", Number(transaction.amount) < 0 || income);
-    amount.textContent = currency.format(displayedAmount);
+    // Storage is expense-positive. Communicate money received with an explicit
+    // plus, not color, even on warning/flagged rows or read-only linked credits.
+    const signedAmount = refunded || internalTransfer || transaction._linkRole === "credit"
+      ? Number(transaction.amount) : Number(transaction._budgetAmount ?? transaction.amount);
+    amount.textContent = `${signedAmount < 0 ? "+" : ""}${currency.format(Math.abs(displayedAmount))}`;
     if (refunded || internalTransfer) {
       amount.title = "Excluded from budget totals";
     }
@@ -847,8 +1090,34 @@
       editButton.addEventListener("click", onEdit);
       actions.append(editButton);
     }
+    if (onToggleFlag) {
+      const flagged = hasTransactionFlag(transaction, "flagged");
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "transaction-flag-toggle";
+      toggle.disabled = disabled;
+      toggle.setAttribute("aria-pressed", String(flagged));
+      toggle.setAttribute("aria-label", `${flagged ? "Unflag" : "Flag"} ${transaction.description}`);
+      toggle.title = flagged ? "Remove flag" : "Flag for follow-up";
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 21V4m0 0c5-4 9 4 15 0v11c-6 4-10-4-15 0" /></svg>';
+      toggle.addEventListener("click", async () => {
+        if (toggle.disabled) return;
+        toggle.disabled = true;
+        try { await onToggleFlag(!flagged); }
+        catch (error) {
+          const message = document.createElement("p");
+          message.className = "transaction-flag-error";
+          message.setAttribute("role", "alert");
+          message.textContent = error.message || "Could not save this flag. Try again.";
+          description.append(message);
+        } finally { toggle.disabled = disabled; }
+      });
+      actions.append(toggle);
+    }
 
     row.append(...(leadingControl ? [leadingControl] : []), dateElement, description, actions);
+    if (detailContent && detailPlacement === "row") row.append(detailContent);
+    if (linkedDetails) row.append(linkedDetails);
     return row;
   }
 
@@ -861,6 +1130,10 @@
   }
 
   globalObject.LedgerTransactionUI = Object.freeze({
+    matchesFlagFilter: (transaction, filter) => globalObject.LedgerTransactionsModel.matchesFlagFilter(transaction, filter),
+    flagFilterLabel: (value) => value === "flagged" ? "Flagged only" : "All transactions",
+    flagFilterValue,
+    setFlagFilter,
     matchesTransactionSearch: (transaction, query) => globalObject.LedgerTransactionsModel.matchesTransactionSearch(transaction, query),
     createTransactionValuePicker,
     configureTransactionValuePickers,
@@ -875,7 +1148,7 @@
     groupFilterLabel,
     matchesGroupFilter,
     populateGroupFilter,
-    fitTransactionFilterPopover,
+    setTransactionFilterPanel,
     bindLiveTransactionFilters,
     createCheckboxRangeSelection,
     createSeriesColorSlots,

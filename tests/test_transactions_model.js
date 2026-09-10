@@ -22,6 +22,26 @@ const bikeTransactions = [
   transaction({ description: "Downhill bike", tags: "bike", amount: 1000 }),
 ];
 
+test("linked refunds and multiple repayments reduce only their original purchase, across months and categories", () => {
+  const root=transaction({date:"2026-07-01",amount:100,_budgetAmount:20,_linkRole:"primary",_linkType:"refund"});
+  const credit=transaction({date:"2026-08-01",amount:-80,category:"Income",_budgetAmount:0,_linkRole:"credit",_linkType:"refund"});
+  assert.equal(model.summarizeTransactions([root,credit]).spent,20);
+  assert.equal(model.summarizeTransactions([root,credit]).income,0);
+  assert.equal(model.summarizeTransactions(model.filterTransactions([root,credit],{startDate:"2026-08-01"})).spent,0);
+  assert.equal(model.summarizeTransactions([{...root,_budgetAmount:-10,_linkType:"repayment"},credit]).spent,-10);
+});
+
+test("follow-up flags filter independently of refund/transfer treatment and never alter totals", () => {
+  const rows=[transaction({flags:"custom, FLAGGED ",amount:10}),transaction({flags:"refunded",amount:30}),
+    transaction({flags:"internal-transfer,flagged",amount:80}),transaction({amount:20})];
+  assert.deepEqual(model.filterTransactions(rows,{flagged:"flagged"}),[rows[0],rows[2]]);
+  assert.deepEqual(model.filterTransactions(rows,{flagged:"unflagged"}),rows,
+    "Removed legacy Not flagged selections fall back to all transactions");
+  assert.equal(model.summarizeTransactions(rows).spent,30);
+  assert.equal(model.summarizeTransactions(rows.map(row=>({...row,flags:row.flags?.replace(/flagged/ig,"")}))).spent,30);
+  assert.deepEqual(model.filterTransactions(rows,{flagged:"flagged",showExcluded:false}),[rows[0]]);
+});
+
 test("tag OR includes overlapping transactions once and AND narrows to the intersection", () => {
   const any = model.filterTransactions(bikeTransactions, { tags: ["bike", "apparel"], tagMode: "any" });
   const all = model.filterTransactions(bikeTransactions, { tags: ["bike", "apparel"], tagMode: "all" });

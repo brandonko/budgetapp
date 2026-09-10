@@ -1,11 +1,27 @@
 "use strict";
+import "./trusted_origins.js";
+import "./trusted_servers.js";
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.action !== "ledgerCheckOrigin") return false;
+  let url;
+  try { url = new URL(sender.url); } catch { sendResponse(false); return false; }
+  if (sender.frameId !== 0 || !["/import", "/import.html", "/upload", "/upload.html"].includes(url.pathname)) {
+    sendResponse(false);
+    return false;
+  }
+  LedgerOrigins.allowed(url.origin).then(sendResponse, () => sendResponse(false));
+  return true;
+});
 
 import { exportAliExpressOrders } from "../aliexpress_extension/importer.js";
 import { registerWalmartImporter } from "../walmart_extension/coordinator.js";
+import { registerSchwabImporter } from "../schwab_extension/coordinator.js";
 import { registerCapitalOneImporter } from "../capitalone_extension/coordinator.js";
 
 registerWalmartImporter({ validateRequest, broadcast });
 registerCapitalOneImporter({ validateRequest, broadcast });
+registerSchwabImporter({ validateRequest, broadcast });
 
 // Shared service worker that coordinates source tabs with Ledger import sessions.
 
@@ -31,27 +47,14 @@ const cancelledAliExpressTokens = new Set();
 
 // Shared request validation ---------------------------------------------------
 
-function isLoopbackOrigin(value) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
-      url.origin === value
-    );
-  } catch {
-    return false;
-  }
-}
-
-function validateRequest(payload, sender) {
+async function validateRequest(payload, sender) {
   if (!payload || typeof payload !== "object") throw new Error("Missing import request.");
   if (!TOKEN_PATTERN.test(payload.token || "")) throw new Error("Invalid import token.");
   if (!DATE_PATTERN.test(payload.startDate || "") || !DATE_PATTERN.test(payload.endDate || "")) {
     throw new Error("Invalid import date range.");
   }
   if (payload.startDate > payload.endDate) throw new Error("Invalid import date range.");
-  if (!isLoopbackOrigin(payload.ledgerOrigin)) throw new Error("Ledger must run on localhost.");
+  if (!await LedgerOrigins.allowed(payload.ledgerOrigin)) throw new Error("Add this Ledger server in the extension's connection settings first.");
   let senderUrl;
   try {
     senderUrl = new URL(sender.url);
@@ -59,7 +62,7 @@ function validateRequest(payload, sender) {
     throw new Error("Import requests must come from Ledger's upload page.");
   }
   if (
-    senderUrl.origin !== payload.ledgerOrigin ||
+    sender.frameId !== 0 || senderUrl.origin !== payload.ledgerOrigin ||
     !["/import", "/import.html", "/upload", "/upload.html"].includes(senderUrl.pathname)
   ) {
     throw new Error("Import requests must come from Ledger's upload page.");
@@ -139,7 +142,7 @@ async function reportAmazonFailure(pending, error) {
 }
 
 async function startAmazonImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   const existing = await getAmazonPending();
   if (existing) throw new Error("Another Amazon import is already running.");
   await chrome.storage.local.remove(AMAZON_RECENT_COMPLETION_KEY);
@@ -292,7 +295,7 @@ async function reportCreditKarmaFailure(pending, error) {
 }
 
 async function startCreditKarmaImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   if (await getCreditKarmaPending()) {
     throw new Error("Another Credit Karma import is already running.");
   }
@@ -622,7 +625,7 @@ async function reportAliExpressFailure(pending, error) {
 }
 
 async function startAliExpressImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   if (await getAliExpressPending()) throw new Error("Another AliExpress import is already running.");
   const pending = { token: payload.token, startDate: payload.startDate, endDate: payload.endDate,
     ledgerOrigin: payload.ledgerOrigin, tabId: null, started: false };
@@ -756,7 +759,7 @@ async function reportVenmoFailure(pending, error) {
 }
 
 async function startVenmoImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   if (await getVenmoPending()) throw new Error("Another Venmo import is already running.");
   const pending = {
     token: payload.token,
@@ -991,7 +994,7 @@ async function reportAppleCardFailure(pending, error) {
 }
 
 async function startAppleCardImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   if (await getAppleCardPending()) throw new Error("Another Apple Card import is already running.");
   const pending = {
     token: payload.token, startDate: payload.startDate, endDate: payload.endDate,
@@ -1150,7 +1153,7 @@ async function reportEbayFailure(pending, error) {
 }
 
 async function startEbayImport(payload, sender) {
-  validateRequest(payload, sender);
+  await validateRequest(payload, sender);
   if (await getEbayPending()) throw new Error("Another eBay import is already running.");
   const pending = {
     token: payload.token, startDate: payload.startDate, endDate: payload.endDate,

@@ -26,6 +26,7 @@ APPLE_CARD_DEFAULT_ACCOUNT = ("Apple Card", "CREDIT CARD", "Goldman Sachs")
 EBAY_DEFAULT_ACCOUNT = ("eBay", "CREDIT CARD", "eBay")
 WALMART_DEFAULT_ACCOUNT = ("Walmart", "CREDIT CARD", "Walmart")
 CAPITAL_ONE_DEFAULT_ACCOUNT = ("Capital One", "CREDIT CARD", "Capital One")
+SCHWAB_DEFAULT_ACCOUNT = ("Schwab Checking", "BANK", "Charles Schwab")
 WALMART_MERCHANT_STRINGS = ("walmart", "wal-mart", "wal mart", "wm supercenter")
 
 
@@ -42,6 +43,7 @@ class CreditKarmaImport:
     ignored_venmo_count: int
     ignored_ebay_count: int
     ignored_walmart_count: int = 0
+    refund_indexes: tuple[int, ...] = ()
 
 
 def load_json_text(content: Any, parser_name: str) -> Any:
@@ -105,6 +107,7 @@ def parse_credit_karma(
     ignore_venmo: bool = True,
     ignore_ebay: bool = True,
     ignore_walmart: bool = True,
+    match_refunds: bool = False,
 ) -> CreditKarmaImport:
     document = load_json_text(content, "Credit Karma")
     root = require_mapping(document, "Credit Karma document")
@@ -116,16 +119,22 @@ def parse_credit_karma(
     ignored_venmo_count = 0
     ignored_ebay_count = 0
     ignored_walmart_count = 0
+    refund_indexes: list[int] = []
 
     for index, raw in enumerate(raw_transactions):
         location = f"Credit Karma transaction[{index}]"
         transaction = require_mapping(raw, location)
         description = require_text(transaction, "description", location)
-        normalized_description = description.casefold()
+        normalized_description = re.sub(r"\s+", " ", description.casefold())
         transaction_type = require_text(transaction, "transactionType", location).casefold()
         if transaction_type not in {"credit", "debit"}:
             raise ImportDataError(f"{location}.transactionType must be credit or debit")
-        if ignore_amazon and "amazon" in normalized_description:
+        merchant_credit = transaction_type == "credit" and any(
+            merchant in normalized_description
+            for merchant in ("amazon", "alipay", "ali express", "aliexpress", "venmo", "ebay", *WALMART_MERCHANT_STRINGS)
+        )
+        retain_refund = match_refunds and merchant_credit
+        if not retain_refund and ignore_amazon and "amazon" in normalized_description:
             ignored_amazon_count += 1
             amazon_accounts.append(
                 (
@@ -135,20 +144,20 @@ def parse_credit_karma(
                 )
             )
             continue
-        if ignore_aliexpress and any(
+        if not retain_refund and ignore_aliexpress and any(
             merchant in normalized_description
             for merchant in ("alipay", "ali express", "aliexpress")
         ):
             ignored_aliexpress_count += 1
             continue
-        if ignore_venmo and "venmo" in normalized_description:
+        if not retain_refund and ignore_venmo and "venmo" in normalized_description:
             ignored_venmo_count += 1
             continue
-        if ignore_ebay and "ebay" in normalized_description:
+        if not retain_refund and ignore_ebay and "ebay" in normalized_description:
             ignored_ebay_count += 1
             continue
-        if ignore_walmart and any(
-            merchant in re.sub(r"\s+", " ", normalized_description)
+        if not retain_refund and ignore_walmart and any(
+            merchant in normalized_description
             for merchant in WALMART_MERCHANT_STRINGS
         ):
             ignored_walmart_count += 1
@@ -156,6 +165,8 @@ def parse_credit_karma(
 
         unsigned_amount = abs(require_decimal(transaction, "amount", location))
         signed_amount = unsigned_amount if transaction_type == "debit" else -unsigned_amount
+        if retain_refund and unsigned_amount:
+            refund_indexes.append(len(transactions))
         transactions.append(
             {
                 "date": require_date(transaction, "date", location),
@@ -178,6 +189,7 @@ def parse_credit_karma(
         ignored_venmo_count,
         ignored_ebay_count,
         ignored_walmart_count,
+        tuple(refund_indexes),
     )
 
 
@@ -349,6 +361,114 @@ def _apple_card_date(value: str, location: str) -> str:
     raise ImportDataError(f"{location}.Transaction Date is not a recognized date")
 
 
+def parse_schwab_checking(
+    content: Any,
+    account_identity: tuple[str, str, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse checking CSV only. Direction comes from Withdrawal/Deposit columns.
+
+    Accept the legacy bank export and normalized/current column names. Never
+    infer brokerage cash flows or retain export titles, balances or check numbers.
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise ImportDataError("Schwab checking export is empty")
+    if len(content.encode("utf-8")) > 16 * 1024 * 1024:
+        raise ImportDataError("Schwab checking export exceeds 16 MB; use a shorter range")
+    aliases = {"withdrawal (-)": "withdrawal", "deposit (+)": "deposit"}
+    notices = {
+        "posted transactions",
+        "pending transactions are not reflected within this sort criterion.",
+        "there were no transactions for the search criteria you selected.",
+    }
+    reader = csv.reader(io.StringIO(content.lstrip("\ufeff"), newline=""), strict=True)
+    transactions: list[dict[str, Any]] = []
+    skipped = 0
+    missing_interest_amounts = 0
+    headers: list[str] | None = None
+    title_seen = False
+    identity = account_identity or SCHWAB_DEFAULT_ACCOUNT
+
+    def money(value: str, location: str) -> Decimal:
+        if not value:
+            return Decimal(0)
+        if not re.fullmatch(r"\$?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?", value):
+            raise ImportDataError(f"{location}: invalid Withdrawal/Deposit amount")
+        result = Decimal(value.replace("$", "").replace(",", ""))
+        if result > Decimal("1000000000"):
+            raise ImportDataError(f"{location}: amount is too large")
+        return result
+
+    try:
+        for index, raw in enumerate(reader, 1):
+            if index > 100010:
+                raise ImportDataError("Schwab checking export exceeds 100,000 rows")
+            values = [cell.strip() for cell in raw]
+            if not any(values):
+                continue
+            location = f"Schwab checking row {index}"
+            if headers is None:
+                if not title_seen and re.match(r"^Transactions\s+for\s+.+\s+as of\s+", values[0], re.I) and not any(values[1:]):
+                    title_seen = True
+                    continue
+                headers = [aliases.get(v.casefold(), v.casefold()) for v in values]
+                if (not all(headers) or len(set(headers)) != len(headers)
+                        or not {"date", "type", "description", "withdrawal", "deposit"}.issubset(headers)
+                        or {"action", "symbol", "quantity", "amount"}.intersection(headers)):
+                    raise ImportDataError("Export one Schwab checking account as CSV with Date, Type, Description, Withdrawal and Deposit columns. Brokerage exports are not supported.")
+                continue
+            if values[0].casefold() in notices and not any(values[1:]):
+                continue
+            if len(values) != len(headers):
+                raise ImportDataError(f"{location}: incomplete CSV row")
+            record = dict(zip(headers, values))
+            if "currency" in record and record["currency"].upper() != "USD":
+                raise ImportDataError(f"{location}: only USD is supported")
+            status = record.get("status", "posted").casefold()
+            if status == "pending":
+                skipped += 1
+                continue
+            if status != "posted":
+                raise ImportDataError(f"{location}: unknown transaction status; export posted transactions")
+            description = " ".join(record["description"].split())
+            if not description:
+                raise ImportDataError(f"{location}: description is required")
+            transaction_date = _apple_card_date(record["date"], location)
+            entry_type = record["type"].upper()
+            if not (record["withdrawal"] or record["deposit"]):
+                # Current Schwab exports can contain posted INTADJUST entries
+                # without either amount. Missing is not zero: report and skip
+                # these known entries, never reconstruct money from balances.
+                if entry_type == "INTADJUST":
+                    missing_interest_amounts += 1
+                    continue
+                raise ImportDataError(f"{location}: missing Withdrawal/Deposit amount")
+            withdrawal = money(record["withdrawal"], location)
+            deposit = money(record["deposit"], location)
+            if withdrawal and deposit:
+                raise ImportDataError(f"{location}: ambiguous Withdrawal/Deposit amounts")
+            category = "Transfer" if entry_type == "TRANSFER" else "Uncategorized"
+            if entry_type == "INTADJUST" and deposit:
+                category = "Income"
+            transactions.append({
+                "date": transaction_date,
+                "description": description, "amount": float(withdrawal - deposit),
+                "category": category, "subcategory": "", "accountName": identity[0],
+                "accountType": identity[1], "provider": identity[2],
+            })
+    except csv.Error as exc:
+        raise ImportDataError("Schwab checking CSV is malformed") from exc
+    if headers is None:
+        raise ImportDataError("Schwab checking CSV headers are missing")
+    warnings = [f"Skipped {skipped} pending Schwab transactions; import them after they post."] if skipped else []
+    if missing_interest_amounts:
+        row_label = "row" if missing_interest_amounts == 1 else "rows"
+        warnings.append(
+            f"Skipped {missing_interest_amounts} Schwab interest-adjustment {row_label} with no Withdrawal or Deposit amount. "
+            "No amount was inferred; check the source export if you expected an interest payment."
+        )
+    return transactions, warnings
+
+
 def parse_capital_one(
     content: Any,
     account_identity: tuple[str, str, str] | None = None,
@@ -468,6 +588,11 @@ def parse_apple_card(
             amount = abs(amount)
         elif transaction_type in APPLE_CARD_CREDIT_TYPES:
             amount = -abs(amount)
+        else:
+            source_type = record["type"] or "<blank>"
+            raise ImportDataError(
+                f"{location}.Type is not supported: {source_type}"
+            )
 
         description = record["description"] or record.get("merchant", "")
         if not description:

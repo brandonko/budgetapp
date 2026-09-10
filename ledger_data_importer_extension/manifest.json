@@ -1,13 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Ledger Data Importer",
-  "version": "0.9.1",
-  "description": "Import Amazon, AliExpress, eBay, Walmart, Credit Karma, Venmo, Apple Card, and Capital One data into local Ledger.",
+  "version": "0.11.1",
+  "options_ui": { "page": "shared/options.html", "open_in_tab": true },
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "description": "Import Amazon, AliExpress, eBay, Walmart, Credit Karma, Venmo, Apple Card, Capital One, and Schwab checking data into local Ledger.",
   "default_locale": "en",
   "icons": {
-    "48": "amazon_extension/icons/icon-48.png",
-    "96": "amazon_extension/icons/icon-96.png",
-    "128": "amazon_extension/icons/icon-128.png"
+    "16": "shared/icons/icon-16.png",
+    "32": "shared/icons/icon-32.png",
+    "48": "shared/icons/icon-48.png",
+    "96": "shared/icons/icon-96.png",
+    "128": "shared/icons/icon-128.png"
   },
   "permissions": ["activeTab", "cookies", "downloads", "scripting", "storage", "tabs"],
   "host_permissions": [
@@ -33,18 +37,34 @@
     "https://www.walmart.com/*",
     "https://verified.capitalone.com/*",
     "https://myaccounts.capitalone.com/*",
+    "https://client.schwab.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "action": {
     "default_icon": {
-      "48": "amazon_extension/icons/icon-48.png",
-      "96": "amazon_extension/icons/icon-96.png"
+      "16": "shared/icons/icon-16.png",
+      "32": "shared/icons/icon-32.png",
+      "48": "shared/icons/icon-48.png",
+      "96": "shared/icons/icon-96.png",
+      "128": "shared/icons/icon-128.png"
     },
     "default_title": "Ledger Data Importer",
-    "default_popup": "amazon_extension/popup/popup.html"
+    "default_popup": "shared/popup.html"
   },
   "content_scripts": [
+    {
+      "matches": ["https://client.schwab.com/*"],
+      "js": ["schwab_extension/capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://client.schwab.com/*"],
+      "js": ["schwab_extension/csv.js", "schwab_extension/content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
     {
       "matches": ["https://verified.capitalone.com/*", "https://myaccounts.capitalone.com/*"],
       "js": ["capitalone_extension/capture.js"],

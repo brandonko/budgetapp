@@ -28,6 +28,31 @@ function setup(initiallyOpen = false) {
   vm.runInNewContext(source, { document });
   return { menu, attributes, focused, handlers, menuHandlers, linkHandlers, link };
 }
+test("initial state is accessible before any native toggle event", () => {
+  for (const open of [false, true]) {
+    const state = setup(open);
+    assert.deepEqual(state.attributes, {
+      "aria-expanded": String(open),
+      "aria-label": open ? "Close navigation menu" : "Open navigation menu",
+    });
+    assert.equal(state.focused.length, 0);
+  }
+});
+test("coalesced toggle events use the final disclosure state without moving focus", () => {
+  const state = setup();
+  state.menu.open = true;
+  state.menu.open = false;
+  state.menu.open = true;
+  state.menuHandlers.toggle();
+  assert.equal(state.attributes["aria-expanded"], "true");
+  assert.equal(state.attributes["aria-label"], "Close navigation menu");
+  state.handlers.keydown({ key: "Escape" });
+  state.menu.open = true;
+  state.menuHandlers.toggle();
+  assert.equal(state.attributes["aria-expanded"], "true");
+  assert.equal(state.attributes["aria-label"], "Close navigation menu");
+  assert.equal(state.focused.length, 1, "Only Escape explicitly returns focus");
+});
 test("Escape updates accessible state before focus without waiting for toggle", () => {
   const state = setup(true);
   assert.equal(state.attributes["aria-expanded"], "true");
