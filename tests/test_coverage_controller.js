@@ -26,6 +26,23 @@ test("filters rerender locally while summary remains all-account and preferences
   assert.equal(app.calls.length, 1); assert.equal(app.calls[0][1].method, undefined);
   assert.equal(JSON.parse(app.writes.at(-1)[1]).year, "2025");
 });
+test("initial year prefers local current activity even with future dates and invalid saved years", async () => {
+  for (const stored of [null, JSON.stringify({ year: "2024" })]) {
+    const app = await start([{ payload: { transactions: [row(), row({ date: "2027-02-01" })] } }], stored);
+    assert.equal(app.el("year").value, "2026");
+    assert.match(app.el("results-count").textContent, /2026/);
+    assert.match(app.el("accounts").textContent, /2026 activity1 rows/);
+    assert.equal(JSON.parse(app.writes.at(-1)[1]).year, "2026");
+  }
+});
+
+test("a valid saved year remains selected, including a deliberately selected future year", async () => {
+  for (const year of ["2025", "2027"]) {
+    const app = await start([{ payload: { transactions: [row(), row({ date: `${year}-02-01` })] } }], JSON.stringify({ year }));
+    assert.equal(app.el("year").value, year);
+  }
+});
+
 test("missing CSV is setup, while load failure hides stale data and permits retry", async () => {
   const missing = await start([{ status: 404, payload: { code: "transaction_file_missing" } }]);
   assert.equal(missing.el("setup").hidden, false); assert.equal(missing.el("status").hidden, true);

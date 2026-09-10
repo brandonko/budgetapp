@@ -82,7 +82,10 @@
       }
       today = localToday();
       const available = model.buildCoverage(rows, { today });
-      if (!available.years.includes(selectedYear)) selectedYear = available.years[0];
+      if (!available.years.includes(selectedYear)) {
+        const currentYear = today.slice(0, 4);
+        selectedYear = available.years.includes(currentYear) ? currentYear : available.years[0];
+      }
       el("year").replaceChildren(...available.years.map((year) => { const option = node("option", year); option.value = year; return option; }));
       el("year").value = selectedYear;
       el("setup").hidden = rows.length > 0; el("content").hidden = rows.length === 0;
