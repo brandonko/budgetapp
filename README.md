@@ -178,6 +178,9 @@ The review modal uses the same searchable, filterable, and sortable transaction
 toolbar as the dashboard; its Duplicate, No rule matched, and New visibility
 toggles sit immediately below that toolbar.
 
+All file and browser imports use this staged session workflow. The retired
+direct-upload API cannot append transactions without preview and confirmation.
+
 Closing an uncommitted review with Cancel, X, Escape, or an outside click asks
 before discarding the imported data. Cancel that prompt to keep reviewing with
 your edits and selections intact. Confirming discard saves nothing.

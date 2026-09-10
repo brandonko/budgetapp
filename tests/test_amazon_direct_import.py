@@ -447,9 +447,8 @@ class AmazonDirectImportTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(session["status"], "error")
 
-    def test_existing_file_upload_endpoint_still_uses_shared_merge_logic(self) -> None:
-        status, state = self.request("GET", "/api/transactions")
-        self.assertEqual(status, 200)
+    def test_legacy_direct_import_endpoint_cannot_mutate_transactions(self) -> None:
+        before, revision = read_transaction_state(self.csv_path)
         credit_karma = json.dumps(
             {
                 "transactions": [
@@ -466,18 +465,17 @@ class AmazonDirectImportTests(unittest.TestCase):
                 ]
             }
         )
-        status, imported = self.request(
+        status, rejected = self.request(
             "POST",
             "/api/import",
             {
-                "revision": state["revision"],
+                "revision": revision,
                 "files": {"creditkarma": {"name": "credit.json", "content": credit_karma}},
             },
         )
-        self.assertEqual(status, 200)
-        self.assertEqual(imported["import"]["added"], 1)
-        self.assertEqual(imported["transactions"][0]["amount"], 4.5)
-        self.assertTrue(imported["transactions"][0]["createdAt"].endswith("Z"))
+        self.assertEqual(status, 410)
+        self.assertIn("staged import session", rejected["error"])
+        self.assertEqual(read_transaction_state(self.csv_path)[0], before)
 
     def test_missing_transaction_file_can_be_initialized_from_api(self) -> None:
         self.csv_path.unlink()
