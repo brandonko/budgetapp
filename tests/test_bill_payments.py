@@ -177,15 +177,15 @@ class BillPaymentReconciliationTests(unittest.TestCase):
         rows = public_state(transactions, "revision")["transactions"]
         self.assertFalse(any(row["_isInternalTransfer"] for row in rows))
 
-    def test_automatic_pair_is_exposed_as_internal_transfer(self) -> None:
+    def test_reads_do_not_automatically_flag_an_unsaved_pair(self) -> None:
         transactions = [
             transaction(date="2026-01-08", amount=-34.37, category="Income", account_type="CREDIT"),
             transaction(date="2026-01-08", amount=34.37, category="Transfer", account_type="BANK"),
         ]
 
         rows = public_state(transactions, "revision")["transactions"]
-        self.assertTrue(all(row["_isInternalTransfer"] for row in rows))
-        self.assertTrue(all(row["_internalTransferSource"] == "automatic" for row in rows))
+        self.assertFalse(any(row["_isInternalTransfer"] for row in rows))
+        self.assertTrue(all(row["_internalTransferSource"] == "" for row in rows))
 
     def test_import_preview_exposes_new_automatic_pair_as_internal_transfer(self) -> None:
         parsed = [
