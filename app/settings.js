@@ -216,9 +216,7 @@ const historyBulk = elements.importHistoryTransactions ? window.LedgerTransactio
   onFlagChange: (row, before) => {
     if (!state.transferReview) return;
     const review = state.transferReview;
-    const overrides = new Map(review.overrides.map(item => [item._id, item]));
-    overrides.set(row._id, { ...row });
-    review.overrides = [...overrides.values()];
+    review.overrides = reconciliationDraftOverrides(review, [row]);
     const existing = review.changes.find(entry => entry._id === row._id);
     if (existing) {
       existing.transaction = row;
@@ -572,13 +570,71 @@ async function loadImportHistory() {
   }
 }
 
+function stagedReconciliationRefund(transaction, review = state.transferReview) {
+  if (transaction._linkRole !== "credit" || transaction._linkType !== "refund" || !transaction._linkedTo) return null;
+  const purchaseId = transaction._linkedTo.id;
+  const change = review?.changes.find(entry => entry.after?.id === purchaseId);
+  if (!change || !change.changedFields.includes("links")) return null;
+  const unchanged = transactionUi.transactionLinks(change.before).some(entry =>
+    entry.transactionId === transaction.id && entry.type === "refund");
+  return unchanged ? null : { transactionId: transaction.id, purchaseId };
+}
+
+function originalReconciliationTarget(transaction) {
+  // Undo restores the saved relationship, including a repayment changed to a refund.
+  const originals = new Map(state.availableTransactions.map(row => [row.id, row]));
+  for (const change of state.transferReview?.changes || []) {
+    if (change.before?.id) originals.set(change.before.id, change.before);
+  }
+  for (const purchase of originals.values()) {
+    const entry = transactionUi.transactionLinks(purchase).find(link => link.transactionId === transaction.id);
+    if (entry) return { transactionId: purchase.id, type: entry.type };
+  }
+  return { transactionId: "", type: "refund" };
+}
+
+function reconciliationDraftOverrides(previous, proposed, relationshipEdits = []) {
+  const overrides = new Map((previous?.overrides || []).map(row => [row._id, { ...row }]));
+  const explicitLinks = new Set(relationshipEdits);
+  for (const row of proposed) {
+    const prior = { ...overrides.get(row._id) };
+    if (explicitLinks.has(row.id)) {
+      // An explicit editor/link-button choice replaces an earlier reverse intent.
+      // Ordinary field or flag edits retain it until the enclosing review saves.
+      delete prior.linkTo;
+      delete prior.repaymentTo;
+      if (Number(row.amount) > 0) {
+        const children = new Set(transactionUi.transactionLinks(row).map(entry => entry.transactionId));
+        for (const credit of overrides.values()) {
+          const target = credit.linkTo?.transactionId ?? credit.repaymentTo;
+          if (target === row.id || children.has(credit.id)) {
+            delete credit.linkTo;
+            delete credit.repaymentTo;
+          }
+        }
+      }
+    }
+    overrides.set(row._id, { ...prior, ...row });
+  }
+  return [...overrides.values()];
+}
+
+function reconciliationEditorDraft(transaction, fields) {
+  const draft = { ...transaction };
+  if (Object.hasOwn(fields, "linkTo") || Object.hasOwn(fields, "repaymentTo")) {
+    delete draft.linkTo;
+    delete draft.repaymentTo;
+  }
+  return { ...draft, ...fields };
+}
+
 function importHistoryTransactionOptions(transaction) {
   return {
     currency: currencyFormatter,
     shortMonthFormatter: unclassifiedMonthFormatter,
     detailContent: reconciliationRefundControl(transaction),
     detailPlacement: "row",
-    showLinks: !(state.transferReview?.refundLinks || []).some(link => link.transactionId === transaction.id),
+    showLinks: !stagedReconciliationRefund(transaction),
     disabled: state.transferReviewBusy,
     onEdit: () => openImportHistoryTransactionEditor(transaction),
   };
@@ -587,7 +643,7 @@ function importHistoryTransactionOptions(transaction) {
 function reconciliationRefundControl(transaction) {
   const review = state.transferReview;
   if (!review) return null;
-  const selected = (review.refundLinks || []).find(link => link.transactionId === transaction.id);
+  const selected = stagedReconciliationRefund(transaction, review);
   const candidates = transaction._refundCandidates || [];
   if (!selected && !candidates.length) return null;
   const detail = document.createElement("details");
@@ -643,11 +699,11 @@ function reconciliationRefundControl(transaction) {
   footer.append(action); detail.append(footer);
   action.addEventListener("click", async () => {
     if (action.disabled || state.transferReviewBusy || state.transferReview !== review) return;
-    const next = (review.refundLinks || []).filter(link => link.transactionId !== transaction.id);
-    if (!selected) next.push({ transactionId: transaction.id, purchaseId: chosen });
+    const linkTo = selected ? originalReconciliationTarget(transaction)
+      : { transactionId: chosen, type: "refund" };
     state.reconciliationRefundExpanded.add(transaction.id);
     action.disabled = true;
-    try { await refreshTransferReview([], next); }
+    try { await refreshTransferReview([reconciliationEditorDraft(transaction, { linkTo })], [transaction.id]); }
     catch (error) {
       elements.importHistoryDialogError.textContent = error.message;
       elements.importHistoryDialogError.hidden = false;
@@ -866,17 +922,16 @@ async function openImportHistoryBatch(importBatch) {
   }
 }
 
-async function refreshTransferReview(proposed = [], refundLinks = state.transferReview?.refundLinks || []) {
+async function refreshTransferReview(proposed = [], relationshipEdits = []) {
   const previous = state.transferReview;
-  const overrides = new Map((previous?.overrides || []).map((row) => [row._id, row]));
-  proposed.forEach((row) => overrides.set(row._id, row));
+  const overrides = reconciliationDraftOverrides(previous, proposed, relationshipEdits);
   state.transferReviewBusy = true;
   const confirm = document.querySelector("#confirm-transfer-review");
   confirm.disabled = true;
   try {
     const response = await fetch("/api/internal-transfers/preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides: [...overrides.values()], includeRefunds:true, refundLinks,
+      body: JSON.stringify({ ...(previous?.revision ? { revision: previous.revision } : {}), overrides, includeRefunds:true, refundLinks: [],
         nonzeroDecimal: previous?.nonzeroDecimal ?? Boolean(document.querySelector("#reconciliation-nonzero-decimal")?.checked) }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -886,7 +941,7 @@ async function refreshTransferReview(proposed = [], refundLinks = state.transfer
     if (!Array.isArray(payload.alreadyFlagged)) {
       throw new Error("Restart the Ledger Python server to view already flagged transfers, then scan again.");
     }
-    state.transferReview = { ...payload, overrides: [...overrides.values()] };
+    state.transferReview = { ...payload, overrides };
     state.importHistoryRevision = payload.revision;
     const refundCandidates = new Map((payload.refundSuggestions || []).map(row => [row.id, row._refundCandidates]));
     state.importHistoryTransactions = [...payload.transactions, ...(payload.refundSuggestions || []), ...payload.alreadyFlagged]
@@ -1056,10 +1111,10 @@ async function saveImportHistoryTransaction(event) {
   setImportHistoryEditBusy(true);
   try {
     if (edit.staged) {
-      await refreshTransferReview([{
-        ...transaction,
-        ...transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction),
-      }]);
+      const fields = transactionUi.transactionFromEditor(elements.importHistoryEditForm, transaction);
+      const relationshipChanged = ["links", "linkTo", "repaymentTo"].some(field => Object.hasOwn(fields, field));
+      await refreshTransferReview([reconciliationEditorDraft(transaction, fields)],
+        relationshipChanged ? [transaction.id] : []);
       finishTransactionEdit();
       return;
     }

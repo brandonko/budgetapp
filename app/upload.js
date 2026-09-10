@@ -45,7 +45,6 @@ const state = {
   revision: "",
   importedTransactions: [],
   reviewEditedIds: new Set(),
-  refundSelections: new Map(),
   refundDetailsOpen: new Set(),
   refundCandidateChoices: new Map(),
   reviewSession: null,
@@ -1738,7 +1737,7 @@ const importRangeSelection = transactionUi.createCheckboxRangeSelection((ids, ch
   if (!state.reviewSession || state.reviewCommitted || state.reviewCommitting || importBulk.isActive()) return;
   const affected = new Set(ids);
   state.importedTransactions.forEach((row) => {
-    if (affected.has(row._stagedId) && !state.refundSelections.has(row._stagedId)) row._selected = checked;
+    if (affected.has(row._stagedId)) row._selected = checked;
   });
   const refresh = refreshEditedImport(state.importedTransactions);
   renderImportedTransactions();
@@ -1751,7 +1750,7 @@ function importedTransactionRowOptions(transaction, index) {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = transaction._selected;
-  checkbox.disabled = state.reviewCommitted || state.reviewCommitting || state.refundSelections.has(transaction._stagedId);
+  checkbox.disabled = state.reviewCommitted || state.reviewCommitting;
   checkbox.setAttribute("aria-label", `Include ${transaction.description} in import`);
   importRangeSelection.bind(checkbox, transaction._stagedId);
   selection.append(checkbox);
@@ -1764,15 +1763,42 @@ function importedTransactionRowOptions(transaction, index) {
     detailContent: refundReviewControl(transaction),
     detailPlacement: "row",
     needsClassification:
-      !transaction._refundAlreadyHandled && !state.refundSelections.has(transaction._stagedId)
+      !transaction._refundAlreadyHandled && !isLinkedRefundCredit(transaction)
       && !transactionUi.isInternalTransfer(transaction) && transaction._classificationMatched === false,
     disabled: state.reviewCommitted || state.reviewRefreshing || state.reviewCommitting,
     onEdit: () => openImportedTransactionEditor(index),
   };
 }
 
-function refundSelectionPayload(selections = state.refundSelections) {
-  return [...selections].map(([stagedId, purchaseId]) => ({ stagedId, purchaseId }));
+function isLinkedRefundCredit(transaction) {
+  return transaction._linkRole === "credit" && transaction._linkType === "refund" && Boolean(transaction._linkedTo);
+}
+
+function importEditorTransactions() {
+  return [...state.availableTransactions, ...state.existingTransferUpdates, ...state.importedTransactions];
+}
+
+function applyImportedLinkEdit(transactions, current, changes) {
+  const updated = transactions.map(row => {
+    if (row._stagedId !== current._stagedId) return row;
+    const next = { ...row, ...changes };
+    if (Object.hasOwn(changes, "linkTo")) delete next.repaymentTo;
+    else if (Object.hasOwn(changes, "repaymentTo")) delete next.linkTo;
+    return next;
+  });
+  if (Number(current.amount) <= 0 || !Object.hasOwn(changes, "links")) return updated;
+  const previous = current._linkedTransactions || [];
+  const entries = JSON.parse(changes.links || "[]");
+  const children = new Set([...previous.map(row => row.id), ...entries.map(entry => entry.transactionId)]);
+  // A purchase-side edit supersedes any earlier credit-side intent in this batch.
+  // Otherwise revalidating would silently replay a removed or retyped refund.
+  return updated.map(row => {
+    if (!children.has(row.id)) return row;
+    const entry = entries.find(item => item.transactionId === row.id);
+    const next = { ...row, linkTo: { transactionId: entry ? current.id : "", type: entry?.type || current._linkType || "refund" } };
+    delete next.repaymentTo;
+    return next;
+  });
 }
 
 function importRowsForRequest(rows) {
@@ -1782,13 +1808,11 @@ function importRowsForRequest(rows) {
 
 async function chooseRefundMatch(transaction, purchaseId) {
   if (state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing || importBulk.isActive()) return;
-  const choices = new Map(state.refundSelections);
-  if (purchaseId === null) choices.delete(transaction._stagedId);
-  else choices.set(transaction._stagedId, purchaseId);
-  const rows = state.importedTransactions.map((row) => row._stagedId === transaction._stagedId
-    ? { ...row, _selected: purchaseId === null } : row);
+  const rows = applyImportedLinkEdit(state.importedTransactions, transaction, {
+    linkTo: { transactionId: purchaseId || "", type: "refund" }, _selected: true,
+  });
   try {
-    const request = refreshEditedImport(rows, [], choices);
+    const request = refreshEditedImport(rows, [transaction._stagedId]);
     renderImportedTransactions();
     await request;
   } catch (error) { showReviewValidationError(error); }
@@ -1797,8 +1821,8 @@ async function chooseRefundMatch(transaction, purchaseId) {
 
 function refundReviewControl(transaction) {
   const candidates = transaction._refundCandidates || [];
-  const purchaseId = state.refundSelections.get(transaction._stagedId);
-  const matched = purchaseId !== undefined;
+  const matched = isLinkedRefundCredit(transaction);
+  const purchaseId = matched ? transaction._linkedTo.id : undefined;
   if (!candidates.length && !matched && !transaction._refundAlreadyHandled) return null;
   const box = document.createElement("section");
   box.className = "import-refund-match";
@@ -1812,7 +1836,7 @@ function refundReviewControl(transaction) {
   panel.hidden = !state.refundDetailsOpen.has(id);
   const title = document.createElement("h4");
   title.textContent = matched
-    ? (state.reviewCommitted ? "Purchase marked refunded" : "Purchase will be marked refunded")
+    ? (state.reviewCommitted ? "Refund linked" : "Refund link staged")
     : transaction._refundAlreadyHandled ? "Refund already handled"
       : `Possible refund · ${candidates.length === 1 ? "same-price purchase found" : `${candidates.length} same-price purchases found`}`;
   const explanation = document.createElement("p");
@@ -1835,20 +1859,20 @@ function refundReviewControl(transaction) {
   };
   setExpanded(!panel.hidden);
   detailToggle.addEventListener("click", () => setExpanded(panel.hidden));
-  const chosenId = () => purchaseId ?? (candidates.length === 1 ? candidates[0]._id : state.refundCandidateChoices.get(id));
+  const chosenId = () => purchaseId ?? (candidates.length === 1 ? candidates[0].id : state.refundCandidateChoices.get(id));
   const purchaseRows = document.createElement("div");
   purchaseRows.className = "import-refund-purchases";
-  for (const purchase of candidates.filter((row) => !matched || row._id === purchaseId)) {
+  for (const purchase of matched ? [transaction._linkedTo] : candidates) {
     let selection = null;
     if (!matched && candidates.length > 1) {
       selection = document.createElement("label");
       selection.className = "import-selection";
       const radio = document.createElement("input");
       radio.type = "radio"; radio.name = `refund-purchase-${id}`;
-      radio.value = String(purchase._id); radio.checked = chosenId() === purchase._id;
+      radio.value = purchase.id; radio.checked = chosenId() === purchase.id;
       radio.disabled = busy || state.reviewCommitted;
       radio.setAttribute("aria-label", `Match refund to ${purchase.description} on ${purchase.date}`);
-      radio.addEventListener("change", () => { if (radio.checked) state.refundCandidateChoices.set(id, purchase._id); });
+      radio.addEventListener("change", () => { if (radio.checked) state.refundCandidateChoices.set(id, purchase.id); });
       selection.append(radio);
     }
     purchaseRows.append(transactionUi.createTransactionRow(purchase, {
@@ -1861,10 +1885,10 @@ function refundReviewControl(transaction) {
     button.type = "button";
     button.className = "import-refund-action";
     button.textContent = matched ? "Undo match" : "Mark as refunded";
-    button.title = matched ? "Undo this staged refund match" : "Match this credit to a saved purchase; saved only on import confirmation";
+    button.title = matched ? "Undo this staged refund match" : "Link this credit to a purchase; saved only on import confirmation";
     button.disabled = busy;
     button.addEventListener("click", () => {
-      if (!matched && !candidates.some((purchase) => purchase._id === chosenId())) {
+      if (!matched && !candidates.some((purchase) => purchase.id === chosenId())) {
         setExpanded(true); purchaseRows.querySelector("input")?.focus(); return;
       }
       chooseRefundMatch(transaction, matched ? null : chosenId());
@@ -1873,7 +1897,7 @@ function refundReviewControl(transaction) {
   } else {
     const status = document.createElement("span");
     status.className = "import-refund-status";
-    status.textContent = transaction._refundAlreadyHandled ? "Refund already handled" : "Purchase marked refunded";
+    status.textContent = transaction._refundAlreadyHandled ? "Refund already handled" : "Refund linked";
     controls.append(status);
   }
   controls.append(detailToggle);
@@ -1885,7 +1909,7 @@ const importBulk = window.LedgerTransactionBulk.create({
   container: elements.reviewList, staged: true, importSelection: true,
   getGroupFilter: () => state.reviewFieldFilters.group,
   getTransactions: () => state.importedTransactions,
-  getAllTransactions: () => [...state.availableTransactions, ...state.importedTransactions],
+  getAllTransactions: importEditorTransactions,
   getKey: (row) => row._stagedId,
   getRevision: () => state.reviewSession?.token,
   render: () => renderImportedTransactions(),
@@ -1900,7 +1924,7 @@ const importBulk = window.LedgerTransactionBulk.create({
   },
 });
 
-async function refreshEditedImport(transactions, editedIds = [], refundSelections = state.refundSelections) {
+async function refreshEditedImport(transactions, editedIds = []) {
   // Track explicit user changes only, not inclusion toggles or automatic detection.
   // Occurrence IDs keep identical transactions independent and never enter the CSV.
   const originals = new Map(state.importedTransactions.map((row) => [row._stagedId, row]));
@@ -1909,17 +1933,6 @@ async function refreshEditedImport(transactions, editedIds = [], refundSelection
     && originals.has(row._stagedId)
     && window.LedgerTransactionBulk.changedFields(originals.get(row._stagedId), row).length)
     .map((row) => row._stagedId);
-  refundSelections = new Map(refundSelections);
-  for (const id of changedIds) {
-    const before = originals.get(id);
-    const after = transactions.find((row) => row._stagedId === id);
-    const withoutFollowUpFlag = (row) => ({ ...row, flags: transactionUi.transactionFlags(row).filter((flag) => flag !== "flagged").sort().join(",") });
-    if (!window.LedgerTransactionBulk.changedFields(withoutFollowUpFlag(before), withoutFollowUpFlag(after)).length) continue;
-    // An editor change discards just this row's refund decision; it can be reviewed again.
-    if (refundSelections.delete(id)) {
-      transactions = transactions.map((row) => row._stagedId === id ? { ...row, _selected: true } : row);
-    }
-  }
   const generation = ++state.reviewGeneration;
   const session = state.reviewSession;
   state.reviewRefreshing = true;
@@ -1929,8 +1942,7 @@ async function refreshEditedImport(transactions, editedIds = [], refundSelection
     const response = await fetch("/api/transactions/staged-preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ revision: state.revision, transactions: importRowsForRequest(transactions),
-        ...(session?.source === "creditkarma" ? { importToken: session.token } : {}),
-        refundSelections: refundSelectionPayload(refundSelections) }),
+        ...(session?.token ? { importToken: session.token } : {}) }),
     });
     const payload = await response.json().catch(() => ({}));
     if (generation !== state.reviewGeneration || session !== state.reviewSession) return;
@@ -1939,14 +1951,17 @@ async function refreshEditedImport(transactions, editedIds = [], refundSelection
       throw new Error("Restart the Ledger Python server to enable persisted transfer detection, then start the import again.");
     }
     const checked = new Map(payload.transactions.map((row) => [row._stagedId, row]));
-    state.importedTransactions = transactions.map((row) => ({ ...row, ...checked.get(row._stagedId), _selected: row._selected }));
-    state.refundSelections = refundSelections;
+    if (checked.size !== transactions.length || transactions.some(row => !checked.has(row._stagedId))) {
+      throw new Error("The edited import response is incomplete. Retry the review.");
+    }
+    // Do not carry old server projections across an unlink or selection change.
+    state.importedTransactions = transactions.map((row) => ({ ...checked.get(row._stagedId), _selected: row._selected }));
     changedIds.forEach((id) => state.reviewEditedIds.add(id));
     state.transferPlan = payload.transferPlan;
     state.existingTransferUpdates = payload.existingTransferUpdates || [];
     state.reviewValidationFailed = false;
     elements.reviewError.hidden = true;
-    const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !state.refundSelections.has(row._stagedId) && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
+    const unmatched = state.importedTransactions.filter((row) => !row._isDuplicate && !isLinkedRefundCredit(row) && !transactionUi.isInternalTransfer(row) && row._classificationMatched === false).length;
     const transfers = state.importedTransactions.filter((row) => !row._isDuplicate && transactionUi.isInternalTransfer(row)).length;
     elements.reviewSubtitle.textContent = `${transactions.length} parsed · ${payload.new} new (${unmatched} no rule matched, ${transfers} internal transfers) · ${payload.duplicates} duplicates`;
     return true;
@@ -1969,17 +1984,17 @@ function showReviewValidationError(error) {
 
 function updateReviewSelection() {
   const selected = state.importedTransactions.filter((transaction) => transaction._selected).length;
-  const matched = state.refundSelections.size;
+  const matched = state.importedTransactions.filter(row => row._selected && isLinkedRefundCredit(row)).length;
   elements.confirmReview.textContent = matched
     ? `Confirm ${selected} ${selected === 1 ? "import" : "imports"} · ${matched} ${matched === 1 ? "refund" : "refunds"}`
     : `Import selected (${selected})`;
   elements.confirmReview.disabled = state.reviewCommitted || state.reviewCommitting || state.reviewRefreshing
-    || state.reviewValidationFailed || (selected === 0 && matched === 0) || importBulk.isActive();
+    || state.reviewValidationFailed || selected === 0 || importBulk.isActive();
 }
 
 function importReviewType(transaction) {
   if (transaction._isDuplicate) return "duplicate";
-  if (state.refundSelections.has(transaction._stagedId)) return "new";
+  if (isLinkedRefundCredit(transaction)) return "new";
   if (transactionUi.isInternalTransfer(transaction)) return "new";
   if (transaction._classificationMatched === false) return "unmatched";
   return "new";
@@ -2033,7 +2048,7 @@ function renderImportedTransactions() {
     visibleIndexes.map((index) => state.importedTransactions[index]),
     importReviewSort.value(),
   );
-  importRangeSelection.sync(importBulk.filter(visibleTransactions).filter((row) => !state.refundSelections.has(row._stagedId)).map((row) => row._stagedId), state.reviewSession);
+  importRangeSelection.sync(importBulk.filter(visibleTransactions).map((row) => row._stagedId), state.reviewSession);
   importBulk.render(
     visibleTransactions,
     (transaction) => importedTransactionRowOptions(
@@ -2050,9 +2065,9 @@ function renderExistingTransferUpdates() {
     review.className = "import-transfer-updates";
     review.open = true;
     const summary = document.createElement("summary");
-    summary.textContent = `${state.existingTransferUpdates.length} existing transactions will also be flagged as internal transfers`;
+    summary.textContent = `${state.existingTransferUpdates.length} saved transactions have pending relationship updates`;
     const note = document.createElement("p");
-    note.textContent = "These are the matching sides already in Ledger. Only their transfer flags change. Uncheck the incoming counterpart to leave an existing row unchanged.";
+    note.textContent = "These counterparts are already in Ledger. Their reviewed links or transfer treatment change only when you confirm this import; original amounts remain intact. Undo a refund match or unlink it in the editor to remove that proposal.";
     review.append(summary, note);
     for (const row of transactionUi.sortTransactions(state.existingTransferUpdates, importReviewSort.value())) {
       review.append(transactionUi.createTransactionRow(row, { currency, shortMonthFormatter, showEdit: false }));
@@ -2096,7 +2111,7 @@ function openImportedTransactionEditor(index) {
     ),
   );
   transactionUi.populateTransactionEditor(elements.editForm, transaction, {}, {
-    transactions: [...state.availableTransactions, ...state.importedTransactions],
+    transactions: importEditorTransactions(),
   });
   if (elements.reviewDialog.open) elements.reviewDialog.close();
   elements.editDialog.showModal();
@@ -2123,13 +2138,11 @@ async function saveImportedTransaction(event) {
   if (!current) return;
   const transaction = transactionFromEditForm();
   clearEditError();
-  const updated = [...state.importedTransactions];
-  updated[index] = {
-    ...current,
+  const updated = applyImportedLinkEdit(state.importedTransactions, current, {
     ...transaction,
     amount: Number(transaction.amount),
     _selected: true,
-  };
+  });
   setEditBusy(true);
   try {
     if (!await refreshEditedImport(updated, [current._stagedId])) return;
@@ -2193,7 +2206,6 @@ function renderResult(result, source, token) {
   state.revision = result.revision;
   state.reviewSession = { source, token };
   state.reviewEditedIds.clear();
-  state.refundSelections.clear();
   state.refundDetailsOpen.clear();
   state.refundCandidateChoices.clear();
   state.reviewCommitted = false;
@@ -2243,7 +2255,6 @@ function clearReviewState() {
   state.reviewCommitted = false;
   state.importedTransactions = [];
   state.reviewEditedIds.clear();
-  state.refundSelections.clear();
   state.refundDetailsOpen.clear();
   state.refundCandidateChoices.clear();
   state.editingImportedIndex = null;
@@ -2300,7 +2311,7 @@ async function confirmImportReview() {
   if (!await importBulk.flushFlags()) return;
   if (state.reviewCommitting || state.reviewCommitted || reviewSessionUrl("commit") !== commitUrl) return;
   const transactions = state.importedTransactions.filter((transaction) => transaction._selected);
-  if (transactions.length === 0 && state.refundSelections.size === 0) return;
+  if (transactions.length === 0) return;
 
   elements.reviewError.hidden = true;
   state.reviewCommitting = true;
@@ -2314,7 +2325,7 @@ async function confirmImportReview() {
     const response = await fetch(commitUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ transactions: importRowsForRequest(transactions), transferPlan: state.transferPlan, refundSelections: refundSelectionPayload() }),
+      body: JSON.stringify({ transactions: importRowsForRequest(transactions), transferPlan: state.transferPlan }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Import failed (${response.status}).`);
@@ -2322,12 +2333,12 @@ async function confirmImportReview() {
     state.reviewCommitted = true;
     state.revision = payload.import?.revision || state.revision;
     elements.reviewEyebrow.textContent = "Import complete";
-    elements.reviewTitle.textContent = state.refundSelections.size ? "Import review saved" : "Transactions imported";
+    elements.reviewTitle.textContent = transactions.some(isLinkedRefundCredit) ? "Import review saved" : "Transactions imported";
     const committed = payload.import?.committed ?? transactions.length;
     elements.reviewSubtitle.textContent = `${committed} ${
       committed === 1 ? "transaction was" : "transactions were"
     } added to Ledger. ${payload.import?.existingTransfersUpdated || 0} existing transactions flagged as internal transfers.`
-      + (payload.import?.purchasesRefunded ? ` ${payload.import.purchasesRefunded} ${payload.import.purchasesRefunded === 1 ? "purchase" : "purchases"} marked refunded; matching credits were not imported.` : "");
+      + (payload.import?.purchasesRefunded ? ` ${payload.import.purchasesRefunded} ${payload.import.purchasesRefunded === 1 ? "purchase" : "purchases"} linked to saved refund credits.` : "");
     elements.cancelReview.hidden = true;
     elements.confirmReview.hidden = true;
     elements.reviewDashboardLink.hidden = false;

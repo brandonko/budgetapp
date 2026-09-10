@@ -97,8 +97,9 @@ within five days, with a transfer category or payment description as a signal.
 They remain one-to-one. Refund suggestions look for an eligible saved positive
 purchase with the exact opposite amount within the preceding 90 days. Candidates
 favor the same account/provider, then newer purchases. An amount match is only
-a suggestion, not proof of a refund; partial or combined refunds and purchases
-arriving in the same import are not automatically inferred.
+a suggestion, not proof of a refund; partial or combined refunds are not
+automatically inferred. Import reviews also suggest eligible selected, new
+purchases arriving in the same batch.
 
 Expand **Possible refund**, select the intended purchase if there are multiple
 candidates, and choose **Link selected purchase**. **Refund link staged** and
@@ -108,10 +109,12 @@ The **Match nonzero decimal** option starts off; enabling it skips whole-dollar
 suggestions without changing saved relationships or manual linking.
 
 In import previews, **Mark as refunded** and its adjacent candidate control
-stage a link to a saved purchase. When several purchases match, choose one
-explicitly. The matched credit's standalone selection is turned off, but the
-actual credit is retained with its relationship on final confirmation; it is
-not silently discarded. **Undo match** returns it to ordinary import selection.
+stage a link to a saved or selected incoming purchase. When several purchases
+match, choose one explicitly. Both incoming sides remain selected and are
+retained with their relationship on final confirmation. Auto-match and the
+manual editor share the same pending link; notes and tag edits preserve it.
+**Undo match** removes the relationship. Include both incoming sides, or unlink
+before excluding one. Reconcile uses the same staged relationship behavior.
 Reimporting a handled credit shows an unchecked duplicate marked **Refund
 already handled**.
 

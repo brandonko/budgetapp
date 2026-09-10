@@ -95,6 +95,17 @@ rows, reviewed links, and affected existing-row flags in one atomic write, with 
 for an existing database. Keep existing createdAt and all unrelated fields intact.
 All cancel paths write nothing; discard stale asynchronous preview responses.
 
+Auto refund buttons and manual editors share one staged relationship, in both
+Import and Reconcile. Show canonical projected counterparts in either editor,
+including an explicitly empty `_reviewLinks` array after unlinking. Raw draft
+`links` and reverse intents remain separate from server-owned projections;
+unrelated edits must not turn inferred proposals into explicit choices. A
+purchase-side link edit supersedes earlier child-side intents. Reverse edits
+must never submit both `linkTo` and legacy `repaymentTo`. Replace old projection
+metadata after each refresh so removed badges, counterpart ownership and net-cost
+treatment cannot linger. Saved-counterpart previews describe pending relationship
+updates, not refunds mislabeled as internal transfers.
+
 Settings → Reconcile provides Find matches and a staged
 review using the same transaction modal, filters, sort and bulk/single editor as
 import history. It displays before/after changes, requires explicit confirmation,
