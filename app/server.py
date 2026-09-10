@@ -1717,25 +1717,65 @@ def refund_proposal_digest(digest, reviewed_credits):
         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def new_refund_link_count(existing, updated):
+    previous = {(row["id"], entry["transactionId"]) for row in existing
+                for entry in reconciliation.links(row) if entry["type"] == "refund"}
+    return sum((row["id"], entry["transactionId"]) not in previous for row in updated
+               for entry in reconciliation.links(row) if entry["type"] == "refund")
+
+
 def import_transfer_review(existing, preview, revision, refund_purchase_ids=()):
     selected = sorted((row for row in preview if row.get(
         "_selected", not row["_isDuplicate"] and row["amount"] != 0
     )), key=lambda row: row["_stagedId"])
+    selected_by_id = {row["id"]: row for row in selected}
+    for parent in preview:
+        if parent["id"] in selected_by_id:
+            continue
+        for entry in reconciliation.links(parent):
+            child = selected_by_id.get(entry["transactionId"])
+            if child is not None and "linkTo" not in child and "repaymentTo" not in child:
+                raise CsvDataError("A linked purchase is not selected. Include its counterpart or unlink the credit first")
     additions = [normalize_imported_transaction(row, "review") for row in selected]
     updated, pair_ids, digest = transfer_plan(existing + additions, revision, len(existing), excluded_ids=refund_purchase_ids)
     projected = reconciliation.decorate([transfers.public_row(row, index) for index, row in enumerate(updated)])
+    for row in projected:
+        # Empty is meaningful after a reverse unlink: the request's raw links
+        # remain an intent, not the editor's resolved relationship state.
+        row["_reviewLinks"] = reconciliation.links(row)
     updates = []
-    for index in pair_ids:
-        if index < len(existing):
+    for index, original in enumerate(existing):
+        if index in pair_ids or reconciliation.links(original) != reconciliation.links(updated[index]):
             row = projected[index]
-            row["_existingTransferUpdate"] = True
+            row["_existingLinkUpdate"] = True
+            if index in pair_ids:
+                row["_existingTransferUpdate"] = True
             updates.append(row)
     for offset, row in enumerate(selected, start=len(existing)):
         # Keep proposed automatic flags out of editable CSV fields until confirmation.
+        for key in ("_linkType", "_linkRole", "_budgetAmount", "_netAmount", "_linkedTo",
+                    "_linkedTransactions", "_isLinkedRefund"):
+            row.pop(key, None)
         row.update({key: value for key, value in projected[offset].items()
                     if key.startswith("_") and key != "_id"})
+    reserved = {row["id"] for row in projected if row.get("_linkRole")}
+    for row in preview:
+        if row.get("_linkRole"):
+            row["_refundCandidates"] = []
+        elif "_refundCandidates" in row:
+            row["_refundCandidates"] = [candidate for candidate in row["_refundCandidates"]
+                                        if candidate["id"] not in reserved]
     return {"transferPlan": digest, "existingTransferUpdates": updates,
-            "transferPairs": len(pair_ids) // 2}
+            "transferPairs": len(pair_ids) // 2,
+            "purchasesRefunded": new_refund_link_count(existing, updated)}
+
+
+def import_refund_review(existing, preview, credits, selections):
+    """Keep domain validation failures inside the import API's no-write boundary."""
+    try:
+        return refunds.decorate(existing, preview, credits, selections)
+    except ValueError as exc:
+        raise CsvDataError(str(exc)) from exc
 
 
 def imported_transaction_state(
@@ -2288,7 +2328,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 )
 
             refund_credits = refunds.import_credits(preview, match_refunds)
-            refunds.decorate(existing, preview, refund_credits, [])
+            import_refund_review(existing, preview, refund_credits, [])
             result = {
                 "rowCount": row_count,
                 **import_transfer_review(existing, preview, baseline_revision),
@@ -3099,7 +3139,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 )
 
             refund_credits = refunds.import_credits(preview, session.get("matchRefunds", True))
-            refunds.decorate(existing, preview, refund_credits, [])
+            import_refund_review(existing, preview, refund_credits, [])
 
             result = {
                 "parsed": len(preview),
@@ -3238,6 +3278,9 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 updated, pair_ids, transfer_digest = transfer_plan(
                     refund_existing + additions, baseline_revision, len(existing), excluded_ids=set(refund_choices.values())
                 )
+                if any(reconciliation.links(updated[index]) for index in refund_choices.values()):
+                    raise CsvDataError("Each refund and each purchase can be matched only once")
+                purchases_refunded = new_refund_link_count(existing, updated) + len(refund_choices)
                 reviewed_credits = session.get("reviewedRefundCredits", {})
                 if refund_choices and set(reviewed_credits) != set(refund_choices):
                     raise RevisionConflict("Review the refund choices again before importing.")
@@ -3248,8 +3291,12 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     raise RevisionConflict("Transfer matches changed. Review the selected transactions again before importing.")
                 if refund_choices and payload.get("transferPlan") != transfer_digest:
                     raise RevisionConflict("Refund matches changed. Review the selected transactions again before importing.")
-                if any("repaymentTo" in row or "linkTo" in row for row in additions) and payload.get("transferPlan") != transfer_digest:
-                    raise RevisionConflict("Review the repayment links before confirming this import.")
+                if any("repaymentTo" in row or "linkTo" in row or reconciliation.links(row)
+                       for row in additions) and payload.get("transferPlan") != transfer_digest:
+                    raise RevisionConflict("Review the transaction links before confirming this import.")
+                if (any(reconciliation.links(row) for row in session.get("import", {}).get("transactions", []))
+                        and payload.get("transferPlan") != transfer_digest):
+                    raise RevisionConflict("Review the complete linked selection before confirming this import.")
                 if payload.get("transferPlan") is not None and payload["transferPlan"] != transfer_digest:
                     raise RevisionConflict("The import review changed. Review it again before importing.")
                 existing_update_count = sum(index < len(existing) for index in pair_ids)
@@ -3293,13 +3340,13 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                 session.update(status="complete", progress=100, **{"import": {
                     "committed": len(additions), "transactions": committed,
                     "revision": saved_revision, "existingTransfersUpdated": existing_update_count,
-                    "purchasesRefunded": len(refund_choices),
+                    "purchasesRefunded": purchases_refunded,
                 }})
 
             result = {
                 "committed": len(additions),
                 "existingTransfersUpdated": existing_update_count,
-                "purchasesRefunded": len(refund_choices),
+                "purchasesRefunded": purchases_refunded,
                 "transactions": committed,
                 "revision": saved_revision,
             }
@@ -3436,10 +3483,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         if set(ids) != session.get("stagedIds"):
                             raise CsvDataError("Review must contain every original staged occurrence")
                         credits = session.get("refundCredits", {})
-                try:
-                    refund_existing, choices = refunds.decorate(existing, result, credits, payload.get("refundSelections", []))
-                except ValueError as exc:
-                    raise CsvDataError(str(exc)) from exc
+                refund_existing, choices = import_refund_review(existing, result, credits, payload.get("refundSelections", []))
                 review = import_transfer_review(refund_existing, result, revision, set(choices.values()))
                 reviewed_credits = {row["_stagedId"]: normalize_imported_transaction(row, "reviewed refund")
                                     for row in result if row["_stagedId"] in choices}
@@ -3450,7 +3494,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         if not session or session.get("status") != "review":
                             raise CsvDataError("Import session is no longer awaiting this review")
                         session["reviewedRefundCredits"] = reviewed_credits
-                review["purchasesRefunded"] = len(choices)
+                review["purchasesRefunded"] += len(choices)
             self.send_json(HTTPStatus.OK, {"transactions": result, "new": new, "duplicates": duplicates, **review})
         except RevisionConflict as exc:
             self.send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
@@ -3480,6 +3524,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     raise RevisionConflict("The transaction file changed. Close this review and scan again.")
                 working = [dict(row) for row in existing]
                 seen = set()
+                drafts = {}
                 for raw in overrides:
                     index = raw.get("_id") if isinstance(raw, Mapping) else None
                     if (isinstance(index, bool) or not isinstance(index, int)
@@ -3491,6 +3536,7 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                     working[index]["id"] = existing[index]["id"]
                     if "links" not in raw:
                         working[index]["links"] = existing[index].get("links", "")
+                    drafts[index] = dict(working[index])
                 try:
                     for index in seen:
                         if working[index].get("links", "") != existing[index].get("links", ""):
@@ -3548,14 +3594,20 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 digest = hashlib.sha256(f"{digest}:nonzeroDecimal={nonzero_decimal}".encode()).hexdigest()
                 public_updated = public_state(updated, revision)["transactions"]
+                for row in public_updated:
+                    row["_reviewLinks"] = reconciliation.links(row)
                 changes = []
                 for index, (before, after) in enumerate(zip(existing, updated)):
                     fields = [field for field in COLUMNS if before.get(field, "") != after.get(field, "")]
                     if fields:
                         proposed = dict(public_updated[index])
                         # Keep inferred flags/links out of staged editor fields.
-                        proposed["flags"] = working[index]["flags"]
-                        proposed["links"] = working[index].get("links", "")
+                        draft = drafts.get(index, existing[index])
+                        proposed["flags"] = draft["flags"]
+                        proposed["links"] = draft.get("links", "")
+                        for field in ("linkTo", "repaymentTo"):
+                            if field in draft:
+                                proposed[field] = draft[field]
                         if index in pair_ids:
                             proposed.update(_isInternalTransfer=True, _isBillPayment=True,
                                             _internalTransferSource="automatic", _transferPair=pair_ids[index])
@@ -3570,17 +3622,31 @@ class BudgetRequestHandler(BaseHTTPRequestHandler):
                         updated, revision = read_transaction_state(self.csv_path)
                     acknowledge_transfer_review(self.csv_path)
                     result = public_state(updated, revision)
-                    result.update(changed=len(changes), transferPairs=len(pair_ids) // 2, refundsLinked=len(choices))
+                    result.update(changed=len(changes), transferPairs=len(pair_ids) // 2,
+                                  refundsLinked=new_refund_link_count(existing, updated))
                 else:
                     changed_ids = {entry["_id"] for entry in changes}
-                    linked_credit_rows = [row for row in public_updated if row["id"] in used_credits
-                                          and row["_id"] not in changed_ids]
+                    related_ids = set(used_credits)
+                    for before, after in zip(existing, updated):
+                        if reconciliation.links(before) != reconciliation.links(after):
+                            related_ids.update(entry["transactionId"]
+                                               for entry in reconciliation.links(before) + reconciliation.links(after))
+                    linked_credit_rows = []
+                    for row in public_updated:
+                        if row["id"] not in related_ids or row["_id"] in changed_ids:
+                            continue
+                        proposed = dict(row)
+                        draft = drafts.get(row["_id"], {})
+                        for field in ("linkTo", "repaymentTo"):
+                            if field in draft:
+                                proposed[field] = draft[field]
+                        linked_credit_rows.append(proposed)
                     result = {"revision": revision, "plan": digest, "changes": changes,
                               "transactions": [entry["transaction"] for entry in changes] + linked_credit_rows,
                               "alreadyFlagged": [public_updated[index]
                                                  for index, row in enumerate(existing)
                                                  if index not in changed_ids
-                                                 and row["id"] not in used_credits
+                                                 and row["id"] not in related_ids
                                                  and (transfers.flags(row) & {"internal-transfer", "refunded"}
                                                       or row.get("links") or public_updated[index].get("_linkRole"))],
                               "refundSuggestions": [row for row in suggestions if row["id"] not in used_credits],

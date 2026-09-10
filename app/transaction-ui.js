@@ -657,7 +657,15 @@
         if (linkState.type === "repayment" && linkState.initialType === "repayment") transaction.repaymentTo = linkState.target;
         else transaction.linkTo = { transactionId: linkState.target, type: linkState.type };
       }
-    } else if (linkState) transaction.links = linkState.entries.length ? JSON.stringify(linkState.entries) : "";
+    } else if (linkState) {
+      // Review projections include pending relationships. Show them in the editor,
+      // but only replace the draft graph when the user actually changes a link.
+      if (JSON.stringify(linkState.entries) !== linkState.initialEntries) {
+        transaction.links = linkState.entries.length ? JSON.stringify(linkState.entries) : "";
+      } else if (JSON.stringify(JSON.parse(existingTransaction?.links || "[]")) === linkState.initialEntries) {
+        transaction.links = existingTransaction?.links || "";
+      }
+    }
     else if (existingTransaction?.links) transaction.links = existingTransaction.links;
     return transaction;
   }
@@ -682,6 +690,10 @@
   }
 
   function transactionLinks(transaction) {
+    if (Array.isArray(transaction?._reviewLinks)) return transaction._reviewLinks.map(entry => ({ ...entry }));
+    if (transaction?._linkRole === "primary" && Array.isArray(transaction._linkedTransactions)) {
+      return transaction._linkedTransactions.map(row => ({ transactionId: row.id, type: transaction._linkType }));
+    }
     try { return JSON.parse(transaction?.links || "[]"); } catch { return []; }
   }
 
@@ -789,7 +801,7 @@
     const unique = new Map(available.filter(row=>row.id).map(row=>[row.id,row]));
     for(const child of transaction._linkedTransactions || []) unique.set(child.id,child);
     const entries = transactionLinks(transaction).map(entry=>({...entry}));
-    const state = {entries}; linkEditorStates.set(form,state);
+    const state = {entries, initialEntries: JSON.stringify(entries)}; linkEditorStates.set(form,state);
     const type = document.createElement("select");
     type.setAttribute("aria-label","Link type");
     for(const [value,label] of Object.entries(linkLabels)) {
@@ -1164,6 +1176,7 @@
     sortTransactions,
     tagsFromTransactions,
     transactionFlags,
+    transactionLinks,
     transactionFromEditor,
   });
 })(window);

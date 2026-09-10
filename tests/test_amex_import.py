@@ -259,6 +259,52 @@ class AmexSessionTests(unittest.TestCase):
                 if before is not None:
                     self.assertTrue(any(p.read_bytes() == before for p in self.path.parent.glob("backups/*.csv")))
 
+    def test_same_import_refund_survives_edit_refresh_commit_and_reimport(self):
+        content = activity_csv(
+            ["08/20/2026", "Synthetic membership purchase", "219.00"],
+            ["08/21/2026", "Synthetic statement credit", "-219.00"],
+            headers=HEADERS[:3],
+        )
+        base, preview = self.stage(content, "csv", matchRefunds=True)
+        review = preview["import"]
+        credit = next(row for row in review["transactions"] if row["amount"] < 0)
+        [candidate] = credit["_refundCandidates"]
+        self.assertEqual((candidate["description"], candidate["_stagedId"]),
+                         ("Synthetic membership purchase", 0))
+        credit["linkTo"] = {"transactionId": candidate["id"], "type": "refund"}
+        credit["notes"] = "Edited after matching"
+        code, refreshed = self.request("POST", "/api/transactions/staged-preview", {
+            "importToken": base.rsplit("/", 1)[1], "revision": review["revision"],
+            "transactions": review["transactions"],
+        })
+        self.assertEqual(code, 200, refreshed)
+        self.assertEqual([row["_budgetAmount"] for row in refreshed["transactions"]], [0, 0])
+        linked_credit = next(row for row in refreshed["transactions"] if row["amount"] < 0)
+        self.assertEqual(linked_credit["_linkedTo"]["id"], candidate["id"])
+        self.assertEqual(linked_credit["_linkType"], "refund")
+        self.assertTrue(all(row["_selected"] for row in refreshed["transactions"]))
+        self.assertFalse(self.path.exists(), "Preview and edits must not initialize the database")
+        self.assertFalse(list(self.path.parent.glob("backups/*.csv")))
+        code, result = self.request("POST", base + "/commit", {
+            "transactions": refreshed["transactions"], "transferPlan": refreshed["transferPlan"],
+        })
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result["import"]["committed"], 2)
+        self.assertEqual(result["import"]["purchasesRefunded"], 1)
+        with self.path.open(newline="", encoding="utf-8") as file:
+            saved = list(csv.DictReader(file))
+        self.assertEqual([(row["date"], row["amount"]) for row in saved],
+                         [("2026-08-20", "219.00"), ("2026-08-21", "-219.00")])
+        self.assertEqual(saved[1]["notes"], "Edited after matching")
+        self.assertEqual(json.loads(saved[0]["links"]),
+                         [{"transactionId": saved[1]["id"], "type": "refund"}])
+        self.assertEqual(saved[0]["createdAt"], saved[1]["createdAt"])
+        self.assertTrue(saved[0]["createdAt"])
+        before = self.path.read_bytes()
+        _, repeated = self.stage(content, "csv", matchRefunds=True)
+        self.assertEqual((repeated["import"]["new"], repeated["import"]["duplicates"]), (0, 2))
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_all_rows_default_optional_inclusive_dates_and_cancel(self):
         content = activity_xlsx(*[[f"08/{day}/2026", *PURCHASE[1:]] for day in (19, 20, 21, 22)])
         base, preview = self.stage(content)

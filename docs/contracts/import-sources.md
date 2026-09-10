@@ -23,32 +23,42 @@ section. Source-specific policies add to that shared review and write boundary.
   When on, Credit Karma retains merchant credits despite Amazon/AliExpress/Venmo/eBay/Walmart exclusions;
   do not infer direction from a raw amount's sign. The legacy standalone parser
   keeps its default filtering unless `match_refunds=True` is explicitly supplied.
-- Refund proposals use exact opposite cents and saved, positive, non-income,
+- Refund proposals use exact opposite cents and eligible saved or selected,
+  nonduplicate incoming purchases. Purchases must be positive, non-income,
   non-refunded, non-internal-transfer purchases within the previous 90 days
   (inclusive). Rank same-account/provider candidates first, then most recent.
   Amount alone is not proof: never auto-confirm a suggestion. Partial/combined
-  refunds and purchases still in the incoming batch are not guessed.
+  refunds are not guessed. Same-batch candidates carry their durable ID and
+  staged occurrence ID; display order must never select a different purchase.
+  Resolve explicit links and transfer proposals before returning candidates so
+  an already claimed purchase cannot be offered to another credit.
 - Show refund proposals as additive detail content in the shared transaction row
   (`transaction-ui.js`), not a separate list implementation. A compact **Mark as
   refunded** button with an adjacent chevron keeps the explanation and matched
   purchase rows collapsed by default. Render candidates with the shared row
   renderer, read-only. Multiple matches require an explicit radio choice; never
   silently choose the first. Keep expanded state through review refreshes.
-  **Mark as refunded** stages one explicit purchase choice, disables the credit's
-  inclusion checkbox, and offers **Undo match**. The final import confirmation
-  can save refund-only changes even with zero rows selected; otherwise zero
-  selected remains disabled. Cancel/close/backdrop/Escape never persist changes.
-  Editing a credit discards only its pending refund choice and revalidates it;
-  changing only its follow-up flag preserves the pending refund choice.
+  **Mark as refunded** stages the same `linkTo` relationship as the shared editor,
+  keeps the credit selected for import, and offers **Undo match**. Both editors
+  show that pending relationship; unrelated notes, tags, flags, and other valid
+  field edits preserve it. A manual refund link, including a partial refund, uses
+  the same status and Undo control even without an exact-price suggestion.
+  Zero selected rows disables confirmation. Cancel/close/backdrop/Escape never
+  persist changes. Selecting only one side of an incoming linked family requires
+  unlinking it or including both sides before confirmation.
 - Keep eligible refund provenance and original credit identity server-owned in
-  the import session. Validate one-to-one staged/purchase IDs, reject duplicate
-  source occurrences and also-imported credits, and bind choices to the reviewed
+  the import session. Send the session token on edited previews for every source,
+  preserving the session's refund preference. Validate one-to-one durable and
+  staged IDs, reject repeated source occurrences, and bind choices to the reviewed
   CSV revision and proposal digest. Exclude the chosen purchases from transfer
   pairing in that import proposal only; do not change other refund/transfer rules.
 - New refund confirmations save the actual source credit plus an explicit refund
   link on the purchase, atomically with selected additions after a safety backup.
   Preserve purchase amount/date, notes, tags, group, unrelated flags and createdAt.
-  The linked credit is retained even though its standalone import checkbox is off.
+  Both selected incoming sides are imported; existing purchases are updated in
+  place. The real credit participates in normal occurrence-aware deduplication.
+  Older `refundSelections` clients remain compatible but cannot also select the
+  same credit or claim it through a second manual relationship.
   Legacy `refund-receipt-YYYY-MM-DD-<positive cents>` flags still contribute omitted
   credit identities to date/amount deduplication, alongside real credit rows;
   do not create new receipt flags or fabricate historical missing credit records.

@@ -168,7 +168,8 @@ class ImportSourcePickerTests(unittest.TestCase):
         self.assertIn('${unmatched} no rule matched, ${internalTransfers} internal transfers', javascript)
         self.assertIn('.import-review-filter[aria-pressed="true"]', css)
         self.assertIn('checkbox.checked = transaction._selected', javascript)
-        self.assertIn("state.reviewValidationFailed || (selected === 0 && matched === 0)", javascript)
+        # Confirmation and selection behavior is exercised by the controller and
+        # real-browser regressions, including selected linked refund credits.
         self.assertIn("state.reviewCommitting || state.reviewRefreshing", javascript)
         self.assertIn(
             '_selected: !transaction._isDuplicate && Number(transaction.amount) !== 0',

@@ -145,20 +145,24 @@ Supported sources:
   The global **Settings → Preferences → Suggest refund matches** option is enabled
   by default and remembered in this browser; it applies to every importer, not just Credit Karma.
   It keeps credits from these services even when their merchant filter is on,
-  and suggests saved purchases at the exact opposite amount within the preceding
+  and suggests saved purchases or selected new purchases in the same import at
+  the exact opposite amount within the preceding
   **90 days**. Same-account purchases appear first; a matching price is only a
   suggestion, particularly for Venmo payments.
   In review, click **Mark as refunded**. The adjacent chevron expands the
   explanation and matched purchases, displayed as transaction rows. If there is
   more than one candidate, select a purchase explicitly before marking it.
-  The credit remains visible and is linked instead of counted independently;
-  **Undo match** restores normal import selection. Only final confirmation saves
+  The credit remains selected and is linked instead of counted independently;
+  **Undo match** removes the pending link. Auto-match and either transaction's
+  editor show and change the same relationship; note and tag edits preserve it.
+  Include both sides of a same-import link, or unlink before excluding one.
+  Only final confirmation saves
   the real credit and its link to the original purchase, and
   cancelling discards both the import and the proposed refund changes. Leave
-  the credit selected to import it normally instead. Turn the toggle off to
+  the credit unmatched and selected to import it normally instead. Turn the toggle off to
   restore merchant exclusions for credits and manage refunds manually.
-  Automatic suggestions cover full refunds of saved purchases. For partial
-  refunds, link credits manually in the purchase editor. Repayments can be linked
+  Automatic suggestions cover full refunds of saved or incoming purchases. For partial
+  refunds, link credits manually in either editor. Repayments can be linked
   from either the original purchase or the repayment's editor.
 - **Amazon orders** creates one transaction per item and applies the `1.10502`
   tax multiplier. Its editable payment-account defaults are `Prime VISA`,
@@ -250,7 +254,8 @@ American Express also reads the entire file unless its date-range option is enab
 **Suggest refund matches** controls suggestions for credits from all sources,
 including uploaded CSVs. Each new import snapshots this preference; changing it
 does not alter an import already in review. Matching uses an exact-price saved
-purchase from the preceding 90 days and always requires explicit review and
+purchase or selected new purchase from the same import within the preceding
+90 days and always requires explicit review and
 confirmation. When off, no importer suggests refunds. Credits otherwise remain
 normal transactions, except Credit Karma restores its selected merchant exclusions.
 These preferences are saved in the current browser, like the theme preference.

@@ -314,6 +314,23 @@ test("shared link editor stages multiple repayments, preserves IDs, and discards
   assert.equal(app.field("amount").listeners.input.length,1,"Reopening does not accumulate handlers");
 });
 
+test("shared editor trusts an explicitly empty review graph without replaying raw links on note edits", async () => {
+  const credit = tx({id:"credit",amount:-100,description:"Returned purchase"});
+  const purchase = tx({id:"purchase",amount:100,links:JSON.stringify([{transactionId:"credit",type:"refund"}]),_reviewLinks:[]});
+  const app = await start([purchase,credit]); const form=app.el("transaction-form");
+  app.shared.populateTransactionEditor(form,purchase,{}, {transactions:[purchase,credit]});
+  assert.equal(form.querySelector(".transaction-linked-selections").textContent,"");
+  assert.equal(app.field("refunded").disabled,false);
+  app.field("notes").value="Kept after unlink";
+  assert.equal(app.shared.transactionFromEditor(form,purchase).links,undefined,
+    "An unchanged projection preserves the existing reverse unlink intent instead of materializing stale raw links");
+  const type=form.querySelector('[aria-label="Link type"]');type.value="repayment";type.dispatch("change");
+  const search=form.querySelector('[aria-label="Find a transaction to link"]');search.value="Returned";search.dispatch("input");
+  textButton(form,"Link").click();
+  assert.deepEqual(JSON.parse(app.shared.transactionFromEditor(form,purchase).links),[{transactionId:"credit",type:"repayment"}]);
+  assert.equal(app.writes().length,0);
+});
+
 test("credit-side repayment editor searches purchases and stages one target without mutating either side", async () => {
   const purchase = tx({id:"purchase", amount:100, notes:"Dinner with friends", links:JSON.stringify([{transactionId:"old-credit",type:"repayment"}])});
   const credit = tx({id:"credit", amount:-30, description:"Alex repayment"});
@@ -2100,24 +2117,41 @@ async function editableImportFixture(rows, response) {
   return app;
 }
 
-async function refundReviewFixture({ duplicate = false, candidateCount = 2 } = {}) {
-  const candidates = [tx({_id:4,description:"Synthetic tool",date:"2026-07-20",amount:25}),
-    tx({_id:9,description:"Synthetic jersey",date:"2026-07-15",amount:25})].slice(0,candidateCount);
-  const rows = [tx({_stagedId:0,description:"AMAZON refund",amount:-25,
+async function refundReviewFixture({ duplicate = false, candidateCount = 2, source = "creditkarma", sameBatch = false } = {}) {
+  const candidates = [tx({id:"purchase-4",_id:4,description:"Synthetic tool",date:"2026-07-20",amount:25}),
+    tx({id:"purchase-9",_id:9,description:"Synthetic jersey",date:"2026-07-15",amount:25})].slice(0,candidateCount);
+  const rows = [tx({id:"refund-credit",_stagedId:0,description:"AMAZON refund",amount:-25,
     _isDuplicate:duplicate,_refundAlreadyHandled:duplicate,_classificationMatched:false,
     _refundCandidates:duplicate ? [] : candidates})];
+  if (sameBatch) rows.push({...candidates[0],_stagedId:1,_isDuplicate:false});
   const app = await reviewPageFixture("upload", (url, options) => {
     if (url.endsWith("staged-preview")) {
       const body = JSON.parse(options.body);
       assert.equal(body.importToken, "refund-session");
-      const choices = new Map(body.refundSelections.map(choice => [choice.stagedId, choice.purchaseId]));
-      return {transactions:body.transactions.map(row => ({...row,_refundCandidates:candidates,
-        _refundPurchaseId:choices.get(row._stagedId) ?? null})),new:1,duplicates:0,transferPlan:"refund-plan"};
+      assert.equal(body.refundSelections, undefined, "Auto matches use the editor's relationship intent");
+      const clean = body.transactions.map(row => Object.fromEntries(Object.entries(row)
+        .filter(([key]) => !key.startsWith("_") || ["_stagedId","_selected","_isDuplicate","_classificationMatched","_refundAlreadyHandled"].includes(key))));
+      const credit = clean.find(row => row.id === "refund-credit");
+      const parents = candidates.map(candidate => clean.find(row => row.id === candidate.id) || candidate);
+      const intent = credit.linkTo || (credit.repaymentTo !== undefined ? {transactionId:credit.repaymentTo,type:"repayment"} : null);
+      const purchase = parents.find(parent => intent ? parent.id === intent.transactionId
+        : JSON.parse(parent.links || "[]").some(entry => entry.transactionId === credit.id));
+      let existingTransferUpdates = [];
+      if (purchase && credit._selected) {
+        const type = intent?.type || JSON.parse(purchase.links)[0].type;
+        credit._linkedTo = {...purchase}; credit._linkRole = "credit"; credit._linkType = type; credit._budgetAmount = 0;
+        const projected = {...purchase,_linkRole:"primary",_linkType:type,_linkedTransactions:[{...credit}],_budgetAmount:0};
+        if (sameBatch) Object.assign(clean.find(row => row.id === purchase.id),projected);
+        else existingTransferUpdates = [projected];
+        credit._refundCandidates = [];
+      } else credit._refundCandidates = candidates;
+      return {transactions:clean,new:rows.length,duplicates:0,transferPlan:"refund-plan",existingTransferUpdates};
     }
-    if (url.endsWith("/commit")) return {import:{committed:0,purchasesRefunded:1,revision:"r2"}};
+    if (url.endsWith("/commit")) return {import:{committed:rows.length,purchasesRefunded:1,revision:"r2"}};
   });
   app.run(`renderResult(${JSON.stringify({parsed:1,new:duplicate?0:1,duplicates:duplicate?1:0,
-    revision:"r1",transferPlan:"p",transactions:rows})}, "creditkarma", "refund-session")`);
+    revision:"r1",transferPlan:"p",transactions:rows})}, "${source}", "refund-session");
+    state.availableTransactions = ${JSON.stringify(sameBatch ? [] : candidates)};`);
   return app;
 }
 
@@ -2138,22 +2172,24 @@ test("refund match is an additive shared row control with a purchase choice and 
   assert.equal(panel.hidden,true,"Refund details start collapsed");
   textButton(list,"Mark as refunded").click(); await flush();
   assert.equal(panel.hidden,false,"Ambiguous matches expand instead of choosing silently");
-  assert.equal(app.run("state.refundSelections.size"),0);
-  const picker = list.querySelectorAll('[type="radio"]').find(radio=>radio.value==="9");
+  assert.equal(app.run("state.importedTransactions.filter(isLinkedRefundCredit).length"),0);
+  const picker = list.querySelectorAll('[type="radio"]').find(radio=>radio.value==="purchase-9");
   picker.checked = true; picker.dispatch("change");
   textButton(list,"Mark as refunded").click(); await flush();
-  assert.equal(app.run("state.refundSelections.get(0)"),9);
-  assert.equal(app.run("state.importedTransactions[0]._selected"),false);
-  assert.match(list.textContent,/Purchase will be marked refunded/);
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-9");
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
+  assert.match(list.textContent,/Refund link staged/);
   assert.match(list.textContent,/Synthetic jersey/);
   assert.match(list.textContent,/Nothing is saved yet/);
-  assert.equal(list.querySelector("input").disabled,true);
+  assert.equal(list.querySelector("input").disabled,false);
   assert.equal(app.el("confirm-import-review").disabled,false,"Refund-only confirmation must be possible");
-  assert.match(app.el("confirm-import-review").textContent,/0 imports · 1 refund$/);
+  assert.match(app.el("confirm-import-review").textContent,/1 import · 1 refund$/);
   assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0);
   assert(!app.requests.at(-1).body.includes("_refundCandidates"));
   textButton(list,"Undo match").click(); await flush();
-  assert.equal(app.run("state.refundSelections.size"),0);
+  assert.equal(app.run("state.importedTransactions.filter(isLinkedRefundCredit).length"),0);
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo"),undefined);
+  assert.equal(app.run("state.importedTransactions[0]._budgetAmount"),undefined);
   assert.equal(app.run("state.importedTransactions[0]._selected"),true);
   assert.equal(app.el("confirm-import-review").textContent,"Import selected (1)");
 });
@@ -2172,31 +2208,36 @@ test("a single refund candidate can be staged from the compact control without e
   assert.equal(list.querySelectorAll('[type="radio"]').length,0);
   assert.equal(list.querySelectorAll('.transaction-flag-toggle').length,1,"Nested purchases are read-only");
   textButton(list,"Mark as refunded").click(); await flush();
-  assert.equal(app.run("state.refundSelections.get(0)"),4);
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-4");
   assert.equal(list.querySelector(".import-refund-details").hidden,true);
   assert.equal(app.requests.some(request=>request.url.endsWith("/commit")),false);
 });
 
-test("confirming a refund-only review submits the explicit choice without the credit", async () => {
+test("confirming a refund review imports the real credit with the editor's explicit link", async () => {
   const app = await refundReviewFixture();
   await stageFirstRefundMatch(app);
   app.el("confirm-import-review").click(); await flush();
   const commit = JSON.parse(app.requests.find(request=>request.url.endsWith("/commit")).body);
-  assert.deepEqual(commit.transactions,[]);
-  assert.deepEqual(commit.refundSelections,[{stagedId:0,purchaseId:4}]);
+  assert.equal(commit.transactions.length,1);
+  assert.deepEqual(commit.transactions[0].linkTo,{transactionId:"purchase-4",type:"refund"});
+  assert.equal(commit.transactions[0].amount,-25);
+  assert.equal(commit.refundSelections,undefined);
   assert.equal(commit.transferPlan,"refund-plan");
-  assert.match(app.el("import-review-subtitle").textContent,/1 purchase marked refunded/);
-  assert.match(app.el("import-review-list").textContent,/Purchase marked refunded/);
+  assert.match(app.el("import-review-subtitle").textContent,/1 purchase linked to saved refund credits/);
+  assert.match(app.el("import-review-list").textContent,/Refund linked/);
   assert.equal(app.el("review-dashboard-link").hidden,false);
 });
 
-test("editing a matched credit invalidates only its pending decision and restores import inclusion", async () => {
+test("editing notes on an auto-matched credit displays and preserves the same pending link", async () => {
   const app = await refundReviewFixture();
   await stageFirstRefundMatch(app);
   app.el("import-review-list").querySelector(".edit-button").click();
+  assert.match(app.el("import-edit-form").querySelector(".transaction-linked-selections").textContent,/Synthetic tool/);
   const form=app.el("import-edit-form"); form.elements.namedItem("notes").value="Reviewed personally";
   form.dispatch("submit"); await flush();
-  assert.equal(app.run("state.refundSelections.size"),0);
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-4");
+  assert.equal(app.run("state.importedTransactions[0].notes"),"Reviewed personally");
+  assert.match(app.el("import-review-list").textContent,/Undo match/);
   assert.equal(app.run("state.importedTransactions[0]._selected"),true);
   assert.match(app.el("import-review-list").textContent,/Edited/);
   assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0);
@@ -2208,7 +2249,7 @@ test("all dismissal paths discard refund decisions; duplicates explain prior han
     await stageFirstRefundMatch(app);
     app.window.confirm=()=>true;
     dismissImportReview(app,how); await flush();
-    assert.equal(app.run("state.refundSelections.size"),0,how);
+    assert.equal(app.run("state.importedTransactions.length"),0,how);
     assert.equal(app.requests.filter(request=>request.url.endsWith("/commit")).length,0,how);
   }
   const duplicate=await refundReviewFixture({duplicate:true});
@@ -2218,6 +2259,56 @@ test("all dismissal paths discard refund decisions; duplicates explain prior han
   assert.match(duplicate.el("import-review-list").textContent,/Duplicate/);
   assert.doesNotMatch(duplicate.el("import-review-list").textContent,/No rule matched/);
   assert.equal(duplicate.el("confirm-import-review").disabled,true);
+});
+
+test("manual refund links and auto Undo mutate the same relationship, including partial matches", async () => {
+  const app = await refundReviewFixture();
+  app.el("import-review-list").querySelector(".edit-button").click();
+  const form = app.el("import-edit-form");
+  const type = form.querySelector('[aria-label="Link type"]'); type.value="refund"; type.dispatch("change");
+  const search = form.querySelector('[aria-label="Find the original purchase"]'); search.value="Synthetic jersey"; search.dispatch("input");
+  textButton(form,"Link").click();
+  form.elements.namedItem("amount").value="-10";
+  form.dispatch("submit"); await flush();
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-9");
+  assert.match(app.el("import-review-list").textContent,/Undo match/);
+  textButton(app.el("import-review-list"),"Undo match").click(); await flush();
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo"),undefined);
+  assert.equal(app.run("state.importedTransactions[0]._linkRole"),undefined);
+  assert.equal(app.run("state.importedTransactions[0]._budgetAmount"),undefined);
+  app.el("import-review-list").querySelector(".edit-button").click();
+  assert.equal(form.querySelector(".transaction-linked-selections").textContent,"");
+});
+
+test("same-batch purchase editor shows auto link, preserves notes and can unlink without replaying credit intent", async () => {
+  const app = await refundReviewFixture({candidateCount:1,sameBatch:true});
+  const list = app.el("import-review-list");
+  textButton(list,"Mark as refunded").click(); await flush();
+  await app.run("openImportedTransactionEditor(1)");
+  const form = app.el("import-edit-form");
+  assert.match(form.querySelector(".transaction-linked-selections").textContent,/AMAZON refund/);
+  form.elements.namedItem("notes").value="Purchase notes"; form.dispatch("submit"); await flush();
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-4");
+  await app.run("openImportedTransactionEditor(1)");
+  textButton(form,"Unlink").click(); form.dispatch("submit"); await flush();
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo"),undefined);
+  assert.equal(app.run("state.importedTransactions[1]._linkedTransactions"),undefined);
+  assert.equal(app.run("state.importedTransactions[0].linkTo.transactionId"),"");
+  assert.match(list.textContent,/Mark as refunded/);
+  assert.doesNotMatch(list.textContent,/Undo match/);
+  await app.run("refreshEditedImport(state.importedTransactions)");
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo"),undefined);
+});
+
+test("every source keeps refund suggestions and canonical links across preview refreshes", async () => {
+  for (const source of ["creditkarma","amazon","aliexpress","venmo","ebay","walmart","applecard","capitalone","schwab","csv"]) {
+    const app = await refundReviewFixture({source,candidateCount:1});
+    textButton(app.el("import-review-list"),"Mark as refunded").click(); await flush();
+    assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-4",source);
+    textButton(app.el("import-review-list"),"Undo match").click(); await flush();
+    assert.equal(app.run("state.importedTransactions[0]._linkedTo"),undefined,source);
+    assert.equal(app.requests.some(request=>request.url.endsWith("/commit")),false,source);
+  }
 });
 
 test("refund matching uses the shared preference rather than a Credit Karma-only checkbox", async () => {
@@ -2440,9 +2531,9 @@ test("flagging a refund credit preserves its pending purchase match", async () =
   const app = await refundReviewFixture();
   await stageFirstRefundMatch(app);
   const list=app.el("import-review-list");
-  list.children[0].querySelector(".transaction-flag-toggle").click(); await flush();
-  assert.equal(app.run("state.refundSelections.get(0)"),4);
-  assert.equal(app.run("state.importedTransactions[0]._selected"),false);
+  list.querySelector(".transaction-flag-toggle").click(); await flush();
+  assert.equal(app.run("state.importedTransactions[0]._linkedTo.id"),"purchase-4");
+  assert.equal(app.run("state.importedTransactions[0]._selected"),true);
   assert(app.run('state.importedTransactions[0].flags.includes("flagged")'));
 });
 
@@ -2690,7 +2781,7 @@ test("existing-side transfer updates remain visible even when all incoming type 
     transactions: [tx({ _stagedId: 0, _isDuplicate: false, _classificationMatched: false })] };
   app.run(`renderResult(${JSON.stringify(data)}, "csv", "session"); state.reviewFilters = {new:false, unmatched:false, duplicate:false}; renderImportedTransactions();`);
   assert.match(app.el("import-review-list").textContent, /Existing savings transfer/);
-  assert.match(app.el("import-review-list").textContent, /Only their transfer flags change/);
+  assert.match(app.el("import-review-list").textContent, /reviewed links or transfer treatment change only when you confirm/);
 });
 
 test("Settings transfer review reuses shared filters and stages edits until its own confirmation", async () => {
@@ -2766,14 +2857,17 @@ async function reconciliationRefundFixture(candidateCount = 2) {
     if (!url.endsWith("/preview")) return {transactions:[credit,...candidates],revision:"r1"};
     const body = JSON.parse(options.body);
     const working = {...credit,...body.overrides.find(row=>row._id===credit._id)};
-    const selected = body.refundLinks?.[0];
+    const target = working.linkTo?.transactionId ?? working.repaymentTo;
+    const selected = target ? {purchaseId:target,type:working.linkTo?.type || "repayment"} : null;
     const purchase = candidates.find(row=>row.id===selected?.purchaseId);
+    for (const key of ["_linkedTo","_linkType","_linkRole","_linkedTransactions","_refundCandidates","_reviewLinks"]) delete working[key];
+    if (selected) Object.assign(working,{_linkType:selected.type,_linkRole:"credit",_linkedTo:purchase});
     const changes = working.flags !== credit.flags ? [{_id:8, transaction:working,
       before:credit,after:working,changedFields:["flags"]}] : [];
-    if (selected) changes.push({_id:purchase._id,transaction:purchase,before:purchase,
-      after:{...purchase,links:JSON.stringify([{transactionId:credit.id,type:"refund"}])},changedFields:["links"]});
+    if (selected) changes.push({_id:purchase._id,transaction:{...purchase,_linkRole:"primary",_linkType:selected.type,_linkedTransactions:[working]},before:purchase,
+      after:{...purchase,links:JSON.stringify([{transactionId:credit.id,type:selected.type}])},changedFields:["links"]});
     return {revision:"r1",plan:"p",transferPairs:0,changes,alreadyFlagged:[],refundLinks:body.refundLinks || [],
-      transactions:[...changes.map(change=>change.transaction),...(selected?[{...working,_linkType:"refund",_linkRole:"credit",_linkedTo:purchase}]:[])],
+      transactions:[...changes.map(change=>change.transaction),...(selected?[{...working,_linkType:selected.type,_linkRole:"credit",_linkedTo:purchase}]:[])],
       refundSuggestions:selected?[]:[{...working,_refundCandidates:candidates}]};
   });
   await app.run("openTransferReview()");
@@ -2799,7 +2893,7 @@ test("reconciliation needs an explicit link button after choosing a purchase; fl
   assert.equal(detail.querySelectorAll("input")[1].checked,true);
   assert.equal(app.run("state.importHistoryTransactions[0]._refundCandidates.length"),2);
   textButton(detail,"Link selected purchase").click();await flush();
-  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-b");
+  assert.equal(app.run("state.transferReview.overrides.find(row=>row.id==='refund-credit').linkTo.transactionId"),"purchase-b");
   detail=list.querySelector(".reconciliation-refund-match");
   assert.match(detail.textContent,/Refund link staged/);
   assert.match(detail.textContent,/Save reviewed changes/);
@@ -2808,6 +2902,7 @@ test("reconciliation needs an explicit link button after choosing a purchase; fl
   assert.equal(app.requests.some(request=>request.method==="PUT"||request.url.endsWith("/confirm")),false);
   textButton(detail,"Undo refund link").click();await flush();
   assert.equal(app.run("state.transferReview.refundLinks.length"),0);
+  assert.equal(app.run("state.transferReview.overrides.find(row=>row.id==='refund-credit').linkTo.transactionId"),"");
   assert.equal(list.querySelector(".reconciliation-refund-match").querySelectorAll("input")[1].checked,true);
   app.el("cancel-transfer-review").click();
   assert.equal(app.run("state.reconciliationRefundChoices.size"),0);
@@ -2820,10 +2915,10 @@ test("a single reconciliation refund candidate still requires Link and final con
   assert.equal(textButton(detail,"Link selected purchase").disabled,false);
   assert.equal(app.run("state.transferReview.refundLinks.length"),0);
   textButton(detail,"Link selected purchase").click();await flush();
-  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-a");
+  assert.equal(app.run("state.transferReview.overrides.find(row=>row.id==='refund-credit').linkTo.transactionId"),"purchase-a");
   const creditRow=app.el("import-history-transactions").children.find(row=>row.dataset.transactionKey==="8");
   creditRow.querySelector(".transaction-flag-toggle").click();await flush();
-  assert.equal(app.run("state.transferReview.refundLinks[0].purchaseId"),"purchase-a");
+  assert.equal(app.run("state.transferReview.overrides.find(row=>row.id==='refund-credit').linkTo.transactionId"),"purchase-a");
   assert.ok(app.el("import-history-transactions").querySelector(".reconciliation-refund-match"));
   assert.equal(app.requests.some(request=>request.url.endsWith("/confirm")),false);
 });
