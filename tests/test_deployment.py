@@ -88,7 +88,7 @@ class DeploymentTests(unittest.TestCase):
         (data / "transactions.csv").write_text("synthetic")
         return base, config, data, root / "snapshots"
 
-    def test_test_failure_leaves_running_service_and_data_untouched(self):
+    def test_verification_failure_leaves_running_service_and_data_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             base, config, data, backups = self.deployment_environment(directory)
             def execute(*args, **kwargs):
@@ -105,6 +105,9 @@ class DeploymentTests(unittest.TestCase):
                 with self.assertRaises(subprocess.CalledProcessError):
                     DEPLOY.deploy()
                 snapshot.assert_not_called()
+                verification = next(call for call in run.call_args_list if call.args[0] == "runuser")
+                self.assertEqual(verification.args, ("runuser", "-u", "ledger", "--", "/usr/bin/python3", "-B", "scripts/verify.py"))
+                self.assertEqual(verification.kwargs["cwd"].parent, base / "releases")
                 self.assertFalse(any(call.args[0] == "systemctl" for call in run.call_args_list))
                 self.assertEqual((data / "transactions.csv").read_text(), "synthetic")
 

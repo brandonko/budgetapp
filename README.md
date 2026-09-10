@@ -45,28 +45,35 @@ No third-party Python packages are required.
 
 ## Development and testing
 
-Read `llm_context.md` before changing behavior; it records Ledger's product,
-financial-correctness, privacy, and persistence invariants. Run the complete
-dependency-free regression suite from the repository root with:
+Start with [AGENTS.md](AGENTS.md) and [project context](llm_context.md), then read
+the relevant linked contracts. The [architecture map](docs/architecture.md) and
+[change guides](docs/change-guides.md) explain where behavior belongs and which
+callers and tests to audit.
+
+Contributor verification requires Python 3.10+ and Node.js 22+. Run both complete
+regression suites from the repository root with:
 
 ```powershell
-python -m unittest discover -s tests -v
+python scripts/verify.py
 ```
 
 Tests must use synthetic data and temporary directories. Never copy private
 contents from `data/` or `raw_data_files/` into tests or commits.
 
-If Node.js is available, also run every JavaScript regression file. In PowerShell:
+For material UI, import, or save-flow changes, install the browser test tools
+and run the additional Chromium smoke tests against temporary synthetic data:
 
 ```powershell
-$ledgerJsTests = @(Get-ChildItem -LiteralPath tests -Filter 'test_*.js' | ForEach-Object FullName)
-node --test @ledgerJsTests
+npm ci
+npx playwright install chromium
+python scripts/verify.py --browser
 ```
 
-In a shell that expands file globs, use `node --test tests/test_*.js`. Node.js is
-a contributor testing tool, not an application runtime dependency. Python tests
-that exercise JavaScript may skip those checks when Node.js is unavailable;
-check the test summary rather than treating skipped checks as coverage.
+Node and Playwright are contributor/CI tools, not application runtime
+dependencies. Missing tools or skipped required checks do not count as passing
+verification. CI runs both regression suites on Windows/Linux and the browser
+layer on Linux. See [development and verification](docs/development.md) for setup,
+focused commands, independent review, and the limits of synthetic coverage.
 
 ## Run Ledger
 

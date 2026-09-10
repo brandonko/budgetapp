@@ -27,13 +27,23 @@ for VM and bridge configuration.
 
 ## 2. Install Ledger once
 
-In the Debian VM, install the runtime and server utilities:
+In the Debian VM, install Python, Node.js, and the server utilities:
 
 ```sh
 sudo apt update
-sudo apt install -y python3 git openssh-server qemu-guest-agent
+sudo apt install -y python3 nodejs git openssh-server qemu-guest-agent
 sudo systemctl enable --now ssh qemu-guest-agent
 ```
+
+Deployment verification requires **Python 3.10+ and Node.js 22+**. Check
+`python3 --version` and `node --version` before installing Ledger. If your Debian
+release provides an older Node.js package, install a supported version using
+the [official Node.js installation instructions](https://nodejs.org/en/download).
+Make Node available system-wide to the `ledger` service account; a personal
+shell version manager is insufficient for `runuser` during deployment.
+Node runs regression tests before a deployment; the Ledger application itself
+still runs on Python without third-party packages. Browser test packages and
+Chromium are only needed for development/CI, not on the VM.
 
 Enable the QEMU Guest Agent option in Proxmox as well. If its service cannot
 start before that option takes effect, restart the VM and start it again.
@@ -93,8 +103,10 @@ Finish or cancel import reviews before deploying: restarting clears their
 temporary sessions. The command:
 
 - Fetches the latest `main` and stages that exact commit in a new release folder.
-- Runs the Python regression suite against synthetic test data before stopping
-  the current service. A failed test leaves the running app alone.
+- Runs `python3 scripts/verify.py` against synthetic test data before stopping
+  the current service. This requires both the Python suite and every JavaScript
+  suite, and rejects skipped tests. Missing Node.js or a failed check leaves the
+  running app alone.
 - Stops Ledger and saves a complete data snapshot under `/var/backups/ledger/`.
 - Switches to the new release, starts Ledger, and checks its response on port 8000.
 - Leaves Ledger stopped if startup fails, preserves data and its backup, and
@@ -106,6 +118,17 @@ Concurrent deployments are blocked. Old releases and deployment backups are
 kept; periodically check VM disk space and manage retention deliberately.
 Updater/service changes themselves are not automatically installed by code
 updates; those files live outside the release and require an explicit admin update.
+
+For an existing VM adopting this verification gate, install Node.js 22+ and
+update the installed helper after pulling these deployment files:
+
+```sh
+sudo install -m 755 ~/ledger-setup/ledger_deploy.py /usr/local/sbin/ledger-deploy
+```
+
+Copy the current `deploy` folder to `~/ledger-setup` first using the earlier
+PowerShell command. An older installed helper continues using its old checks
+until this explicit update is performed.
 
 The extension is a separate browser installation. Deploying the web app does
 not update it: pull the same repository changes on your browsing PC and reload

@@ -267,7 +267,8 @@ still loopback. Ledger does not provide login protection; do not expose this
 port publicly.
 
 The helper fetches the configured branch (default `main`), stages an immutable
-commit, and runs the Python regression suite before stopping Ledger. It then
+commit, and runs the shared Python and JavaScript verification command before
+stopping Ledger. It then
 stops the service, backs up the complete data directory under
 `/var/backups/ledger`, switches the release link, restarts, and checks health.
 An update lock prevents concurrent runs. If the pre-update snapshot fails, the
@@ -286,9 +287,11 @@ this documentation update.
 
 ## Verification and remaining manual checks
 
-Run both full suites using the
-[contributor commands](../README.md#development-and-testing);
-use synthetic data and temporary directories, never private financial exports.
+Run `python scripts/verify.py` for both full regression suites, and
+`python scripts/verify.py --browser` for the additional Chromium smoke tests.
+See the [contributor commands](../README.md#development-and-testing) and
+[verification layers](development.md#verification-layers). Use synthetic data
+and temporary directories, never private financial exports.
 
 Focused coverage in `tests/` includes `test_reconciliation.py`,
 `test_reconcile_updates.py`, `test_refund_import.py`,

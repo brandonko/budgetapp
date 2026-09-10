@@ -13,6 +13,10 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 APP = Path(__file__).resolve().parents[1] / "app"
+# This is a deadlock guard, not a response-time assertion. Hosted Windows runners
+# can pause during backed-up, fsynced writes; keep real durability enabled and
+# allow scheduling/filesystem variance without retrying a mutation.
+HTTP_TIMEOUT = 15
 sys.path.insert(0, str(APP))
 from server import (  # noqa: E402
     BudgetRequestHandler, ThreadingHTTPServer, COLUMNS, PRE_GROUP_COLUMNS,
@@ -151,7 +155,7 @@ class BulkApiTests(unittest.TestCase):
     def request(self, route, payload, method="POST"):
         request = Request(self.base + route, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method=method)
         try:
-            with urlopen(request, timeout=3) as response: return response.status, json.load(response)
+            with urlopen(request, timeout=HTTP_TIMEOUT) as response: return response.status, json.load(response)
         except HTTPError as error:
             try: return error.code, json.load(error)
             finally: error.close()

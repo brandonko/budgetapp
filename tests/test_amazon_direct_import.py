@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from http.client import HTTPConnection
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -501,9 +502,22 @@ class AmazonDirectImportTests(unittest.TestCase):
         with urlopen(f"{self.base_url}/import", timeout=3) as response:
             self.assertEqual(response.status, 200)
             self.assertIn("Import data", response.read().decode("utf-8"))
-        with urlopen(f"{self.base_url}/upload", timeout=3) as response:
+        # Python 3.10's urllib does not automatically follow HTTP 308.
+        # Assert the server's redirect contract directly on every version.
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            connection.request("GET", "/upload")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 308)
+            location = response.getheader("Location")
+            self.assertEqual(location, "/import")
+            response.read()
+        finally:
+            connection.close()
+        with urlopen(f"{self.base_url}{location}", timeout=3) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(response.geturl(), f"{self.base_url}/import")
+            self.assertIn("Import data", response.read().decode("utf-8"))
 
     def test_classifications_page_is_served_directly(self) -> None:
         with urlopen(f"{self.base_url}/classifications", timeout=3) as response:
